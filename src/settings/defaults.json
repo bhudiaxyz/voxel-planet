@@ -1,0 +1,253 @@
+{
+  "quality": {
+    "forcedLevel": null,
+    "presets": {
+      "low": {
+        "maxPixelRatio": 1.0,
+        "antialias": false,
+        "shadowsEnabled": false,
+        "viewRadius": 5,
+        "detailRadius": 2,
+        "midRadius": 3
+      },
+      "medium": {
+        "maxPixelRatio": 1.25,
+        "antialias": true,
+        "shadowsEnabled": true,
+        "viewRadius": 8,
+        "detailRadius": 3,
+        "midRadius": 5
+      },
+      "high": {
+        "maxPixelRatio": 1.5,
+        "antialias": true,
+        "shadowsEnabled": true,
+        "viewRadius": 12,
+        "detailRadius": 5,
+        "midRadius": 8
+      }
+    }
+  },
+  "planet": {
+    "radius": 500,
+    "chunkSize": 32,
+    "shellDepth": 24,
+    "caveThreshold": 0.62,
+    "caveShellDepth": 40,
+    "waterLevel": 21,
+    "noiseType": 2,
+    "amplitude": 65,
+    "sharpness": 1.4,
+    "offset": -0.05,
+    "period": 75,
+    "persistence": 0.52,
+    "lacunarity": 2.1,
+    "octaves": 8,
+    "caveProbeDepthM": 15,
+    "caveCarveCapVoxels": 4,
+    "chunkSeamOverlapM": 0.2,
+    "shellRangeMarginM": 16,
+    "maxShellDepthVoxels": 192,
+    "caveNoisePeriodM": 30,
+    "caveNoiseFreq2": 2.1,
+    "caveNoiseWeight2": 0.5,
+    "caveDensityBias": 1.5,
+    "underwaterMarginM": 0.15,
+    "smoothSphereVoxelStepM": 2.0,
+    "smoothSphereInsetM": 1.5
+  },
+  "player": {
+    "eyeHeight": 2.5,
+    "walkSpeed": 5.5,
+    "sprintSpeed": 15,
+    "acceleration": 11,
+    "airControl": 0.25,
+    "jumpSpeed": 9,
+    "gravity": 9.8,
+    "mouseSensitivity": 0.0021,
+    "collisionRadius": 0.5,
+    "flySpeed": 28,
+    "flySprintSpeed": 80
+  },
+  "camera": {
+    "fieldOfView": 72,
+    "nearClip": 0.3,
+    "farClip": 5000
+  },
+  "renderer": {
+    "exposure": 1.0,
+    "bloomStrength": 0.22,
+    "bloomRadius": 0.65,
+    "bloomThreshold": 0.95,
+    "adaptiveMinFps": 27,
+    "adaptiveLowFpsSeconds": 4,
+    "adaptiveMinPixelRatioScale": 0.66,
+    "adaptivePixelRatioStep": 0.15,
+    "maxDevicePixelRatio": 2,
+    "shadowUpdateThreshold": 0.008
+  },
+  "atmosphere": {
+    "fogDensity": 0.0015,
+    "sunIntensity": 0.65,
+    "hemiIntensity": 0.4,
+    "fillIntensity": 0.15
+  },
+  "sky": {
+    "oceanReflection": {
+      "daySkyNear":   [0.44, 0.65, 0.88],
+      "daySkyFar":    [0.62, 0.80, 1.00],
+      "dawnSkyNear":  [0.70, 0.55, 0.55],
+      "dawnSkyFar":   [0.88, 0.72, 0.60],
+      "duskSkyNear":  [0.60, 0.35, 0.28],
+      "duskSkyFar":   [0.80, 0.52, 0.35],
+      "nightSkyNear": [0.03, 0.05, 0.12],
+      "nightSkyFar":  [0.05, 0.08, 0.20]
+    },
+    "day": {
+      "dayLengthSeconds": 600,
+      "torchColor": 16751430,
+      "torchIntensity": 60,
+      "torchDistance": 26
+    },
+    "night": {
+      "starCount": 42000,
+      "starSphereRadius": 4800,
+      "starBrightness": 1.5,
+      "starMinSize": 0.95,
+      "starMaxSize": 3.5,
+      "galaxyStrength": 0.45,
+      "nebulaStrength": 0.3
+    }
+  },
+  "weather": {
+    "changeIntervalMin": 50,
+    "changeIntervalMax": 110,
+    "blendRate": 0.12,
+    "snow": {
+      "particleCount": 350,
+      "boxSize": [70, 45, 70],
+      "speedMin": 4,
+      "speedMax": 8,
+      "altitudeThreshold": 30,
+      "altitudeBlendRange": 10,
+      "driftStrength": 0.22,
+      "flakeSizeMin": 2.5,
+      "flakeSizeMax": 6.0,
+      "opacity": 0.72
+    },
+    "beachRain": {
+      "particleCount": 200,
+      "boxSize": [50, 30, 50],
+      "speedMin": 22,
+      "speedMax": 34,
+      "altitudeThreshold": 8,
+      "altitudeBlendRange": 5,
+      "opacity": 0.38
+    }
+  },
+  "wind": {
+    "driftRate": 0.012,
+    "gustFreq1": 0.5,
+    "gustFreq2": 0.23,
+    "gustFreq3": 1.31,
+    "baseStrength": 1.0,
+    "sway": {
+      "grassAmplitude":        0.48,
+      "reedAmplitudeScale":    0.67,
+      "undergrowthAmplitude":  0.18,
+      "treeAmplitude":         0.022,
+      "treeExponent":          2.5,
+      "treeHeightRef":         12.0
+    }
+  },
+  "biomes": {
+    "jitterScale":        12,
+    "beachJitter":        2.0,
+    "moistureJitter":     0.07,
+    "snowCapHeight":      42,
+    "snowCapJitter":      1.5,
+    "snowBlendHeight":    34,
+    "snowBlendJitter":    2.0,
+    "snowPatchScale":     1.5,
+    "mountainHeight":     24,
+    "mountainJitter":     1.5,
+    "desertThreshold":    0.33,
+    "grasslandThreshold": 0.58,
+    "moistureCoarseScale":2.5,
+    "moistureDetailScale":5.5,
+    "moistureCoarseWeight":0.65,
+    "moistureDetailWeight":0.35,
+    "oceanDepthOffset": 3,
+    "beachWaterOffset": 3,
+    "snowPatchColdThreshold": 0.5,
+    "bedrockLayerDepth": 20,
+    "surfaceLayerDepth": 3,
+    "deepBedrockLayer": 18,
+    "forestTreeDensityBase": 0.6,
+    "forestTreeDensityMoistureRange": 0.3,
+    "grasslandTreeDensity": 0.12,
+    "mountainTreeDensity": 0.06,
+    "forestGrassBase": 0.7,
+    "forestGrassMoistureRange": 0.2,
+    "beachGrassFactor": 0.3,
+    "oceanColor":      [0.02, 0.08, 0.28],
+    "beachColor":      [0.84, 0.75, 0.38],
+    "grasslandColor":  [0.47, 0.72, 0.19],
+    "mountainColor":   [0.66, 0.64, 0.55],
+    "snowColor":       [0.93, 0.96, 1.00],
+    "beachTransition":       0.28,
+    "grasslandTransition":   0.33,
+    "mountainTransition":    0.76,
+    "snowTransition":        0.88,
+    "oceanBeachBlend":       0.04,
+    "beachGrasslandBlend":   0.06,
+    "grasslandMountainBlend":0.15,
+    "mountainSnowBlend":     0.10
+  },
+  "vegetation": {
+    "treeDensity": 1.0,
+    "grassDensity": 1.0,
+    "undergrowthDensity": 1.0,
+    "treeCandidatesPerChunk": 10,
+    "treeColliderHeightDefault": 8,
+    "largeObjectColliderRadius": 1.0,
+    "largeObjectColliderHeight": 4,
+    "smallRockColliderRadius": 0.6,
+    "treelineAltM": 32,
+    "treeAltHighM": 24,
+    "treeAltMidM": 14,
+    "treeAltLowM": 6,
+    "treeWillowMoistureThreshold": 0.5,
+    "treeCoastalMoistureThreshold": 0.45,
+    "grassBladesPerTile": 55,
+    "reedBladesPerTile": 22,
+    "grassScaleMin": 0.8,
+    "grassScaleRange": 0.4,
+    "grassBladeWidthM": 0.5,
+    "mountainGrassAltBase": 20,
+    "mountainGrassAltRange": 20
+  },
+  "streaming": {
+    "warmupBuildThreshold": 120,
+    "warmupChunkBuildsPerFrame": 4,
+    "chunkBuildsPerFrame": 3,
+    "smoothSphereRebuildDistance": 60
+  },
+  "horizon": {
+    "ditherNearFraction": 0.82,
+    "ditherFarFraction":  1.0,
+    "fogDensityMultiplier": 1.6
+  },
+  "ocean": {
+    "oceanDeepColor":    [0.02, 0.08, 0.28],
+    "oceanShallowColor": [0.06, 0.22, 0.50],
+    "dayDeepColor":      [0.03, 0.14, 0.38],
+    "dayShallowColor":   [0.10, 0.42, 0.70],
+    "dawnDeepColor":     [0.07, 0.12, 0.30],
+    "dawnShallowColor":  [0.22, 0.30, 0.52],
+    "duskDeepColor":     [0.12, 0.07, 0.22],
+    "duskShallowColor":  [0.38, 0.22, 0.35],
+    "nightDeepColor":    [0.01, 0.03, 0.09],
+    "nightShallowColor": [0.02, 0.07, 0.18]
+  }
+}

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voxel Planet</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="loading">
+      <div id="loading-title">Voxel Planet</div>
+      <div id="loading-msg">Generating world…</div>
+    </div>
+
+    <div id="app"></div>
+
+    <div id="crosshair"></div>
+    <div id="click-hint">WASD move &nbsp;·&nbsp; F fly &nbsp;·&nbsp; G drone &nbsp;·&nbsp; Shift sprint &nbsp;·&nbsp; Tab weather &nbsp;·&nbsp; T time</div>
+
+    <div id="hud">
+      <div id="hud-fps"></div>
+      <div id="hud-seed"></div>
+      <div id="hud-status"></div>
+      <div id="hud-interact"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
