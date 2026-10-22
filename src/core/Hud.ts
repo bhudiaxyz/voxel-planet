@@ -172,8 +172,11 @@ export class Hud {
   hideLoading(): void {
     const loading = document.getElementById("loading");
     if (!loading) return;
-    loading.style.transition = "opacity 0.6s ease";
-    loading.style.opacity = "0";
-    setTimeout(() => loading.remove(), 650);
+    loading.classList.add("ready");
+    const dismiss = () => {
+      loading.classList.add("dismissed");
+      setTimeout(() => loading.remove(), 950);
+    };
+    loading.addEventListener("click", dismiss, { once: true });
   }
 }

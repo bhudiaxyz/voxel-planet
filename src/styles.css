@@ -1,133 +1,270 @@
-* {
-  box-sizing: border-box;
+:root {
+  --gold: #c9ad73;
+  --gold-bright: #e6cf95;
+  --ink: #e8dcc1;
+  --ink-soft: rgba(232,220,193,.62);
+  --ink-faint: rgba(232,220,193,.4);
+  --line: rgba(201,173,115,.3);
+  --fd: 'Roboto Condensed','Arial Narrow',Arial,sans-serif;
+  --fb: 'Roboto','Helvetica Neue',Arial,sans-serif;
 }
 
-body {
+* { box-sizing: border-box }
+
+html, body {
   margin: 0;
+  height: 100%;
   overflow: hidden;
-  background: black;
-  font-family: monospace;
+  background: #07070a;
+  font: 13px var(--fb);
+  color: var(--ink);
 }
 
-canvas {
-  display: block;
-  width: 100vw;
-  height: 100vh;
-}
+canvas { display: block; width: 100vw; height: 100vh }
 
+/* --- crosshair --- */
 #crosshair {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  width: 20px;
-  height: 20px;
-  transform: translate(-50%, -50%);
+  top: 50%; left: 50%;
+  width: 20px; height: 20px;
+  transform: translate(-50%,-50%);
   pointer-events: none;
 }
-
-#crosshair::before,
-#crosshair::after {
-  content: "";
+#crosshair::before, #crosshair::after {
+  content: '';
   position: absolute;
-  background: white;
-  opacity: 0.7;
+  background: var(--gold-bright);
+  opacity: .55;
 }
+#crosshair::before { width: 2px; height: 100%; left: 50%; top: 0; transform: translateX(-50%) }
+#crosshair::after  { width: 100%; height: 2px; top: 50%; left: 0; transform: translateY(-50%) }
 
-#crosshair::before {
-  width: 2px;
-  height: 100%;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-}
-
-#crosshair::after {
-  width: 100%;
-  height: 2px;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-}
-
+/* --- hud --- */
 #hud {
   position: fixed;
-  top: 0;
-  left: 0;
+  top: 0; left: 0;
   padding: 12px;
-  color: white;
   font-size: 13px;
+  font-family: var(--fb);
+  color: var(--ink-soft);
   pointer-events: none;
-  text-shadow: 1px 1px 2px black;
+  text-shadow: 0 1px 3px #000;
+}
+#hud > div { margin-bottom: 3px }
+
+#hud-interact {
+  position: fixed;
+  bottom: 80px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,.55);
+  border: 1px solid var(--line);
+  padding: 6px 14px;
+  border-radius: 3px;
+  display: none;
+  pointer-events: none;
+  font-family: var(--fd);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
 }
 
-#hud > div {
-  margin-bottom: 3px;
+/* --- controls hint --- */
+#click-hint {
+  position: fixed;
+  bottom: 24px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(7,7,10,.7);
+  border: 1px solid var(--line);
+  color: var(--ink-faint);
+  padding: 6px 16px;
+  border-radius: 3px;
+  font-family: var(--fd);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  pointer-events: none;
+  transition: opacity .4s;
 }
+#click-hint.hidden { opacity: 0 }
 
+/* --- new world button --- */
 #new-world-btn {
   margin-top: 8px;
   padding: 5px 12px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #d8e8f0;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 12px;
+  background: rgba(201,173,115,.08);
+  color: var(--gold);
+  border: 1px solid rgba(201,173,115,.25);
+  border-radius: 3px;
+  font-family: var(--fd);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
   cursor: pointer;
   display: block;
   pointer-events: auto;
 }
+#new-world-btn:hover { background: rgba(201,173,115,.18) }
 
-#new-world-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-}
-
-#hud-interact {
-  position: fixed;
-  bottom: 80px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.55);
-  padding: 6px 14px;
-  border-radius: 4px;
-  display: none;
-  pointer-events: none;
-}
-
-#click-hint {
-  position: fixed;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.5);
-  color: rgba(255, 255, 255, 0.8);
-  padding: 6px 16px;
-  border-radius: 4px;
-  font-size: 13px;
-  pointer-events: none;
-  transition: opacity 0.4s;
-}
-
-#click-hint.hidden {
-  opacity: 0;
-}
-
+/* --- splash / loading screen --- */
 #loading {
   position: fixed;
   inset: 0;
-  background: #0a0a0f;
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-direction: column;
-  gap: 16px;
-  color: #c8d0d8;
-  font-size: 18px;
-  z-index: 100;
+  pointer-events: auto;
+  transition: opacity .9s ease;
 }
+#loading.dismissed { opacity: 0; pointer-events: none }
+
+#loading-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 38%, rgba(60,46,24,.4), rgba(4,4,6,0) 60%),
+    radial-gradient(ellipse at center, #0b0a0c 0%, #050506 70%, #020203 100%);
+  transition: opacity .9s ease;
+}
+#loading.ready #loading-bg { opacity: .34 }
+#loading.ready { cursor: pointer }
+
+#loading-frame { position: relative; text-align: center; padding: 0 40px }
+
+#loading-emblem {
+  width: 72px; height: 72px;
+  margin: 0 auto 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(201,173,115,.22);
+  position: relative;
+}
+#loading-emblem::before, #loading-emblem::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+}
+#loading-emblem::before {
+  inset: -1px;
+  border: 2px solid transparent;
+  border-top-color: var(--gold-bright);
+  border-right-color: rgba(201,173,115,.4);
+  animation: ls-spin 3.4s linear infinite;
+}
+#loading-emblem::after {
+  inset: 14px;
+  border: 1px solid rgba(201,173,115,.5);
+  animation: ls-spin 6s linear infinite reverse;
+}
+#loading.ready #loading-emblem { opacity: 0; transition: opacity .5s ease }
 
 #loading-title {
-  font-size: 28px;
-  font-weight: bold;
-  letter-spacing: 0.08em;
+  font-family: var(--fd);
+  font-size: clamp(40px,8vw,78px);
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--gold-bright);
+  text-shadow: 0 2px 30px rgba(180,140,70,.35), 0 1px 3px rgba(0,0,0,.9);
+}
+
+#loading-rule {
+  width: min(420px,60vw); height: 1px;
+  margin: 18px auto 16px;
+  background: linear-gradient(90deg,transparent,var(--gold) 50%,transparent);
+  opacity: .7;
+}
+
+#loading-sub {
+  font-family: var(--fb);
+  font-size: 17px;
+  font-style: italic;
+  letter-spacing: .1em;
+  color: var(--ink-soft);
+}
+
+#loading-bar {
+  width: 240px; height: 2px;
+  margin: 40px auto 16px;
+  background: rgba(201,173,115,.14);
+  overflow: hidden;
+}
+#loading-bar span {
+  display: block; width: 40%; height: 100%;
+  background: linear-gradient(90deg,transparent,var(--gold-bright),transparent);
+  animation: ls-sweep 1.5s ease-in-out infinite;
+}
+
+#loading-tip {
+  font-size: 12px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  animation: ls-pulse 2.2s ease-in-out infinite;
+}
+
+#loading-enter {
+  display: none;
+  margin-top: 38px;
+  font-family: var(--fd);
+  font-size: 16px;
+  letter-spacing: .26em;
+  text-transform: uppercase;
+  color: var(--gold);
+  animation: ls-pulse 2.2s ease-in-out infinite;
+}
+
+#loading-controls {
+  margin-top: 28px;
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  display: none;
+}
+
+#loading.ready #loading-bar,
+#loading.ready #loading-tip { display: none }
+#loading.ready #loading-enter { display: block }
+#loading.ready #loading-controls { display: block }
+
+/* --- lil-gui theme --- */
+.lil-gui {
+  --background-color: #141318;
+  --title-background-color: #0c0b0f;
+  --title-text-color: #c9ad73;
+  --text-color: #e8dcc1;
+  --widget-color: #1e1c23;
+  --hover-color: #2a2730;
+  --focus-color: #35303e;
+  --number-color: #c9ad73;
+  --string-color: #a89870;
+  --font-family: 'Roboto','Helvetica Neue',Arial,sans-serif;
+  --font-size: 11px;
+  --border-radius: 3px;
+  --padding: 4px;
+  --widget-height: 20px;
+  --name-width: 48%;
+}
+.lil-gui .title {
+  font-family: 'Roboto Condensed','Arial Narrow',Arial,sans-serif;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  font-size: 11px;
+  border-bottom: 1px solid rgba(201,173,115,.18);
+}
+.lil-gui.root { border: 1px solid rgba(201,173,115,.12) }
+.lil-gui select, .lil-gui select option {
+  background-color: #141318;
+  color: #e8dcc1;
+}
+
+@keyframes ls-spin { to { transform: rotate(360deg) } }
+@keyframes ls-sweep {
+  0%   { transform: translateX(-120%) }
+  100% { transform: translateX(360%) }
+}
+@keyframes ls-pulse {
+  0%,100% { opacity: .5 }
+  50%      { opacity: 1 }
 }
