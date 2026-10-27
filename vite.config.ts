@@ -3,7 +3,7 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   base: '/voxel-planet/',
   server: {
-    port: 5173,
+    port: 5175,
     open: false,
   },
   build: {

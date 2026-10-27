@@ -1,121 +1,112 @@
 # Voxel Planet
 
-A First-person procedural voxel planet wilderness explorer built with Three.js. Every world is generated from a single seed — terrain, biomes, vegetation, weather, and sky are all deterministic and shareable via URL.
+A first-person explorer for a procedurally generated spherical Voxel Planet (Three.js + TypeScript + Vite). Walk, drone, or fly across an archipelago of continents connected by bridges, exploring terraced terrain, rivers, blossom trees, a companion dog, and a real-time day/night cycle with animated aurora. The world bends away from you at the horizon — a Mario-Galaxy-style curve applied entirely on the GPU.
 
-The entire landscape is generated at runtime. There is no backend, external game engine, downloaded asset pack, or prebuilt world map.
+Inspired by **Verdant** [https://github.com/xikhar/verdant] and **Petalfell** [https://github.com/xikhar/voxel-game-original], along with aspects of **Beyond Fable** [https://github.com/xikhar/beyond-fable].
 
 ## Highlights
 
-### World Generation
+- **Archipelago worldgen** — 3–5 main continents scattered across the ocean, connected by chains of stepping-stone islands and arched wooden bridges. Each seed produces a distinct layout.
+- **Curved planet** — GPU vertex bending gives the world a sphere-like horizon. Physics stay flat; only the visuals curve.
+- **Day/night cycle** — a 20-minute day with seven keyframed sky palettes and time-of-day tints pushed live to the voxel material. Watch the sun rise through orange haze, reach a pale noon, and set again.
+- **Night sky** — procedural stars, a Milky Way with Great Rift dust lane, emission nebulae, and a moon disc.
+- **Aurora** — animated curtain aurora at deep night: flickering vertical rays, sweeping pulse waves, and colour that shifts from green through cyan to magenta and ghostly white at peaks.
+- **Volumetric-style atmosphere** — sunrise/sunset limb glow, crepuscular rays (eight-tap radial blur), and animated cloud cover.
+- **Fly and drone modes** — free-flight (F) or terrain-following drone (G) with P-controller altitude hold and smooth landing state machine.
+- **Ink edge rendering** — toon-style dark and light strokes at block boundaries, composited in display space after tone mapping. Toggle with E.
+- **Rich vegetation** — fourteen tree silhouette forms (round, stack, twin, bunch, nub, spire, umbrella, broad, tall birch, layered pagoda, weeping cherry, palm, dead/skeletal, mangrove), ferns, moss, lichen, grass, and scattered mushrooms and crystals. Each biome seeds its own palette of forms and leaf colours.
+- **Touch controls** — full nippleJS virtual joystick overlay with compass-aware minimap, auto-detected on load.
+- **Seasonal palettes** — five world colour palettes (Autumn, Spring, Alpine, Desert, Alien) selectable from the pause menu. Switching re-colours everything live: sky dome, fog, hemisphere light, water, atmospheric grade, and petal particles. No scene reload required.
+- **GPU tiering** — five quality tiers (high / mobile-high / mid / low / very-low) tuned at startup from device cores, memory, texture-unit size, and UA. Flagship phones and iPads land on `mobile-high`; desktop discrete GPUs on `high`.
+- **Rivers** — trunks meander from highland peaks to the coast, fed by tributaries and fine streams. Above sea level they are filled with teal-blue voxels (true swimming physics); at sea level the ocean water plane takes over. All rivers are drawn on the minimap with glow outlines, clipped at the coastline.
+- **Wind sway** — leaves and shrubs sway in the breeze. Wind strength is adjustable from Developer Settings (0–1.5). Skipped on very-low tier for performance.
+- **Scenic stamps** — hand-crafted micro-scenes seeded across each continent: waterfall gardens, stone river crossings, lily ponds, blossom groves with torii gates, cliff overlooks, and bubbling hot springs ringed by boulders and steam-moss. Each re-validates the terrain before building and downgrades gracefully if conditions aren't met.
+- **Landmarks** — ancient structures appear on each continent: twisted spires, obelisks, monolith rings, tombstone fields, floating biospheres, stone-rimmed ancient wells, and ruined arches with fractured lintels. All marked on the map.
+- **Real wave geometry** — the water plane has true vertex displacement driven by the same analytic wave field as the surface normal, so crests cast light consistently.
+- **Seeded worlds** — the seed word is always visible in the URL (`?seed=word`). Share a URL to share an exact world; generate a new one from the pause menu.
 
-- **Cube-sphere mapping** — 6-face cube projected onto a sphere (radius 500m) for seamless polar geometry with no distortion seams
-- **Procedural terrain** — seeded Perlin noise with three modes: Simplex (smooth), Fractal (fBm), Ridged (mountains); configurable octaves, amplitude, and period
-- **7 biomes** — Ocean, Beach, Grassland, Forest, Desert, Mountain, Snow — classified by altitude + moisture noise
-- **Cave system** — two-octave 3D density field carves caves through the terrain; frost pass converts Mountain/Snow cave walls to Snow blocks
-- **18 block palettes** — procedural canvas texture atlas (1024×1024) with biome-themed and Solar System planet variants (Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, Pluto); selected by `seed % 18`
+For architecture and implementation details, see [DESIGN.md](DESIGN.md).
 
-### Vegetation
+## Run
 
-- **12 tree species** — Spruce, Pine, Oak, Beech, Birch, Snag, Karst, Cherry, Willow, Palm, Fir, Krummholz; placed by altitude + moisture; snow-tinted variants at high elevation
-- **9 undergrowth types** — Shrub, Fern, Flower, Mushroom, Moss, Rock (small/large), Ice Spike, Floating Island
-- **Grass & reeds** — cross-hatch blade geometry with per-blade biome/altitude tint; wind sway via vertex shader injection
-- **Wind sway** — all vegetation animates with configurable amplitude per species; gust frequencies and instance-phase variation prevent uniformity
-
-### Atmosphere & Weather
-
-- **Procedural sky** — gradient dome with sunrise/sunset scatter, crepuscular rays, sun disc + halo, moon disc + glow, galaxy/nebula layer, aurora borealis (40% nightly chance)
-- **42,000 stars** — temperature-coloured, magnitude-varied, with twinkle and rotation around the planet's Y axis
-- **8 weather states** — Clear, Breezy, Cloudy, Low Clouds, Overcast, Rain, Snow, Fog; transitions on a 50–110s random interval or via `Tab`
-- **Dynamic precipitation** — rain (`THREE.Points` shader), soft circular snowflakes with pendulum drift, beach drizzle
-- **Day/night cycle** — 600s full day; sun and moon directions derived per-frame from `timeOfDay` relative to the player's local up vector; adaptive torch light at night with flicker
-
-### Rendering
-
-- **Post-processing pipeline** — Bloom (Unreal) → FXAA → Output (ACESFilmic tone mapping)
-- **Greedy mesher** — axis-aligned runs merged into quads, reducing draw calls significantly; AO computed per-corner on the mesh
-- **LOD streaming** — three LOD rings (detail / mid / far); chunk set recomputed only when player moves > 0.5 chunks
-- **Smooth sphere backdrop** — CPU-baked far-field sphere with hard biome step colours and edge AO for a painterly horizon before voxel chunks load
-- **Animated water** — vertex swell + cross-chop + capillary ripple; FBM normal perturbation, Fresnel sky reflection, four time-of-day colour stops, foam at wave crests, moonlit shimmer
-- **Adaptive pixel ratio** — scales down DPR when FPS drops below threshold; recovers when sustained above target
-- **Shadow gating** — shadow map only updates when the sun direction changes beyond a threshold, avoiding per-frame shadow renders
-
-### HUD & Settings
-
-- **lil-gui panel** — live-tweak terrain noise params, time of day, weather, wind, render quality preset, vegetation density
-- **Seed sharing** — seed written to `?seed=` URL param on load; paste the URL to share the exact world
-- **New World button** — regenerates with a fresh random seed without a full page reload
-
-## Controls
-
-| Key | Action |
-| --- | ------ |
-| `W A S D` | Move |
-| `Shift` | Sprint |
-| `Space` | Jump (walk) / Rise (fly/drone) |
-| `Z` | Descend (fly/drone) |
-| `F` | Toggle fly mode |
-| `G` | Toggle drone mode |
-| `Tab` | Cycle weather state |
-| `T` | Step through time-of-day stops (sunrise → morning → noon → afternoon → sunset → dusk → night) |
-| Mouse | Look (click canvas to lock pointer) |
-
-## Getting Started
+Needs Node.js 18+.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the URL printed by Vite. Append `?seed=<number>` to load a specific world.
+Open [http://localhost:5180/voxel-planet](http://localhost:5180/voxel-planet). First load generates the world — give it a few seconds.
 
 ```bash
-npm run build   # type-check + production bundle
-npm run preview # serve the dist/ bundle locally
+npm run build     # production bundle → dist/
+npm run preview   # serve that bundle locally
 ```
 
-## Architecture
+## Controls
 
-```text
-src/
-├── main.ts               # seed resolution, Game bootstrap
-├── config.ts             # typed re-exports from settings/defaults.json
-├── settings/defaults.json # all tunable constants
-├── core/
-│   ├── Game.ts           # rAF loop, input dispatch, underwater fog
-│   ├── Renderer.ts       # WebGLRenderer + EffectComposer, adaptive DPR
-│   ├── CameraController.ts # sphere-surface physics (walk/fly/drone), collisions
-│   └── Hud.ts            # DOM HUD + lil-gui settings panel
-├── planet/
-│   ├── Planet.ts         # world orchestrator, spawn point, terrain queries
-│   ├── CubeSphere.ts     # 6-face cube-sphere coordinate mapping
-│   ├── TerrainNoise.ts   # seeded Perlin, fBm, ridged multifractal, cave density
-│   ├── Biomes.ts         # height+moisture → biome, block type, density params
-│   ├── BlockAtlas.ts     # canvas texture atlas baker, 18 palettes
-│   ├── ChunkManager.ts   # LOD streaming, mesh build queue, vegetation placement
-│   ├── VoxelChunk.ts     # greedy mesher, AO, cave/water fill, ghost-edge sampling
-│   ├── Environment.ts    # lighting, weather, precipitation, aurora, shared uniforms
-│   ├── Sky.ts            # sky dome, star field
-│   ├── SmoothSphere.ts   # far-field backdrop sphere
-│   └── Water.ts          # animated water sphere
-├── shaders/              # GLSL strings for sky, smooth sphere, voxel chunks
-├── vegetation/
-│   ├── VoxelTree.ts      # 12 species, merged BoxGeometry
-│   ├── VoxelUndergrowth.ts # 9 undergrowth types
-│   ├── VoxelGrass.ts     # cross-hatch blade geometry
-│   └── WindSway.ts       # onBeforeCompile wind injection
-└── utils/                # GPU tier detection, seeded PRNG, math helpers
-```
+### Keyboard & mouse
 
-**Shared uniforms** — `Environment` holds a `SharedEnvUniforms` object (sun direction, time of day, wind, ambient colour, etc.) passed by reference into every shader material at construction. A single `environment.update()` call per frame drives all materials simultaneously with no per-material copy.
-
-**Determinism** — `SeededRandom` (PCG-XSH-RR) and `combineSeed(seed, ...parts)` (LCG mix) give reproducible sub-streams for biome noise, palette selection, vegetation placement, and aurora chance — all rooted in the URL seed.
-
-**GPU quality tier** — `getGpuTier()` reads `WEBGL_debug_renderer_info` to classify the GPU as `high`, `medium`, or `low`, selecting a matching preset for pixel ratio, antialiasing, shadows, and view/detail radii. Override with `forcedLevel` in `defaults.json`.
-
-## Tech Stack
-
-| | |
+| Input | Action |
 | --- | --- |
-| Renderer | [Three.js](https://threejs.org/) r165 |
-| Build | [Vite](https://vitejs.dev/) 5 + TypeScript 5 (strict) |
-| Settings UI | [lil-gui](https://lil-gui.georgealways.com/) |
+| WASD | Move |
+| Mouse | Look |
+| Space | Jump (hold in water to swim up) |
+| Shift | Sprint |
+| F | Toggle fly mode (free flight, terrain floor) |
+| G | Enter drone mode (terrain-following, A/D steer) |
+| L | Land (drone) |
+| Space / C | Ascend / descend (fly or drone) |
+| Scroll | Ascend / descend (drone) |
+| E | Toggle edge outlines |
+| Y | Tell the dog to sit or stand |
+| M | Toggle map |
+| [ / ] | Step time of day back / forward by 3 hours |
+| Esc | Pause / release pointer |
+| `` ` `` | Settings |
+
+Click in the viewport to capture the pointer. Press Esc to release it. While landing the drone, press Space to abort and resume cruising.
+
+### Touch (phone / tablet)
+
+| Control | Action |
+| --- | --- |
+| Left joystick | Move / steer (joystick Y brakes the drone) |
+| Swipe right half | Look |
+| ↑ | Jump / ascend |
+| ↓ | Descend (drone or fly) |
+| ⚡ | Sprint |
+| ✈ | Toggle fly mode (tap again to exit) |
+| 🚁 | Enter drone mode |
+| 🛬 | Land drone (visible while drone is airborne) |
+| ⬡ | Toggle edge outlines |
+| ◀ / ▶ | Step time of day back / forward by 3 hours |
+
+The joystick overlay appears automatically on touch devices and is hidden on desktop.
+
+## Settings
+
+The settings panel (`` ` ``) exposes:
+
+| Setting | Range | Effect |
+| --- | --- | --- |
+| Planet radius | 100 – 1000 | Tighter or looser horizon curve |
+| Day speed | 0.1× – 5× | Slow sunrise or fast time-lapse |
+| Load radius | — | How many chunks stream around the player |
+| Shadow resolution | — | Shadow map quality |
+| Bloom | — | Post-process bloom intensity |
+| World seed | text | The seed word for the current world |
+
+The pause menu (Esc) also has a **Generate new world** button that picks a random seed, writes it to the URL, and reloads.
+
+## Dependencies
+
+`three`, `nipplejs`, and `vite` are the only runtime dependencies. No image or model assets — every block, character, and effect is built in code.
+
+## Deploy
+
+The project is configured for GitHub Pages. Push to `main` and the `deploy-pages` workflow builds and publishes automatically.
+
+## License
+
+Released under the [MIT License](LICENSE).

@@ -1,41 +1,42 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" style="background: #07070a">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Voxel Planet</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,300;0,400;1,300&family=Roboto+Condensed:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>html,body,#app,canvas{background:#07070a}</style>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
-  <body>
-    <div id="loading">
-      <div id="loading-bg"></div>
-      <div id="loading-frame">
-        <div id="loading-emblem" aria-hidden="true"></div>
-        <h1 id="loading-title">Voxel Planet</h1>
-        <div id="loading-rule"></div>
-        <div id="loading-sub">A procedural world, forged on the GPU</div>
-        <div id="loading-bar"><span></span></div>
-        <div id="loading-tip">Generating world&hellip;</div>
-        <div id="loading-controls">WASD move &middot; Shift sprint &middot; F fly &middot; G drone &middot; Tab weather &middot; T time &middot; Esc release mouse</div>
-        <div id="loading-enter">Click to enter</div>
+  <body style="background: #07070a">
+    <div id="app"></div>
+    <div id="boot">
+      <div class="ls-bg"></div>
+      <div class="ls-frame">
+        <div class="ls-emblem" aria-hidden="true">
+          <div class="ls-cube">
+            <div class="ls-face ls-face--top"></div>
+            <div class="ls-face ls-face--bottom"></div>
+            <div class="ls-face ls-face--front"></div>
+            <div class="ls-face ls-face--back"></div>
+            <div class="ls-face ls-face--left"></div>
+            <div class="ls-face ls-face--right"></div>
+          </div>
+        </div>
+        <h1 class="ls-title">Voxel Planet</h1>
+        <div class="ls-rule"></div>
+        <p class="ls-sub" role="status" aria-live="polite">A procedural voxel planet</p>
+        <div class="ls-bar"><span></span></div>
+        <p class="ls-tip">Generating world&hellip;</p>
+        <p class="ls-controls"></p>
+        <p class="ls-enter">Click to enter</p>
       </div>
     </div>
-
-    <div id="app"></div>
-
-    <div id="crosshair"></div>
-    <div id="click-hint">WASD move &nbsp;&middot;&nbsp; F fly &nbsp;&middot;&nbsp; G drone &nbsp;&middot;&nbsp; Shift sprint &nbsp;&middot;&nbsp; Tab weather &nbsp;&middot;&nbsp; T time</div>
-
-    <div id="hud">
-      <div id="hud-fps"></div>
-      <div id="hud-seed"></div>
-      <div id="hud-status"></div>
-      <div id="hud-interact"></div>
-    </div>
-
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

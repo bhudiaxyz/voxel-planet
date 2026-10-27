@@ -4,12 +4,17 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "esModuleInterop": true
+    "noEmit": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "vite/client"
+    ]
   },
-  "include": ["src/**/*.ts"]
+  "include": [
+    "src"
+  ]
 }

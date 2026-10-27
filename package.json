@@ -1,27 +1,24 @@
 {
   "name": "voxel-planet",
-  "private": true,
   "version": "1.0.0",
+  "description": "First-person procedural voxel planet wilderness explorer.",
   "license": "MIT",
+  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 5180 --strictPort",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "critique": "tsx tools/critic-loop.ts"
+    "preview": "vite preview --port 5180"
   },
   "dependencies": {
-    "lil-gui": "^0.19.2",
-    "three": "^0.165.0"
+    "nipplejs": "^1.0.4",
+    "three": "^0.185.1"
   },
   "devDependencies": {
-    "@types/three": "^0.165.0",
-    "tsx": "^4.23.15",
-    "typescript": "^5.4.5",
-    "vite": "^8.3.5"
-  },
-  "allowScripts": {
-    "esbuild@0.28.2": true
+    "@types/three": "^0.185.4",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "vite": "^8.2.2"
   }
 }
