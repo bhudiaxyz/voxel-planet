@@ -9,9 +9,13 @@ import { planWorld } from './planner';
 import { scatterVegetation } from './vegetation';
 import { buildStructures } from './props';
 import { buildStamps } from './stamps';
-import { VoxelGrid, createWorldChunkStreamer } from '../core/voxel';
+import { VoxelGrid, createWorldChunkStreamer, createSphereChunkStreamer } from '../core/voxel';
 import { makeRng } from '../core/rng';
 import { BLOCKS, BLOCK_BY_ID } from '../core/palette';
+import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
+import { generateSphereTerrain } from './sphere-terrain';
+import { basisFromCode } from '../core/geoutil';
+import { makeSphereWater } from './water';
 
 /** The assembled world returned by buildWorld. */
 export interface World {
@@ -133,6 +137,54 @@ export async function buildWorld(seed: number, onProgress: (p: number, s?: strin
 
   onProgress(1.0, 'ready');
   return world as World;
+}
+
+export interface SphereWorld {
+  grid: SphereVoxelGrid;
+  streaming: ReturnType<typeof createSphereChunkStreamer>;
+  group: THREE.Group;
+  spawnDir: THREE.Vector3;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  animated: any[];
+}
+
+export async function buildSphereWorld(
+  seed: number,
+  scene: THREE.Scene,
+  onProgress: (p: number, s?: string) => void = () => {},
+): Promise<SphereWorld> {
+  const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
+
+  onProgress(0.01, 'sculpting the planet');
+  await yieldFrame();
+  const { grid, spawn } = generateSphereTerrain(seed, (p) =>
+    onProgress(0.01 + p * 0.70, 'sculpting the planet'),
+  );
+  await yieldFrame();
+
+  onProgress(0.73, 'building terrain meshes');
+  const streaming = createSphereChunkStreamer(grid);
+
+  const spawnDir = new THREE.Vector3();
+  const _n = new THREE.Vector3(), _tu = new THREE.Vector3(), _tv = new THREE.Vector3();
+  basisFromCode(spawn.face, _n, _tu, _tv);
+  spawnDir.copy(_n)
+    .addScaledVector(_tu, (2 * (spawn.u + 0.5)) / FACE_RES - 1)
+    .addScaledVector(_tv, (2 * (spawn.v + 0.5)) / FACE_RES - 1)
+    .normalize();
+
+  streaming.update(spawnDir);
+
+  onProgress(0.90, 'adding ocean');
+  await yieldFrame();
+  makeSphereWater(scene);
+
+  const group = new THREE.Group();
+  group.add(streaming.meshes.solid, streaming.meshes.glow, streaming.meshes.edges);
+  scene.add(group);
+
+  onProgress(1.0, 'ready');
+  return { grid, streaming, group, spawnDir, animated: [] };
 }
 
 /** Pick a pleasant, walkable, well-framed spawn point near the river. */

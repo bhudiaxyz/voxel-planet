@@ -432,7 +432,7 @@ export function createSettings({ rig, atmo, input, world, dayNight, seed }: Sett
     world?.streaming?.setLoadRadius(values.loadRadius);
     atmo.setShadowResolution(values.shadowResolution);
     // Apply planet radius to all materials
-    for (const u of world.allPlanetUnis) u.uPlanetRadius.value = values.planetRadius;
+    for (const u of world?.allPlanetUnis ?? []) u.uPlanetRadius.value = values.planetRadius;
     // Apply day speed: daySpeed is a multiplier; base cycle = 1200s
     dayNight.dayLengthSeconds = 1200 / values.daySpeed;
     // Apply wind strength: _windBase is read by the frame loop's gust envelope

@@ -148,6 +148,37 @@ export class FPCamera {
     return w;
   }
 
+  /**
+   * Wish direction on the sphere tangent plane at playerDir.
+   * Matches the forward basis used by updateSphere so W is always "visually forward".
+   */
+  getWishSphere(playerDir: THREE.Vector3): THREE.Vector3 {
+    const w = this._wishV.set(0, 0, 0);
+    if (this.touchActive && this._touchWish.lengthSq() > 0) {
+      // Project touch wish onto tangent plane
+      return w.copy(this._touchWish)
+        .addScaledVector(playerDir, -this._touchWish.dot(playerDir))
+        .normalize();
+    }
+    if (!this.isLocked || this.droneActive || this.flyActive) return w;
+
+    // Build the same tangent-plane forward as updateSphere
+    const ref = Math.abs(playerDir.y) > 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+    const fwd = ref.clone().addScaledVector(playerDir, -ref.dot(playerDir)).normalize();
+    fwd.applyAxisAngle(playerDir, this.yaw);
+    // right = playerDir × fwd (outward cross forward = right-hand rule tangent)
+    const rgt = new THREE.Vector3().crossVectors(playerDir, fwd).normalize();
+
+    if (this._keys.has('KeyW') || this._keys.has('ArrowUp'))    w.addScaledVector(fwd,  1);
+    if (this._keys.has('KeyS') || this._keys.has('ArrowDown'))  w.addScaledVector(fwd, -1);
+    if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) w.addScaledVector(rgt,  1);
+    if (this._keys.has('KeyA') || this._keys.has('ArrowLeft'))  w.addScaledVector(rgt, -1);
+    if (w.lengthSq() > 0) w.normalize();
+    return w;
+  }
+
   /** Called by touch-controls each frame with joystick vector (-1..1 each axis). */
   setTouchMove(nx: number, ny: number): void {
     if (!this.touchActive) return;
@@ -223,6 +254,45 @@ export class FPCamera {
 
     this.camera.position.set(controllerPos.x, controllerPos.y + EYE_HEIGHT + bob, controllerPos.z);
     this.camera.rotation.set(this.pitch, this.yaw, 0);
+  }
+
+  /**
+   * Spherical surface camera. `up` = radial outward, yaw rotates around `up`,
+   * pitch tilts the look direction from the tangent plane.
+   */
+  updateSphere(
+    dt: number,
+    playerDir: THREE.Vector3,
+    groundRadius: number,
+    speedFraction = 0,
+    grounded = true,
+  ): void {
+    if (this.droneActive || this.flyActive) return;
+
+    if (grounded && speedFraction > 0.05) {
+      this._bobPhase += dt * HEAD_BOB_HZ * Math.PI * 2;
+    } else {
+      this._bobPhase *= Math.max(0, 1 - dt * 8);
+    }
+    const bob = Math.sin(this._bobPhase) * HEAD_BOB_AMP * speedFraction;
+
+    this.camera.up.copy(playerDir);
+    this.camera.position.copy(playerDir).multiplyScalar(groundRadius + bob);
+
+    // Choose a yaw reference tangent: world-up projected onto the tangent plane.
+    // Near poles, use (1,0,0) instead to avoid singularity.
+    const ref = Math.abs(playerDir.y) > 0.9
+      ? new THREE.Vector3(1, 0, 0)
+      : new THREE.Vector3(0, 1, 0);
+    const forward = ref.clone().addScaledVector(playerDir, -ref.dot(playerDir)).normalize();
+    forward.applyAxisAngle(playerDir, this.yaw);
+
+    const look = forward.clone()
+      .multiplyScalar(Math.cos(this.pitch))
+      .addScaledVector(playerDir, Math.sin(this.pitch))
+      .normalize();
+
+    this.camera.lookAt(this.camera.position.clone().add(look));
   }
 
   resize(aspect: number): void {

@@ -16,7 +16,8 @@ import * as THREE from 'three';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { BLOCK_BY_ID, WATER, LIGHT } from './palette';
-import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from './sphere-voxel';
+import { basisFromCode } from './geoutil';
 
 export const CHUNK = 16;
 export const DEFAULT_STREAM_RADIUS = 12;
@@ -289,7 +290,7 @@ class MeshBuffer {
     const g = new THREE.BufferGeometry();
     const n = this.count;
 
-    const pos = new Int16Array(n * 3);
+    const pos = new Float32Array(n * 3);
     for (let i = 0; i < n * 3; i++) pos[i] = this.pos[i];
 
     const nrm = new Int8Array(n * 3);
@@ -442,6 +443,154 @@ function stepMeshChunk(state: any, layers = 6) {
 
 function buildMeshChunk(grid: any, ci: any, ck: any, meshes: any) {
   return stepMeshChunk(beginMeshChunk(grid, ci, ck, meshes), grid.sy);
+}
+
+/** Build one sphere chunk. ci/ck are chunk indices within the face. */
+function buildSphereMeshChunk(
+  grid: SphereVoxelGrid,
+  face: number,
+  ci: number,
+  ck: number,
+  meshes: ReturnType<typeof createMeshRoots>,
+) {
+  const u0 = ci * CHUNK, v0 = ck * CHUNK;
+  const u1 = Math.min(u0 + CHUNK, FACE_RES);
+  const v1 = Math.min(v0 + CHUNK, FACE_RES);
+  const solid = new MeshBuffer(), glow = new MeshBuffer(), edgeMap = new Map();
+  meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1);
+  const record: any = { solid: null, glow: null, edges: null };
+  if (!solid.empty) {
+    record.solid = new THREE.Mesh(solid.toGeometry(), meshes.material);
+    record.solid.name = `terrain-${face}-${ci}-${ck}`;
+    record.solid.castShadow = true; record.solid.receiveShadow = true;
+    record.solid.matrixAutoUpdate = false;
+    meshes.solid.add(record.solid);
+  }
+  if (!glow.empty) {
+    record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
+    record.glow.name = `glow-${face}-${ci}-${ck}`;
+    record.glow.matrixAutoUpdate = false;
+    meshes.glow.add(record.glow);
+  }
+  if (edgeMap.size > 0) {
+    record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial);
+    record.edges.name = `voxel-edges-${face}-${ci}-${ck}`;
+    meshes.edges.add(record.edges);
+  }
+  return record;
+}
+
+const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
+const COS_LOAD = 0.86;   // ~30° angular radius
+const COS_UNLOAD = 0.82; // ~35° — small hysteresis
+
+export function createSphereChunkStreamer(
+  grid: SphereVoxelGrid,
+  opts: { loadCos?: number; unloadCos?: number } = {},
+) {
+  const meshes = createMeshRoots();
+  const loaded = new Map<string, any>();
+  const fadingMeshes = new Set<any>();
+  let loadQueue: Array<[number, number, number]> = [];
+  let disposed = false;
+  const loadCos = opts.loadCos ?? COS_LOAD;
+  const unloadCos = opts.unloadCos ?? COS_UNLOAD;
+
+  const _n = new THREE.Vector3(), _tu = new THREE.Vector3(), _tv = new THREE.Vector3();
+  const _chunkDir = new THREE.Vector3();
+
+  const keyOf = (face: number, ci: number, ck: number) => `${face},${ci},${ck}`;
+
+  const initFade = (record: any) => {
+    const uniforms = meshes.material.userData.uniforms;
+    for (const mesh of [record.solid, record.glow]) {
+      if (!mesh) continue;
+      mesh.userData.lodAlpha = 0.0; mesh.userData.lodFading = true;
+      fadingMeshes.add(mesh);
+      mesh.onBeforeRender = () => { uniforms.uLodAlpha.value = mesh.userData.lodAlpha; };
+      mesh.onAfterRender = () => { uniforms.uLodAlpha.value = 1.0; };
+    }
+  };
+
+  const loadChunk = (face: number, ci: number, ck: number) => {
+    const key = keyOf(face, ci, ck);
+    if (loaded.has(key) || disposed) return;
+    const record = buildSphereMeshChunk(grid, face, ci, ck, meshes);
+    initFade(record);
+    loaded.set(key, record);
+  };
+
+  const unloadChunk = (key: string) => {
+    const record = loaded.get(key);
+    if (!record) return;
+    for (const mesh of [record.solid, record.glow, record.edges]) {
+      if (!mesh) continue; fadingMeshes.delete(mesh);
+    }
+    removeMeshChunk(meshes, record);
+    loaded.delete(key);
+  };
+
+  return {
+    meshes,
+
+    update(playerDir: THREE.Vector3) {
+      loadQueue = [];
+      const desired = new Set<string>();
+
+      for (let face = 0; face < 6; face++) {
+        basisFromCode(face, _n, _tu, _tv);
+        for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
+          for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
+            const u = (ci + 0.5) * CHUNK, v = (ck + 0.5) * CHUNK;
+            _chunkDir.copy(_n)
+              .addScaledVector(_tu, (2 * u) / FACE_RES - 1)
+              .addScaledVector(_tv, (2 * v) / FACE_RES - 1)
+              .normalize();
+            const dot = _chunkDir.dot(playerDir);
+            if (dot >= loadCos) {
+              const key = keyOf(face, ci, ck);
+              desired.add(key);
+              if (!loaded.has(key)) loadQueue.push([face, ci, ck]);
+            }
+          }
+        }
+      }
+
+      // Sort load queue by angular proximity (closest first)
+      loadQueue.sort(([fa, ca, ka], [fb, cb, kb]) => {
+        const da = new THREE.Vector3();
+        basisFromCode(fa, _n, _tu, _tv);
+        const ua = (ca+0.5)*CHUNK, va = (ka+0.5)*CHUNK;
+        da.copy(_n).addScaledVector(_tu,(2*ua)/FACE_RES-1).addScaledVector(_tv,(2*va)/FACE_RES-1).normalize();
+        const dotA = da.dot(playerDir);
+        basisFromCode(fb, _n, _tu, _tv);
+        const ub = (cb+0.5)*CHUNK, vb = (kb+0.5)*CHUNK;
+        da.copy(_n).addScaledVector(_tu,(2*ub)/FACE_RES-1).addScaledVector(_tv,(2*vb)/FACE_RES-1).normalize();
+        const dotB = da.dot(playerDir);
+        return dotB - dotA;
+      });
+
+      // Unload far chunks
+      for (const key of loaded.keys()) {
+        if (!desired.has(key)) unloadChunk(key);
+      }
+
+      // Load up to 4 chunks per update to avoid frame spikes
+      for (const [face, ci, ck] of loadQueue.splice(0, 4)) loadChunk(face, ci, ck);
+    },
+
+    tick(dt: number) {
+      for (const mesh of fadingMeshes) {
+        mesh.userData.lodAlpha = Math.min(1, mesh.userData.lodAlpha + dt * 3);
+        if (mesh.userData.lodAlpha >= 1) { mesh.userData.lodFading = false; fadingMeshes.delete(mesh); }
+      }
+    },
+
+    dispose() {
+      disposed = true;
+      for (const key of loaded.keys()) unloadChunk(key);
+    },
+  };
 }
 
 const BLOCK_COLOR_FIELDS = new Set(['top', 'side', 'bottom', 'tint', 'topTint', 'fringeColor']);
@@ -1191,6 +1340,187 @@ function meshRegion(
 }
 
 /* ================================================================== *
+ * Spherical mesher
+ * ================================================================== */
+
+/**
+ * Fills solid/glow MeshBuffers for a patch of a cube face.
+ *
+ * Coordinate mapping from the flat mesher: x→u (column U), y→layer (radial), z→v (column V).
+ * FACES[f].n = [nu, nl, nv]; FACES[f].corners[i] = [du, dl, dv].
+ */
+export function meshSphereFaceRegion(
+  grid: SphereVoxelGrid,
+  face: number,
+  u0: number,
+  v0: number,
+  u1: number,
+  v1: number,
+  solid: any,
+  glow: any,
+  edgeMap: any,
+  uHalo = 0,
+) {
+  const _fn = new THREE.Vector3(), _ftu = new THREE.Vector3(), _ftv = new THREE.Vector3();
+  basisFromCode(face, _fn, _ftu, _ftv);
+  const fnx = _fn.x, fny = _fn.y, fnz = _fn.z;
+  const ftux = _ftu.x, ftuy = _ftu.y, ftuz = _ftu.z;
+  const ftvx = _ftv.x, ftvy = _ftv.y, ftvz = _ftv.z;
+
+  function cornerPos(uc: number, vc: number, layerc: number): [number, number, number] {
+    const cx = fnx + ftux*(2*uc/FACE_RES - 1) + ftvx*(2*vc/FACE_RES - 1);
+    const cy = fny + ftuy*(2*uc/FACE_RES - 1) + ftvy*(2*vc/FACE_RES - 1);
+    const cz = fnz + ftuz*(2*uc/FACE_RES - 1) + ftvz*(2*vc/FACE_RES - 1);
+    const len = Math.sqrt(cx*cx + cy*cy + cz*cz);
+    const r = PLANET_RADIUS + layerc;
+    return [cx/len*r, cy/len*r, cz/len*r];
+  }
+
+  function radialDir(u: number, v: number): [number, number, number] {
+    const cx = fnx + ftux*(2*(u+0.5)/FACE_RES - 1) + ftvx*(2*(v+0.5)/FACE_RES - 1);
+    const cy = fny + ftuy*(2*(u+0.5)/FACE_RES - 1) + ftvy*(2*(v+0.5)/FACE_RES - 1);
+    const cz = fnz + ftuz*(2*(u+0.5)/FACE_RES - 1) + ftvz*(2*(v+0.5)/FACE_RES - 1);
+    const len = Math.sqrt(cx*cx + cy*cy + cz*cz);
+    return [cx/len, cy/len, cz/len];
+  }
+
+  const aoOf = (occ: boolean[]) => {
+    if (occ[0] && occ[1]) return 0;
+    return (3 - (+occ[0] + +occ[1] + +occ[2])) / 3;
+  };
+
+  const ao = new Array(4);
+  const localV = new Array(4);
+  const uvs: [number,number][] = [[0,0],[0,0],[0,0],[0,0]];
+  const verts: [number,number,number][] = [[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
+
+  const scanU0 = Math.max(0, u0 - uHalo);
+  const scanV0 = Math.max(0, v0 - uHalo);
+  const scanU1 = Math.min(FACE_RES, u1 + uHalo);
+  const scanV1 = Math.min(FACE_RES, v1 + uHalo);
+
+  for (let v = scanV0; v < scanV1; v++) {
+    for (let u = scanU0; u < scanU1; u++) {
+      const top = grid.columnTop(face, u, v);
+      if (top < 0) continue;
+
+      for (let layer = 0; layer <= top; layer++) {
+        const id = grid.get(face, u, v, layer);
+        if (id === 0) continue;
+        const block = BLOCK_BY_ID[id];
+        if (!block) continue;
+        const target = (block as any).emissive ? glow : solid;
+        const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
+
+        const [rdx, rdy, rdz] = radialDir(u, v);
+
+        for (let f = 0; f < 6; f++) {
+          const F = FACES[f];
+          const nu = u + F.n[0], nlayer = layer + F.n[1], nv = v + F.n[2];
+          if (grid.isSolid(face, nu, nv, nlayer)) continue;
+
+          const isTop = F.n[1] === 1;
+          const isBottom = F.n[1] === -1;
+          const baseCol = isTop ? (block as any).top : isBottom ? ((block as any).bottom || (block as any).side) : (block as any).side;
+          const pattern = isTop ? ((block as any).topPattern ?? (block as any).pattern) : (block as any).pattern;
+          const tintCol = (isTop ? ((block as any).topTint || (block as any).tint) : (block as any).tint) || baseCol;
+          const fringeCol = (block as any).fringeColor || (block as any).top || baseCol;
+
+          let nrm: [number, number, number];
+          if (isTop)         nrm = [rdx, rdy, rdz];
+          else if (isBottom) nrm = [-rdx, -rdy, -rdz];
+          else if (F.n[0] !== 0) nrm = [F.n[0]*ftux, F.n[0]*ftuy, F.n[0]*ftuz];
+          else               nrm = [F.n[2]*ftvx, F.n[2]*ftvy, F.n[2]*ftvz];
+
+          const uA = AXIS_VEC[F.uAxis], vA = AXIS_VEC[F.vAxis];
+
+          let convexMask = 0, concaveMask = 0;
+          {
+            const dirs: [number, number, number, number][] = [
+              [-uA[0], -uA[1], -uA[2], 1],
+              [ uA[0],  uA[1],  uA[2], 2],
+              [-vA[0], -vA[1], -vA[2], 4],
+              [ vA[0],  vA[1],  vA[2], 8],
+            ];
+            for (const [dx, dy, dz, bit] of dirs) {
+              const sdu = u + dx, sdv = v + dz, sdl = layer + dy;
+              if (!grid.isSolid(face, sdu, sdv, sdl)) {
+                convexMask |= bit;
+              } else if (grid.isSolid(face, sdu + F.n[0], sdv + F.n[2], sdl + F.n[1])) {
+                concaveMask |= bit;
+              }
+            }
+          }
+
+          const forceLightEdge = isTop && (block as any).lightEdge === true;
+          _collectSphereFaceEdges(edgeMap, face, u, v, layer, F, nrm, convexMask, baseCol, false, forceLightEdge, cornerPos);
+          _collectSphereFaceEdges(edgeMap, face, u, v, layer, F, nrm, concaveMask, baseCol, true,  forceLightEdge, cornerPos);
+
+          if (!emitGeometry) continue;
+
+          for (let i = 0; i < 4; i++) {
+            const c = F.corners[i];
+            verts[i] = cornerPos(u + c[0], v + c[2], layer + c[1]);
+
+            const su = c[F.uAxis] === 1 ? 1 : -1;
+            const sv = c[F.vAxis] === 1 ? 1 : -1;
+            const s1 = grid.isSolid(face, nu + uA[0]*su, nv + uA[2]*su, nlayer + uA[1]*su);
+            const s2 = grid.isSolid(face, nu + vA[0]*sv, nv + vA[2]*sv, nlayer + vA[1]*sv);
+            const cn = grid.isSolid(face, nu + uA[0]*su + vA[0]*sv, nv + uA[2]*su + vA[2]*sv, nlayer + uA[1]*su + vA[1]*sv);
+            ao[i] = aoOf([s1, s2, cn]);
+
+            const ucorner = u + c[0], vcorner = v + c[2], lcorner = layer + c[1];
+            uvs[i][0] = F.uAxis === 0 ? ucorner : F.uAxis === 2 ? vcorner : lcorner;
+            uvs[i][1] = F.vAxis === 0 ? ucorner : F.vAxis === 2 ? vcorner : lcorner;
+
+            localV[i] = isTop ? 1 : isBottom ? 0 : c[1];
+          }
+
+          const patternPacked = ((pattern || 0) | ((block as any).sway ? 8 : 0));
+          // Reverse winding: x→u, y→layer, z→v swaps two axes (det=-1), flipping face orientation
+          target.quad(
+            [verts[3], verts[2], verts[1], verts[0]],
+            nrm,
+            baseCol, tintCol, fringeCol,
+            [uvs[3], uvs[2], uvs[1], uvs[0]],
+            [ao[3], ao[2], ao[1], ao[0]],
+            patternPacked, (block as any).fringe || 0,
+            [localV[3], localV[2], localV[1], localV[0]],
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Collect edge entries for the sphere mesher.
+ * ponytail: no cross-face seam dedup — add if seam artifacts become visible
+ */
+function _collectSphereFaceEdges(
+  edgeMap: any, face: number, u: number, v: number, layer: number,
+  F: any, nrm: [number,number,number], mask: number, col: any,
+  isConcave: boolean, forceLight: boolean,
+  cornerPos: (uc: number, vc: number, lc: number) => [number,number,number],
+) {
+  if (mask === 0) return;
+  const uA = AXIS_VEC[F.uAxis], vA = AXIS_VEC[F.vAxis];
+  const borders = [
+    { bit: 1, cIdx: [0, 1] },
+    { bit: 2, cIdx: [2, 3] },
+    { bit: 4, cIdx: [0, 3] },
+    { bit: 8, cIdx: [1, 2] },
+  ];
+  for (const { bit, cIdx } of borders) {
+    if (!(mask & bit)) continue;
+    const c0 = F.corners[cIdx[0]], c1 = F.corners[cIdx[1]];
+    const p0 = cornerPos(u+c0[0], v+c0[2], layer+c0[1]);
+    const p1 = cornerPos(u+c1[0], v+c1[2], layer+c1[1]);
+    addEdgeFace(edgeMap, p0, p1, nrm, forceLight || isLightFace(col), isConcave, forceLight);
+  }
+}
+
+/* ================================================================== *
  * Explicit voxel edges
  * ================================================================== */
 
@@ -1821,6 +2151,7 @@ const VERT_DECL = /* glsl */ `
   uniform float uWindTime;
   uniform vec2  uWindDir;
   uniform float uWindStrength;
+  uniform float uPlanetRadius;
 `;
 
 const VERT_BODY = /* glsl */ `
@@ -1829,9 +2160,7 @@ const VERT_BODY = /* glsl */ `
   vUvW = aUv;
   vDataV = aData;
   vNrmW  = normal;
-  // Chunk positions are absolute and the meshes are never transformed, so the
-  // local attribute is already the world position.
-  vPosW  = position;
+  vPosW  = transformed;
 
   // Wind sway: bit 3 of aData.y flags swayable blocks (leaf blocks).
   // Phase offset from world XZ keeps adjacent trees out of sync.
@@ -1841,7 +2170,7 @@ const VERT_BODY = /* glsl */ `
     float sway  = (sin(uWindTime * 1.1 + phase) * 0.6
                  + sin(uWindTime * 0.47 + phase * 1.9) * 0.4)
                  * uWindStrength;
-    float heightT = clamp(transformed.y / 28.0, 0.0, 1.0);
+    float heightT = clamp((length(transformed.xyz) - uPlanetRadius) / 28.0, 0.0, 1.0);
     transformed.x += uWindDir.x * sway * heightT;
     transformed.z += uWindDir.y * sway * heightT;
   }
@@ -1856,6 +2185,7 @@ const FRAG_DECL = /* glsl */ `
   varying vec3 vPosW;
   uniform float uLodAlpha;
   uniform float uAoStrength;
+  uniform float uPlanetRadius;
   uniform vec3  uAoTint;
   uniform float uShadowTintStrength;
   uniform vec3  uShadowHue;
@@ -1956,7 +2286,9 @@ const FRAG_BODY = /* glsl */ `
     float pat = mod(vDataV.y, 8.0);
     float fringe = vDataV.z;
     float localV = vDataV.w;
-    bool isSide = abs(vNrmW.y) < 0.5;
+    float _radial = dot(vNrmW, normalize(vPosW));
+    bool isSide = abs(_radial) < 0.5;
+    bool isTopFace = _radial > 0.5;
 
     if (pat > 0.5 && pat < 1.5)      col = patBrick(vUvW, col, vTintV);
     else if (pat > 1.5 && pat < 2.5) col = patStone(vUvW, col, vTintV);
@@ -1990,10 +2322,10 @@ const FRAG_BODY = /* glsl */ `
     // independent of the sun direction. Side values raised from 0.88/0.94 so
     // the unlit face reads as shaded surface rather than silhouette.
     float faceShade = 1.0;
-    if (vNrmW.y > 0.5)            faceShade = 1.0;
-    else if (vNrmW.y < -0.5)      faceShade = 0.78;
-    else if (abs(vNrmW.x) > 0.5)  faceShade = 0.96;
-    else                          faceShade = 0.92;
+    if (_radial > 0.5)                       faceShade = 1.0;   // radially outward = top
+    else if (_radial < -0.5)                 faceShade = 0.78;  // radially inward = bottom
+    else if (abs(vNrmW.x) > abs(vNrmW.z))   faceShade = 0.96;
+    else                                     faceShade = 0.92;
     // Hemisphere sky-ground blend: adds a small sky-tinted lift to faces that
     // point upward and a ground-bounce lift to those that point down, matching
     // the scene HemisphereLight behaviour and lifting the darkest side faces.
@@ -2014,7 +2346,7 @@ const FRAG_BODY = /* glsl */ `
     // Walls darken slightly near ground level — simulates moisture
     // absorption, soil staining, and reduced sky exposure.
     if (isSide) {
-      float hRamp = clamp(vPosW.y / 36.0, 0.0, 1.0);
+      float hRamp = clamp((length(vPosW) - uPlanetRadius) / 36.0, 0.0, 1.0);
       col *= 0.90 + hRamp * 0.10;
     }
 
@@ -2102,17 +2434,14 @@ export function makeVoxelMaterial() {
     uWindDir:      { value: new THREE.Vector2(1.0, 0.3).normalize() },
     uWindStrength: { value: 0.0 },
 
-    /* --- planet bend -------------------------------------------------- */
-    ...planetUniformValues(new THREE.Vector3()),
+    /* --- sphere radius ------------------------------------------------ */
+    uPlanetRadius: { value: 350.0 },
   };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, mat.userData.uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${VERT_DECL}\n${PLANET_UNIFORMS_GLSL}\n${PLANET_BEND_GLSL}`)
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>\n${VERT_BODY}\n  applyPlanetBend(transformed, vNrmW);\n  vPosW = transformed;`,
-      );
+      .replace('#include <common>', `#include <common>\n${VERT_DECL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERT_BODY}`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${COMMON_GLSL}\n${FRAG_DECL}`)
       .replace('void main() {', `void main() {\n${BAYER_DITHER_GLSL}`)
@@ -2134,30 +2463,19 @@ export function makeVoxelMaterial() {
       );
     mat.userData.shader = shader;
   };
-  mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v8';
+  mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v9';
   return mat;
 }
 
 /** Emissive blocks (lanterns, crystals) — unlit, bright, bloom bait. */
 export function makeGlowMaterial() {
   const mat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true });
-  const planetUnis = planetUniformValues(new THREE.Vector3());
-  // Minimal vertex/fragment declarations — glow geometry only has position/normal/color.
-  // Using the full VERT_DECL/FRAG_DECL (terrain-specific attributes aTint/aFringe/aUv/aData)
-  // caused driver-level issues on some WebGL implementations when those attributes were
-  // missing from glow geometry, leading to visual flickering.
-  const GLOW_VERT_DECL = /* glsl */ `varying vec3 vNrmW;\n${PLANET_UNIFORMS_GLSL}\n${PLANET_BEND_GLSL}`;
+  const GLOW_VERT_DECL = /* glsl */ `varying vec3 vNrmW;`;
   const GLOW_FRAG_DECL = /* glsl */ `varying vec3 vNrmW;`;
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, planetUnis);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${GLOW_VERT_DECL}`)
-      .replace(
-        '#include <begin_vertex>',
-        `#include <begin_vertex>
-  vNrmW = normal;
-  applyPlanetBend(transformed, vNrmW);`,
-      );
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n  vNrmW = normal;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${GLOW_FRAG_DECL}`)
       .replace(
@@ -2173,7 +2491,6 @@ export function makeGlowMaterial() {
     uAoStrength: { value: 0 },
     uAoTint: { value: new THREE.Color(1, 1, 1) },
   };
-  mat.userData.planetUnis = planetUnis;
-  mat.customProgramCacheKey = () => 'VoxelWorld-glow-v3';
+  mat.customProgramCacheKey = () => 'VoxelWorld-glow-v4';
   return mat;
 }

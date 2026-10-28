@@ -22,7 +22,6 @@
 
 import * as THREE from 'three';
 import { WATER, SKY, LIGHT } from '../core/palette';
-import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
 
 /**
  * Half-range of the signed depth field, in world units. The texture is
@@ -135,14 +134,11 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         uCaustic: { value: WATER.caustic },
         uReflect: { value: WATER.reflect },
         uLevel: { value: WATER.level },
-        ...planetUniformValues(new THREE.Vector3()),
       },
     ]),
     vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
-      ${PLANET_UNIFORMS_GLSL}
-      ${PLANET_BEND_GLSL}
       ${WAVE_GLSL}
       uniform float uTime;
       varying vec3 vWorld;
@@ -154,8 +150,6 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         vWorld.y += wave.x;
         // Pass the analytic surface normal to planet-bend so the bend axis
         // stays consistent with the displaced surface.
-        vec3 wNrm = normalize(vec3(-wave.y, 1.0, -wave.z));
-        applyPlanetBend(vWorld, wNrm);
         vec4 mvPosition = viewMatrix * vec4(vWorld, 1.0);
         gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
@@ -376,4 +370,19 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
       mat.uniforms.uTime.value += dt;
     },
   };
+}
+
+// ponytail: sphere water reuses createWater's ShaderMaterial with null depthMap
+// (depth-based caustics require a depth pass — add when rendering is stable)
+export function makeSphereWater(scene: THREE.Scene) {
+  const SPHERE_R = 350; // matches PLANET_RADIUS in sphere-voxel.ts
+  const water = createWater(SPHERE_R * 2, null as any, 'low', 32);
+  // Swap flat PlaneGeometry for a sphere shell
+  water.mesh.geometry.dispose();
+  (water as any).mesh.geometry = new THREE.SphereGeometry(SPHERE_R, 64, 48);
+  water.mesh.position.set(0, 0, 0);
+  water.mesh.rotation.set(0, 0, 0);
+  water.mesh.name = 'sphere-water';
+  scene.add(water.mesh);
+  return water;
 }
