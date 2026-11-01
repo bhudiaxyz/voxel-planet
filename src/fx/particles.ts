@@ -12,7 +12,6 @@
 
 import * as THREE from 'three';
 import { PETAL_COLORS, MOTE_COLORS } from '../core/palette';
-import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
 
 const PETAL_VERT = /* glsl */ `
   #include <common>
@@ -24,11 +23,10 @@ const PETAL_VERT = /* glsl */ `
   uniform float uTime;
   uniform vec3 uBounds;     // world extent
   uniform vec3 uOrigin;
+  uniform float uPlanetRadius;
   varying vec3 vCol;
   varying vec2 vUv;
   varying float vFade;
-  ${PLANET_UNIFORMS_GLSL}
-  ${PLANET_BEND_GLSL}
 
   mat3 rotAxis(vec3 a, float t) {
     float c = cos(t), s = sin(t), o = 1.0 - c;
@@ -53,16 +51,12 @@ const PETAL_VERT = /* glsl */ `
     vec3 base = offset;
     float fall = mod(base.y - t * aSeed.z, uBounds.y);
     vec3 wp;
-    wp.y = fall;
+    wp.y = fall + uOrigin.y;
     wp.x = base.x + sin(t * 0.55 + aSeed.x * 6.28) * 2.6 + sin(t * 0.21) * 1.4;
     wp.z = base.z + cos(t * 0.47 + aSeed.x * 5.11) * 2.6 + cos(t * 0.17) * 1.4;
 
     // keep the field centred on the camera so it never runs out
     wp.xz = mod(wp.xz - uOrigin.xz + uBounds.xz * 0.5, uBounds.xz) - uBounds.xz * 0.5 + uOrigin.xz;
-
-    // apply planet bend to anchor before adding billboard offset
-    vec3 wpNrm = vec3(0.0, 1.0, 0.0);
-    applyPlanetBend(wp, wpNrm);
 
     vec3 world = wp + p;
     vec4 mv = viewMatrix * vec4(world, 1.0);
@@ -160,7 +154,7 @@ export function createParticles(worldSize: any, rng: any, maxCount = 1110) {
           uBounds: { value: bounds.clone() },
           uOrigin: { value: new THREE.Vector3() },
           uSoft: { value: soft },
-          ...planetUniformValues(new THREE.Vector3()),
+          uPlanetRadius: { value: 350.0 },
         },
       ]),
     });

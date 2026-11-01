@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/sphere-voxel';
 import { basisFromCode } from '../core/geoutil';
 import { Noise3 } from '../core/noise3';
+import { makeRng } from '../core/rng';
 import { BLOCKS } from '../core/palette';
 
 // Sea level is layer 9; terrace step is 2 (same aesthetic as flat terrain)
@@ -55,6 +56,25 @@ export function generateSphereTerrain(
   }
 
   const spawn = findSpawn(grid);
+
+  // Scatter voxel trees on land grass columns
+  const treeRng = makeRng(seed ^ 0x7ace31);
+  const LEAVES = [BLOCKS.LEAF_PINK, BLOCKS.LEAF_BLUSH, BLOCKS.LEAF_LILAC,
+                  BLOCKS.LEAF_CREAM, BLOCKS.LEAF_MINT, BLOCKS.LEAF_ROSE];
+  for (let face = 0; face < 6; face++) {
+    for (let v = 0; v < FACE_RES; v++) {
+      for (let u = 0; u < FACE_RES; u++) {
+        if (treeRng() > 0.02) continue;
+        const sl = grid.columnTop(face, u, v);
+        if (sl <= SEA_LAYER + 1) continue;
+        const topId = grid.get(face, u, v, sl);
+        // Only plant on grass blocks
+        if (topId !== BLOCKS.GRASS.id && topId !== BLOCKS.GRASS_LIGHT.id) continue;
+        plantSphereTree(grid, face, u, v, sl, treeRng, LEAVES);
+      }
+    }
+  }
+
   return { grid, spawn };
 }
 
@@ -93,6 +113,45 @@ function selectRock(
 ): number {
   const v = noise.get(dir.x * 12 + layer * 0.3, dir.y * 12, dir.z * 12);
   return v > 0.2 ? stonePale.id : stone.id;
+}
+
+function plantSphereTree(
+  grid: SphereVoxelGrid,
+  face: number, u: number, v: number,
+  surfaceLayer: number,
+  rng: ReturnType<typeof makeRng>,
+  leaves: (typeof BLOCKS)[keyof typeof BLOCKS][],
+) {
+  const trunk = rng() < 0.55 ? BLOCKS.TRUNK : BLOCKS.TRUNK_PALE;
+  const leaf = leaves[Math.floor(rng() * leaves.length)] as any;
+  const trunkH = 6 + Math.floor(rng() * 7);   // 6–12 layers tall
+  const cr = 2 + Math.floor(rng() * 2);        // canopy radius 2–3 in u/v
+  const canopyH = 3 + Math.floor(rng() * 3);   // canopy depth 3–5 layers
+  const canopyBase = surfaceLayer + trunkH - 1;
+  const canopyTop  = surfaceLayer + trunkH + canopyH;
+
+  // Trunk
+  for (let l = surfaceLayer + 1; l <= surfaceLayer + trunkH; l++) {
+    if (l >= SHELL_DEPTH) break;
+    grid.set(face, u, v, l, trunk.id);
+  }
+
+  // Canopy box in u/v/layer space around trunk top
+  for (let du = -cr; du <= cr; du++) {
+    for (let dv = -cr; dv <= cr; dv++) {
+      const nu = u + du, nv = v + dv;
+      if (nu < 0 || nu >= FACE_RES || nv < 0 || nv >= FACE_RES) continue;
+      const dist = Math.abs(du) + Math.abs(dv);
+      const lMin = dist <= 1 ? canopyBase     : canopyBase + Math.floor(dist * 0.5);
+      const lMax = dist === 0 ? canopyTop     : canopyTop  - dist;
+      for (let l = lMin; l <= lMax; l++) {
+        if (l >= SHELL_DEPTH) break;
+        // Don't overwrite existing terrain
+        if (grid.get(face, nu, nv, l) !== 0) continue;
+        grid.set(face, nu, nv, l, leaf.id);
+      }
+    }
+  }
 }
 
 function findSpawn(grid: SphereVoxelGrid): { face: number; u: number; v: number } {

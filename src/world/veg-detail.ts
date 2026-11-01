@@ -38,6 +38,12 @@ export class DetailField {
   det: number[] = []; // (sway, phase)
   count = 0;
   _c = new THREE.Color();
+  _up: [number, number, number] = [0, 1, 0];
+
+  /** Override the vertical axis for sphere-surface placement. */
+  setFrame(up: [number, number, number]): void {
+    this._up[0] = up[0]; this._up[1] = up[1]; this._up[2] = up[2];
+  }
 
   get empty() {
     return this.count === 0;
@@ -63,19 +69,37 @@ export class DetailField {
    */
   tuft(x: any, y: any, z: any, w: any, h: any, colBot: any, colTop: any, phase: any, leanX = 0, leanZ = 0, sway = 1) {
     const hw = w * 0.5;
+    const [ux, uy, uz] = this._up;
+
+    // Tangent frame from _up so tufts stand perpendicular to the surface.
+    // For default _up=(0,1,0) this reduces to the original X/Z spread.
+    let rax: number, ray: number, raz: number;
+    let rbx: number, rby: number, rbz: number;
+    if (Math.abs(uz) < 0.99) {
+      // cross(up, Z_hat) = (uy, -ux, 0)
+      const rlen = Math.sqrt(uy * uy + ux * ux) || 1;
+      rax = uy / rlen; ray = -ux / rlen; raz = 0;
+    } else {
+      // up nearly parallel to Z — use X_hat instead
+      const rlen = Math.sqrt(uz * uz + uy * uy) || 1;
+      rax = 0; ray = uz / rlen; raz = -uy / rlen;
+    }
+    // second tangent = cross(up, first tangent)
+    rbx = uy * raz - uz * ray;
+    rby = uz * rax - ux * raz;
+    rbz = ux * ray - uy * rax;
+
     for (let k = 0; k < 2; k++) {
-      const ax = k === 0 ? hw : 0;
-      const az = k === 0 ? 0 : hw;
-      const tx = x + leanX,
-        tz = z + leanZ;
+      const [tax, tay, taz] = k === 0 ? [rax * hw, ray * hw, raz * hw] : [rbx * hw, rby * hw, rbz * hw];
+      // lean is a small visual offset; keep it in world XZ for simplicity
       this._quad(
         [
-          [x - ax, y, z - az],
-          [x + ax, y, z + az],
-          [tx + ax * 0.62, y + h, tz + az * 0.62],
-          [tx - ax * 0.62, y + h, tz - az * 0.62],
+          [x - tax,                 y - tay,                 z - taz],
+          [x + tax,                 y + tay,                 z + taz],
+          [x + leanX + tax * 0.62 + ux * h, y + tay * 0.62 + uy * h, z + leanZ + taz * 0.62 + uz * h],
+          [x + leanX - tax * 0.62 + ux * h, y - tay * 0.62 + uy * h, z + leanZ - taz * 0.62 + uz * h],
         ],
-        UP,
+        this._up,
         colBot,
         colTop,
         sway,
@@ -399,4 +423,27 @@ export class DetailField {
       },
     };
   }
+}
+
+/**
+ * Build a renderable detail chunk from a populated `DetailField`.
+ * Pass `opts.sphereMode = true` when geometry is already in world-space sphere
+ * coordinates so planet-bend is disabled (radius set huge).
+ */
+export function createDetailChunk(
+  field: DetailField,
+  origin: THREE.Vector3,
+  opts: { sphereMode?: boolean } = {},
+) {
+  const result = field.build();
+  result.object3d.position.copy(origin);
+  result.object3d.updateMatrix();
+
+  if (opts.sphereMode) {
+    // ponytail: disable planet-bend by making radius huge; sphere geometry is already in world XYZ
+    const unis = (result.material as any).uniforms ?? (result.material as any).userData?.uniforms;
+    if (unis?.uPlanetRadius) unis.uPlanetRadius.value = 1e9;
+  }
+
+  return result;
 }

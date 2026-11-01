@@ -63,9 +63,22 @@ export class SphereVoxelGrid {
     return this.surfaceLayer[this.colIdx(face, u, v)];
   }
 
+  /** Highest walkable (non-foliage) layer — ignores TRUNK and LEAF blocks. */
+  groundColumnTop(face: number, u: number, v: number): number {
+    if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
+    let l = this.surfaceLayer[this.colIdx(face, u, v)];
+    while (l >= 0) {
+      const id = this.data[this.idx(face, u, v, l)];
+      const b = id ? (BLOCK_BY_ID[id] as any) : null;
+      if (!b?.sway && !b?.isTrunk) break;
+      l--;
+    }
+    return l;
+  }
+
   /** World-space radius of the surface (columnTop + 1 above planet centre), min PLANET_RADIUS. */
   surfaceRadius(face: number, u: number, v: number): number {
-    const top = this.columnTop(face, u, v);
+    const top = this.groundColumnTop(face, u, v);
     return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
   }
 }

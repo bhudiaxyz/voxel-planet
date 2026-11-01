@@ -130,8 +130,10 @@ export function createHud({ dayNight, drone, camera }: HudDeps) {
       // Drone stats — only when active
       if (drone.active) {
         droneEl.style.display = 'flex';
-        const alt = Math.round(drone.getAltitude(camera));
-        const spd = Math.round(drone.getSpeed());
+        const alt = Math.round(
+          (drone as any).altitude ?? drone.getAltitude?.(camera) ?? 0
+        );
+        const spd = Math.round((drone as any).getSpeed?.() ?? 0);
         droneEl.textContent = `↑ ${alt} m  ${spd} u/s`;
       } else {
         droneEl.style.display = 'none';

@@ -255,7 +255,7 @@ export class Atmosphere {
   update(dt: any, camera: any) {
     this.time += dt;
     if (this.sky) {
-      this.sky.position.set(camera.position.x, 0, camera.position.z);
+      this.sky.position.copy(camera.position);
       this.sky.material.uniforms.uTime.value = this.time;
       this.sky.updateMatrixWorld();
     }

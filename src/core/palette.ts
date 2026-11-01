@@ -148,11 +148,11 @@ export const BLOCKS = {
     top: c(0x8a5a28), side: c(0x7a5020), bottom: c(0x6a4018), tint: c(0x724a18),
     pattern: PATTERN.BARK, rough: 0.5,
   }),
-  TRUNK: B(23, {
+  TRUNK: B(23, { isTrunk: true,
     top: c(0x4a3020), side: c(0x3e2818), bottom: c(0x342010), tint: c(0x362212),
     pattern: PATTERN.BARK, rough: 0.65,
   }),
-  TRUNK_PALE: B(24, {
+  TRUNK_PALE: B(24, { isTrunk: true,
     top: c(0x5a3828), side: c(0x4e3020), bottom: c(0x3e2818), tint: c(0x482a18),
     pattern: PATTERN.BARK, rough: 0.6,
   }),

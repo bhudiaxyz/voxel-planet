@@ -2171,8 +2171,13 @@ const VERT_BODY = /* glsl */ `
                  + sin(uWindTime * 0.47 + phase * 1.9) * 0.4)
                  * uWindStrength;
     float heightT = clamp((length(transformed.xyz) - uPlanetRadius) / 28.0, 0.0, 1.0);
-    transformed.x += uWindDir.x * sway * heightT;
-    transformed.z += uWindDir.y * sway * heightT;
+    // Project wind onto the sphere tangent plane so sway is always lateral.
+    vec3 radial    = normalize(transformed.xyz);
+    vec3 wind3d    = normalize(vec3(uWindDir.x, 0.0, uWindDir.y));
+    vec3 windTang  = wind3d - dot(wind3d, radial) * radial;
+    float wLen = length(windTang);
+    if (wLen > 0.001) windTang /= wLen; else windTang = vec3(1.0, 0.0, 0.0);
+    transformed.xyz += windTang * sway * heightT;
   }
 `;
 
@@ -2186,6 +2191,7 @@ const FRAG_DECL = /* glsl */ `
   uniform float uLodAlpha;
   uniform float uAoStrength;
   uniform float uPlanetRadius;
+  uniform float uSeaLevelRadius;
   uniform vec3  uAoTint;
   uniform float uShadowTintStrength;
   uniform vec3  uShadowHue;
@@ -2372,15 +2378,17 @@ const FRAG_BODY = /* glsl */ `
      * Applied last, after shading and occlusion, so it stays a flat graphic
      * line of constant value rather than something the lighting can dim.
      */
-    if (abs(vNrmW.y) < 0.5) {
+    float _seaDist = length(vPosW) - uSeaLevelRadius;
+    bool _underwater = _seaDist < 0.0;
+    if (isSide) {
       // Half a block along the face normal lands exactly on the centre of
       // the neighbouring column, which is the one holding the water.
       vec2 probe = (vPosW.xz + vNrmW.xz * 0.5) / uWorldSize;
       float neighbour = (texture2D(uWaterMap, probe).r * 2.0 - 1.0) * uWaterRange;
       // Width in pixels, not world units, so the stroke matches the block
       // outlines at every distance instead of thinning across the basin.
-      float w = max(fwidth(vPosW.y) * uWaterInkWidth, 0.012);
-      float line = (1.0 - smoothstep(0.0, w, abs(vPosW.y - uWaterLevel)))
+      float w = max(fwidth(length(vPosW)) * uWaterInkWidth, 0.012);
+      float line = (1.0 - smoothstep(0.0, w, abs(_seaDist)))
                  * smoothstep(0.02, 0.30, neighbour);
       col = mix(col, uWaterInk, line * uWaterInkStrength);
     }
@@ -2436,6 +2444,7 @@ export function makeVoxelMaterial() {
 
     /* --- sphere radius ------------------------------------------------ */
     uPlanetRadius: { value: 350.0 },
+    uSeaLevelRadius: { value: 359.5 },  // PLANET_RADIUS(350) + SEA_LAYER(9) + 0.5
   };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, mat.userData.uniforms);

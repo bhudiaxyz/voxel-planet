@@ -14,6 +14,10 @@ import { makeRng, genSeedWord, hashSeedWord } from './core/rng';
 import { detectGpuTier, TIER_SETTINGS } from './render/gpu-tier';
 import { createTouchControls, isTouchDevice } from './ui/touch-controls';
 import { Input } from './player/controller';
+import { createParticles } from './fx/particles';
+import { createSphereMap } from './render/sphere-map';
+import { createSphereDroneMode } from './player/sphere-drone';
+import { createSphereDog } from './player/sphere-dog';
 
 export let currentSeedWord = 'LusaliBenoruLezagi';
 const urlWord = new URLSearchParams(location.search).get('seed');
@@ -68,18 +72,47 @@ async function start(): Promise<void> {
     voxMat.userData.uniforms._windBase = storedWind;
   }
 
+  const rng = makeRng(SEED);
+  const particles = createParticles(80, rng, 800);
+  scene.add(particles.group);
+
+  const sphereMap = createSphereMap(world.grid);
+  const drone = createSphereDroneMode();
+  const dog = createSphereDog(world.grid, scene);
+
   const controller = new SphereController(world.spawnDir, world.grid);
   const input = new Input(renderer.domElement);
 
+  const canAct = () => fpCam.isLocked || fpCam.touchActive;
+
+  const enterDrone = () => {
+    drone.enter(controller.dir, controller.groundRadius);
+    fpCam.droneActive = true;
+  };
+  const exitDrone = () => {
+    drone.exit();
+    fpCam.droneActive = false;
+  };
+
   document.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.code === 'KeyE' && !e.repeat) {
+    if (e.repeat) return;
+    // Drone/fly exit — works even without pointer lock
+    if (e.code === 'KeyL' && drone.active) { exitDrone(); return; }
+    if (e.code === 'KeyV') {
+      if (drone.active) exitDrone(); else enterDrone();
+      return;
+    }
+    // Map toggle — direct, no pause-menu required
+    if (e.code === 'KeyM') { sphereMapToggle.toggle(); return; }
+    if (!canAct()) return;
+    if (e.code === 'KeyE') {
       const g = post.grade.uniforms;
       const on = g['uEdgeDarkOpacity'].value === 0;
       g['uEdgeDarkOpacity'].value = on ? 0.64 : 0;
       g['uEdgeLightOpacity'].value = on ? 0.3 : 0;
     }
-    if (e.code === 'BracketLeft'  && !e.repeat) dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1;
-    if (e.code === 'BracketRight' && !e.repeat) dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1;
+    if (e.code === 'BracketLeft')  dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1;
+    if (e.code === 'BracketRight') dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1;
   });
 
   const touch = createTouchControls(fpCam, renderer.domElement);
@@ -93,9 +126,12 @@ async function start(): Promise<void> {
     dayNight,
     seed: { currentWord: () => currentSeedWord, push: pushSeedUrl, gen: genSeedWord },
   });
-  const hud = createHud({ dayNight, drone: { active: false, landing: false } as any, camera: fpCam.camera });
+  const hud = createHud({ dayNight, drone: drone as any, camera: fpCam.camera });
   hud.onSettingsClick(() => { if (!settings.open) settings.toggle(); });
-  const pause = createPause({ input, map: null as any, onNewWorld: () => { pushSeedUrl(genSeedWord()); location.reload(); } });
+  sphereMap.el.style.cssText = 'display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90vw;border:2px solid rgba(255,255,255,0.3);border-radius:4px;z-index:20;';
+  document.body.appendChild(sphereMap.el);
+  const sphereMapToggle = { toggle: () => { sphereMap.el.style.display = sphereMap.el.style.display === 'none' ? 'block' : 'none'; } };
+  const pause = createPause({ input, map: sphereMapToggle, onNewWorld: () => { pushSeedUrl(genSeedWord()); location.reload(); } });
 
   settings.onPaletteChange((name) => {
     setVoxelPalette(name);
@@ -141,6 +177,10 @@ async function start(): Promise<void> {
   });
   touch.onTimeBack(    () => { dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1; });
   touch.onTimeForward( () => { dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1; });
+  touch.onDrone(() => { if (!drone.active) enterDrone(); });
+  touch.onLand(()  => { if (drone.active)  exitDrone(); });
+  touch.onFly(()   => { if (drone.active) exitDrone(); else enterDrone(); });
+  touch.onMap(() => pause.toggle());
 
   // Initial camera frame
   fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
@@ -201,6 +241,11 @@ async function start(): Promise<void> {
     atmo.followTarget(camPos2.x, camPos2.z);
     dayNight.update(dt);
 
+    if (world.sphereWater) {
+      world.sphereWater.update(dt);
+      world.sphereWater.material.uniforms.uSunDir.value.copy(dayNight.sunDir);
+    }
+
     if (tier !== 'very-low' && voxMat?.userData?.uniforms) {
       const wu = voxMat.userData.uniforms;
       if (wu._windBase > 0) {
@@ -226,8 +271,21 @@ async function start(): Promise<void> {
     }
 
     atmo.update(dt, fpCam.camera);
-    for (const d of world.animated) d.update(dt, fpCam.camera);
-    touch.update(false, false, false);
+    particles.update(dt, fpCam.camera);
+    dog.update(dt, controller.dir);
+    sphereMap.update(controller.dir);
+    if (drone.active) {
+      const droneInput = {
+        yaw:      fpCam.drainDroneMX() * 0.0015,
+        forward:  (fpCam.isKeyDown('KeyW') ? 1 : 0) - (fpCam.isKeyDown('KeyS') ? 1 : 0),
+        strafe:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0),
+        vertical: fpCam.drainDroneAltDelta(dt),
+        land:     false,
+      };
+      drone.update(dt, droneInput, world.grid, fpCam.camera);
+    }
+    for (const d of world.animated) d.update(dt);
+    touch.update(drone.active, (drone as any).landing ?? false, false);
     hud.update();
     settings.update();
 

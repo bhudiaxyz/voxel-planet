@@ -15,7 +15,8 @@ import { BLOCKS, BLOCK_BY_ID } from '../core/palette';
 import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
 import { generateSphereTerrain } from './sphere-terrain';
 import { basisFromCode } from '../core/geoutil';
-import { makeSphereWater } from './water';
+import { createSphereWater } from './water';
+import { scatterSphereVegetation } from './sphere-vegetation';
 
 /** The assembled world returned by buildWorld. */
 export interface World {
@@ -146,6 +147,7 @@ export interface SphereWorld {
   spawnDir: THREE.Vector3;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   animated: any[];
+  sphereWater: ReturnType<typeof createSphereWater>;
 }
 
 export async function buildSphereWorld(
@@ -177,14 +179,20 @@ export async function buildSphereWorld(
 
   onProgress(0.90, 'adding ocean');
   await yieldFrame();
-  makeSphereWater(scene);
+  const sphereWater = createSphereWater();
+  scene.add(sphereWater.mesh);
 
   const group = new THREE.Group();
   group.add(streaming.meshes.solid, streaming.meshes.glow, streaming.meshes.edges);
   scene.add(group);
 
+  onProgress(0.92, 'scattering vegetation');
+  await yieldFrame();
+  const veg = scatterSphereVegetation(grid, makeRng(seed ^ 0x3b1e7f), scene);
+  const animated = [...veg.animated];
+
   onProgress(1.0, 'ready');
-  return { grid, streaming, group, spawnDir, animated: [] };
+  return { grid, streaming, group, spawnDir, animated, sphereWater };
 }
 
 /** Pick a pleasant, walkable, well-framed spawn point near the river. */

@@ -22,6 +22,11 @@
 
 import * as THREE from 'three';
 import { WATER, SKY, LIGHT } from '../core/palette';
+import { PLANET_RADIUS } from '../core/sphere-voxel';
+import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
+
+const SEA_LAYER_SPHERE = 9;
+const SPHERE_WATER_RADIUS = PLANET_RADIUS + SEA_LAYER_SPHERE + 0.3;
 
 /**
  * Half-range of the signed depth field, in world units. The texture is
@@ -134,11 +139,14 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         uCaustic: { value: WATER.caustic },
         uReflect: { value: WATER.reflect },
         uLevel: { value: WATER.level },
+        ...planetUniformValues(new THREE.Vector3()),
       },
     ]),
     vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
+      ${PLANET_UNIFORMS_GLSL}
+      ${PLANET_BEND_GLSL}
       ${WAVE_GLSL}
       uniform float uTime;
       varying vec3 vWorld;
@@ -150,6 +158,8 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         vWorld.y += wave.x;
         // Pass the analytic surface normal to planet-bend so the bend axis
         // stays consistent with the displaced surface.
+        vec3 wNrm = normalize(vec3(-wave.y, 1.0, -wave.z));
+        applyPlanetBend(vWorld, wNrm);
         vec4 mvPosition = viewMatrix * vec4(vWorld, 1.0);
         gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
@@ -372,17 +382,132 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
   };
 }
 
-// ponytail: sphere water reuses createWater's ShaderMaterial with null depthMap
-// (depth-based caustics require a depth pass — add when rendering is stable)
-export function makeSphereWater(scene: THREE.Scene) {
-  const SPHERE_R = 350; // matches PLANET_RADIUS in sphere-voxel.ts
-  const water = createWater(SPHERE_R * 2, null as any, 'low', 32);
-  // Swap flat PlaneGeometry for a sphere shell
-  water.mesh.geometry.dispose();
-  (water as any).mesh.geometry = new THREE.SphereGeometry(SPHERE_R, 64, 48);
-  water.mesh.position.set(0, 0, 0);
-  water.mesh.rotation.set(0, 0, 0);
-  water.mesh.name = 'sphere-water';
-  scene.add(water.mesh);
-  return water;
+export function createSphereWater(tier: string = 'high') {
+  const sub = tier === 'high' ? 128 : 64;
+  const geo = new THREE.SphereGeometry(SPHERE_WATER_RADIUS, sub * 2, sub);
+
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    fog: true,
+    side: THREE.FrontSide,
+    uniforms: THREE.UniformsUtils.merge([
+      THREE.UniformsLib.fog,
+      {
+        uTime:       { value: 0 },
+        uShoal:      { value: WATER.shoal.clone() },
+        uShallow:    { value: WATER.shallow.clone() },
+        uDeep:       { value: WATER.deep.clone() },
+        uWarm:       { value: WATER.warm.clone() },
+        uSheen:      { value: WATER.sheen.clone() },
+        uHorizon:    { value: SKY.horizon.clone() },
+        uSky:        { value: SKY.zenith.clone() },
+        uSunDir:     { value: LIGHT.sunDir.clone().normalize() },
+        uSunColor:   { value: LIGHT.sunColor.clone() },
+        // Extinction tuned for sphere sea depth = 9 layers (not flat-world ~30).
+        // WATER.extinction [0.95, 0.72, 0.42] kills all colour at 9 units.
+        uExtinction: { value: new THREE.Vector3(0.28, 0.06, 0.02) },
+        uOpacity:    { value: WATER.opacity },
+        uDensity:    { value: WATER.density },
+        uSaturation: { value: WATER.saturation },
+        uCellTone:   { value: WATER.cellTone },
+        uCaustic:    { value: WATER.caustic },
+        uReflect:    { value: WATER.reflect },
+        uSeaDepth:   { value: SEA_LAYER_SPHERE },
+      },
+    ]),
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <fog_pars_vertex>
+      ${WAVE_GLSL}
+      uniform float uTime;
+      varying vec3 vWorld;
+      varying vec3 vNrm;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
+        // Wave tiling uses XZ — reasonable approximation near any face centre
+        vec3 wave = waveField(vWorld.xz, uTime);
+        // Radial displacement along sphere normal
+        vec3 radial = normalize(vWorld);
+        vWorld += radial * wave.x;
+        // Perturb sphere normal by wave slope
+        vec3 tangX = normalize(vec3(-vWorld.z, 0.0, vWorld.x));
+        vec3 tangZ = normalize(cross(radial, tangX));
+        vNrm = normalize(radial - tangX * wave.y - tangZ * wave.z);
+        vec4 mvPosition = viewMatrix * vec4(vWorld, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      #include <common>
+      #include <packing>
+      #include <fog_pars_fragment>
+      uniform float uTime, uOpacity, uDensity, uSaturation, uCellTone, uCaustic, uReflect, uSeaDepth;
+      uniform vec3 uShoal, uShallow, uDeep, uWarm, uSheen, uHorizon, uSky, uSunDir, uSunColor;
+      uniform vec3 uExtinction;
+      varying vec3 vWorld;
+      varying vec3 vNrm;
+
+      ${WAVE_GLSL}
+
+      float causticWeb(vec2 p, float t) {
+        vec2 a1 = p * 0.42        + vec2( t * 0.055, -t * 0.041);
+        vec2 a2 = p * 0.42 * 1.31 + vec2(-t * 0.037,  t * 0.061) + 41.3;
+        float web = pow(max(1.0 - abs(n2(a1) - n2(a2)) * 3.4, 0.0), 3.0);
+        vec2 b1 = p * 0.95        + vec2(-t * 0.083,  t * 0.062) +  7.1;
+        vec2 b2 = p * 0.95 * 1.27 + vec2( t * 0.071,  t * 0.049) + 91.7;
+        web += pow(max(1.0 - abs(n2(b1) - n2(b2)) * 3.6, 0.0), 3.0) * 0.55;
+        return min(web, 1.5);
+      }
+
+      void main() {
+        vec3 N = normalize(vNrm);
+        vec3 V = normalize(cameraPosition - vWorld);
+        float NdotV = max(dot(N, V), 0.0);
+
+        // ponytail: constant depth approximation; upgrade to per-column depth map if needed
+        float depth = uSeaDepth * (1.0 - NdotV * 0.5);
+        vec3 ext = exp(-uExtinction * depth);
+
+        float dt = clamp(depth / (uSeaDepth * 2.0), 0.0, 1.0);
+        vec3 waterCol = mix(uShoal, mix(uShallow, uDeep, dt), dt);
+        waterCol *= ext;
+
+        float caustic = causticWeb(vWorld.xz * 0.5, uTime) * uCaustic;
+        waterCol += caustic * ext * 0.4;
+
+        float fresnel = pow(1.0 - NdotV, 5.0);
+        vec3 skyRef = mix(uHorizon, uSky, max(dot(N, vec3(0,1,0)), 0.0));
+        waterCol = mix(waterCol, skyRef * uReflect, fresnel * 0.7);
+
+        vec3 H = normalize(V + uSunDir);
+        float spec = pow(max(dot(N, H), 0.0), 80.0) * 2.0;
+        waterCol += uSunColor * spec;
+
+        gl_FragColor = vec4(waterCol, uOpacity + fresnel * 0.3);
+        #include <fog_fragment>
+      }
+    `,
+  });
+
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 1;
+  const planetUnis: any[] = [mat.uniforms];
+
+  return {
+    mesh,
+    material: mat,
+    planetUnis,
+    update(_dt: number) {
+      mat.uniforms.uTime.value += _dt;
+      mat.uniforms.uShoal.value.copy(WATER.shoal);
+      mat.uniforms.uShallow.value.copy(WATER.shallow);
+      mat.uniforms.uDeep.value.copy(WATER.deep);
+      mat.uniforms.uSunDir.value.copy(LIGHT.sunDir).normalize();
+      mat.uniforms.uHorizon.value.copy(SKY.horizon);
+      mat.uniforms.uSky.value.copy(SKY.zenith);
+    },
+  };
 }
