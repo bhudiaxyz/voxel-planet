@@ -184,7 +184,7 @@ async function start(): Promise<void> {
 
   // Initial camera frame
   fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
-  world.streaming.update(controller.dir);
+  world.streaming.update(controller.dir, undefined);
   const camPos = fpCam.camera.position;
   atmo.followTarget(camPos.x, camPos.z);
 
@@ -234,7 +234,7 @@ async function start(): Promise<void> {
     controller.update(dt, wish, jumpEdge, world.grid, sprint);
     fpCam.updateSphere(dt, controller.dir, controller.groundRadius, controller.speed, controller.isGrounded);
 
-    world.streaming.update(controller.dir);
+    world.streaming.update(drone.active ? drone.dir : controller.dir, drone.active ? 0.0 : undefined);
     world.streaming.tick(dt);
 
     const camPos2 = fpCam.camera.position;
@@ -281,6 +281,7 @@ async function start(): Promise<void> {
         strafe:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0),
         vertical: fpCam.drainDroneAltDelta(dt),
         land:     false,
+        sprint,
       };
       drone.update(dt, droneInput, world.grid, fpCam.camera);
     }

@@ -3,8 +3,8 @@ import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
 import { dirToFaceUV } from '../core/geoutil';
 import { BLOCK_BY_ID } from '../core/palette';
 
-const MAP_W = 512;
-const MAP_H = 256;
+const MAP_W = 384;
+const MAP_H = 192;
 
 export interface SphereMap {
   el: HTMLCanvasElement;
@@ -50,7 +50,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
     const px = ((lon + Math.PI) / (2 * Math.PI)) * MAP_W;
     const py = (Math.PI / 2 - lat) / Math.PI * MAP_H;
     ctx.beginPath();
-    ctx.arc(px, py, 4, 0, 2 * Math.PI);
+    ctx.arc(px, py, 3, 0, 2 * Math.PI);
     ctx.fillStyle = '#ff4444';
     ctx.fill();
     ctx.strokeStyle = '#ffffff';

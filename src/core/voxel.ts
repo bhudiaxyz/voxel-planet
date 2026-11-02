@@ -533,9 +533,10 @@ export function createSphereChunkStreamer(
   return {
     meshes,
 
-    update(playerDir: THREE.Vector3) {
+    update(playerDir: THREE.Vector3, overrideCos?: number) {
       loadQueue = [];
       const desired = new Set<string>();
+      const activeCos = overrideCos ?? loadCos;
 
       for (let face = 0; face < 6; face++) {
         basisFromCode(face, _n, _tu, _tv);
@@ -547,7 +548,7 @@ export function createSphereChunkStreamer(
               .addScaledVector(_tv, (2 * v) / FACE_RES - 1)
               .normalize();
             const dot = _chunkDir.dot(playerDir);
-            if (dot >= loadCos) {
+            if (dot >= activeCos) {
               const key = keyOf(face, ci, ck);
               desired.add(key);
               if (!loaded.has(key)) loadQueue.push([face, ci, ck]);
@@ -1417,7 +1418,7 @@ export function meshSphereFaceRegion(
         for (let f = 0; f < 6; f++) {
           const F = FACES[f];
           const nu = u + F.n[0], nlayer = layer + F.n[1], nv = v + F.n[2];
-          if (grid.isSolid(face, nu, nv, nlayer)) continue;
+          if (grid.isSolidGlobal(face, nu, nv, nlayer)) continue;
 
           const isTop = F.n[1] === 1;
           const isBottom = F.n[1] === -1;
@@ -1444,9 +1445,9 @@ export function meshSphereFaceRegion(
             ];
             for (const [dx, dy, dz, bit] of dirs) {
               const sdu = u + dx, sdv = v + dz, sdl = layer + dy;
-              if (!grid.isSolid(face, sdu, sdv, sdl)) {
+              if (!grid.isSolidGlobal(face, sdu, sdv, sdl)) {
                 convexMask |= bit;
-              } else if (grid.isSolid(face, sdu + F.n[0], sdv + F.n[2], sdl + F.n[1])) {
+              } else if (grid.isSolidGlobal(face, sdu + F.n[0], sdv + F.n[2], sdl + F.n[1])) {
                 concaveMask |= bit;
               }
             }
@@ -1464,9 +1465,9 @@ export function meshSphereFaceRegion(
 
             const su = c[F.uAxis] === 1 ? 1 : -1;
             const sv = c[F.vAxis] === 1 ? 1 : -1;
-            const s1 = grid.isSolid(face, nu + uA[0]*su, nv + uA[2]*su, nlayer + uA[1]*su);
-            const s2 = grid.isSolid(face, nu + vA[0]*sv, nv + vA[2]*sv, nlayer + vA[1]*sv);
-            const cn = grid.isSolid(face, nu + uA[0]*su + vA[0]*sv, nv + uA[2]*su + vA[2]*sv, nlayer + uA[1]*su + vA[1]*sv);
+            const s1 = grid.isSolidGlobal(face, nu + uA[0]*su, nv + uA[2]*su, nlayer + uA[1]*su);
+            const s2 = grid.isSolidGlobal(face, nu + vA[0]*sv, nv + vA[2]*sv, nlayer + vA[1]*sv);
+            const cn = grid.isSolidGlobal(face, nu + uA[0]*su + vA[0]*sv, nv + uA[2]*su + vA[2]*sv, nlayer + uA[1]*su + vA[1]*sv);
             ao[i] = aoOf([s1, s2, cn]);
 
             const ucorner = u + c[0], vcorner = v + c[2], lcorner = layer + c[1];

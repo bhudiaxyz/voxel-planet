@@ -4,6 +4,7 @@ import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/s
 import { dirToFaceUV } from '../core/geoutil';
 
 const DRONE_SPEED = 40;       // m/s horizontal
+const DRONE_SPRINT_SPEED = 120; // m/s horizontal when shift held
 const DRONE_VSPEED = 20;      // m/s vertical
 const MIN_CLEARANCE = 1.5;    // m above surface
 const ENTER_LIFT = 8;         // m above ground on enter
@@ -14,6 +15,7 @@ export interface DroneInput {
   strafe: number;   // -1..1
   vertical: number; // -1..1
   land: boolean;
+  sprint: boolean;
 }
 
 export interface SphereDroneMode {
@@ -86,7 +88,8 @@ export function createSphereDroneMode(): SphereDroneMode {
         const len = _tmp.length();
         if (len > 0.001) {
           _tmp.divideScalar(len);
-          const stepAngle = (DRONE_SPEED * dt) / (PLANET_RADIUS + altitude);
+          const speed = input.sprint ? DRONE_SPRINT_SPEED : DRONE_SPEED;
+          const stepAngle = (speed * dt) / (PLANET_RADIUS + altitude);
           const axis = new THREE.Vector3().crossVectors(dir, _tmp).normalize();
           dir.applyAxisAngle(axis, stepAngle).normalize();
           reorthogonalise();
