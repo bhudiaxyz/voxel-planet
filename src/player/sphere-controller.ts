@@ -9,8 +9,11 @@ const WALK_SPEED = 9;
 const SPRINT_SPEED = 20;
 const EYE_HEIGHT = 1.75;
 
+const MAX_STEP = 1.1;  // max terrain step-up in world units
+
 const _scratchStep = new THREE.Vector3();
 const _scratchPos = new THREE.Vector3();
+const _oldDir = new THREE.Vector3();
 
 export class SphereController {
   dir = new THREE.Vector3(1, 0, 0);  // unit direction from planet centre
@@ -61,14 +64,23 @@ export class SphereController {
       this.verticalVelocity = Math.max(0, this.verticalVelocity);
     }
 
-    // Horizontal movement: arc step on sphere surface
+    // Horizontal movement: arc step on sphere surface with terrain collision
     if (wishDir.lengthSq() > 0.001) {
-      // Project wishDir onto the tangent plane at this.dir
+      _oldDir.copy(this.dir);
       _scratchStep.copy(wishDir).addScaledVector(this.dir, -wishDir.dot(this.dir)).normalize();
       const speed = sprint ? SPRINT_SPEED : WALK_SPEED;
       _scratchStep.multiplyScalar(speed * dt / this.groundRadius);
       this.dir.add(_scratchStep).normalize();
-      this.speed = speed / SPRINT_SPEED;
+
+      // Terrain collision: revert move if new column is too high to step onto
+      const { face: nf, u: nu, v: nv } = dirToFaceUV(this.dir, FACE_RES);
+      const newSurfR = grid.surfaceRadius(nf, nu, nv);
+      if (newSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP) {
+        this.dir.copy(_oldDir);
+        this.speed = 0;
+      } else {
+        this.speed = speed / SPRINT_SPEED;
+      }
     } else {
       this.speed = Math.max(0, this.speed - dt * 4);
     }

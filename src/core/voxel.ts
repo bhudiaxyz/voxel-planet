@@ -481,8 +481,8 @@ function buildSphereMeshChunk(
 }
 
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
-const COS_LOAD = 0.86;   // ~30° angular radius
-const COS_UNLOAD = 0.82; // ~35° — small hysteresis
+const COS_LOAD = 0.71;   // ~45° angular radius
+const COS_UNLOAD = 0.64; // ~50° — small hysteresis
 
 export function createSphereChunkStreamer(
   grid: SphereVoxelGrid,

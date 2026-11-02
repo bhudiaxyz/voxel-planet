@@ -63,13 +63,14 @@ export class SphereVoxelGrid {
     return this.surfaceLayer[this.colIdx(face, u, v)];
   }
 
-  /** Highest walkable (non-foliage) layer — ignores TRUNK and LEAF blocks. */
+  /** Highest walkable (non-foliage) layer — ignores TRUNK, LEAF, and air. */
   groundColumnTop(face: number, u: number, v: number): number {
     if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
     let l = this.surfaceLayer[this.colIdx(face, u, v)];
     while (l >= 0) {
       const id = this.data[this.idx(face, u, v, l)];
-      const b = id ? (BLOCK_BY_ID[id] as any) : null;
+      if (id === 0) { l--; continue; }
+      const b = (BLOCK_BY_ID[id] as any);
       if (!b?.sway && !b?.isTrunk) break;
       l--;
     }

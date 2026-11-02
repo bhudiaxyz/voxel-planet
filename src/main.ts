@@ -73,7 +73,7 @@ async function start(): Promise<void> {
   }
 
   const rng = makeRng(SEED);
-  const particles = createParticles(80, rng, 800);
+  const particles = createParticles(80, rng, 300);
   scene.add(particles.group);
 
   const sphereMap = createSphereMap(world.grid);
