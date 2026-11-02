@@ -17,6 +17,7 @@ import { Input } from './player/controller';
 import { createParticles } from './fx/particles';
 import { createSphereMap } from './render/sphere-map';
 import { createSphereDroneMode } from './player/sphere-drone';
+import { createSphereFlyMode } from './player/sphere-fly';
 import { createSphereDog } from './player/sphere-dog';
 
 export let currentSeedWord = 'LusaliBenoruLezagi';
@@ -78,6 +79,7 @@ async function start(): Promise<void> {
 
   const sphereMap = createSphereMap(world.grid);
   const drone = createSphereDroneMode();
+  const fly   = createSphereFlyMode();
   const dog = createSphereDog(world.grid, scene);
 
   const controller = new SphereController(world.spawnDir, world.grid);
@@ -86,6 +88,7 @@ async function start(): Promise<void> {
   const canAct = () => fpCam.isLocked || fpCam.touchActive;
 
   const enterDrone = () => {
+    if (fly.active) fly.exit();
     drone.enter(controller.dir, controller.groundRadius);
     fpCam.droneActive = true;
   };
@@ -93,13 +96,27 @@ async function start(): Promise<void> {
     drone.exit();
     fpCam.droneActive = false;
   };
+  const enterFly = () => {
+    if (drone.active) exitDrone();
+    fly.enter(controller.dir, controller.groundRadius);
+    fpCam.flyActive = true;
+  };
+  const exitFly = () => {
+    fly.exit();
+    fpCam.flyActive = false;
+  };
 
   document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.repeat) return;
     // Drone/fly exit — works even without pointer lock
-    if (e.code === 'KeyL' && drone.active) { exitDrone(); return; }
+    if (e.code === 'KeyL' && drone.active) { drone.beginLanding(); return; }
+    if (e.code === 'KeyL' && fly.active)   { exitFly(); return; }
     if (e.code === 'KeyV') {
       if (drone.active) exitDrone(); else enterDrone();
+      return;
+    }
+    if (e.code === 'KeyF') {
+      if (fly.active) exitFly(); else enterFly();
       return;
     }
     // Map toggle — direct, no pause-menu required
@@ -128,7 +145,7 @@ async function start(): Promise<void> {
   });
   const hud = createHud({ dayNight, drone: drone as any, camera: fpCam.camera });
   hud.onSettingsClick(() => { if (!settings.open) settings.toggle(); });
-  sphereMap.el.style.cssText = 'display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);max-width:90vw;border:2px solid rgba(255,255,255,0.3);border-radius:4px;z-index:20;';
+  sphereMap.el.style.cssText = `display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:${sphereMap.displayW}px;height:${sphereMap.displayH}px;max-width:90vw;max-height:90vh;border:2px solid rgba(255,255,255,0.3);border-radius:4px;z-index:20;`;
   document.body.appendChild(sphereMap.el);
   const sphereMapToggle = { toggle: () => { sphereMap.el.style.display = sphereMap.el.style.display === 'none' ? 'block' : 'none'; } };
   const pause = createPause({ input, map: sphereMapToggle, onNewWorld: () => { pushSeedUrl(genSeedWord()); location.reload(); } });
@@ -178,9 +195,9 @@ async function start(): Promise<void> {
   touch.onTimeBack(    () => { dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1; });
   touch.onTimeForward( () => { dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1; });
   touch.onDrone(() => { if (!drone.active) enterDrone(); });
-  touch.onLand(()  => { if (drone.active)  exitDrone(); });
-  touch.onFly(()   => { if (drone.active) exitDrone(); else enterDrone(); });
-  touch.onMap(() => pause.toggle());
+  touch.onLand(()  => { if (drone.active) drone.beginLanding(); else if (fly.active) exitFly(); });
+  touch.onFly(()   => { if (fly.active) exitFly(); else enterFly(); });
+  touch.onMap(() => sphereMapToggle.toggle());
 
   // Initial camera frame
   fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
@@ -227,14 +244,17 @@ async function start(): Promise<void> {
       }
     }
 
-    const wish = fpCam.getWishSphere(controller.dir);
+    const wish = fpCam.getWishSphere(fly.active ? fly.dir : controller.dir);
     const jumpEdge = fpCam.getJumpEdge();
     const sprint = fpCam.isKeyDown('ShiftLeft') || fpCam.isKeyDown('ShiftRight');
 
-    controller.update(dt, wish, jumpEdge, world.grid, sprint);
-    fpCam.updateSphere(dt, controller.dir, controller.groundRadius, controller.speed, controller.isGrounded);
+    if (!drone.active && !fly.active) {
+      controller.update(dt, wish, jumpEdge, world.grid, sprint);
+      fpCam.updateSphere(dt, controller.dir, controller.groundRadius, controller.speed, controller.isGrounded);
+    }
 
-    world.streaming.update(drone.active ? drone.dir : controller.dir, drone.active ? 0.0 : undefined);
+    const streamDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
+    world.streaming.update(streamDir, (drone.active || fly.active) ? 0.0 : undefined);
     world.streaming.tick(dt);
 
     const camPos2 = fpCam.camera.position;
@@ -273,20 +293,28 @@ async function start(): Promise<void> {
     atmo.update(dt, fpCam.camera);
     particles.update(dt, fpCam.camera);
     dog.update(dt, controller.dir);
-    sphereMap.update(controller.dir);
+    const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
+    const mapFwd = drone.active
+      ? drone.heading
+      : controller.forwardInPlane(fpCam.camera.getWorldDirection(new THREE.Vector3()));
+    sphereMap.update(mapDir, mapFwd);
     if (drone.active) {
       const droneInput = {
         yaw:      fpCam.drainDroneMX() * 0.0015,
+        yawKey:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0),
         forward:  (fpCam.isKeyDown('KeyW') ? 1 : 0) - (fpCam.isKeyDown('KeyS') ? 1 : 0),
-        strafe:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0),
         vertical: fpCam.drainDroneAltDelta(dt),
         land:     false,
         sprint,
       };
       drone.update(dt, droneInput, world.grid, fpCam.camera);
+    } else if (fly.active) {
+      fly.update(dt, wish, fpCam.drainDroneAltDelta(dt), sprint, world.grid, fpCam.camera);
+      // Use normal sphere camera update (mouse yaw/pitch applies, up = fly.dir)
+      fpCam.updateSphere(dt, fly.dir, fly.groundRadius, 0, false);
     }
     for (const d of world.animated) d.update(dt);
-    touch.update(drone.active, (drone as any).landing ?? false, false);
+    touch.update(drone.active, (drone as any).landing ?? false, fly.active);
     hud.update();
     settings.update();
 

@@ -160,7 +160,7 @@ export class FPCamera {
         .addScaledVector(playerDir, -this._touchWish.dot(playerDir))
         .normalize();
     }
-    if (!this.isLocked || this.droneActive || this.flyActive) return w;
+    if (!this.isLocked || this.droneActive) return w;
 
     // Build the same tangent-plane forward as updateSphere
     const ref = Math.abs(playerDir.y) > 0.9
@@ -243,7 +243,7 @@ export class FPCamera {
    * Adds head-bob when grounded and moving.
    */
   update(dt: number, controllerPos: THREE.Vector3, speedFraction = 0, grounded = true): void {
-    if (this.droneActive || this.flyActive) return;
+    if (this.droneActive) return;
 
     if (grounded && speedFraction > 0.05) {
       this._bobPhase += dt * HEAD_BOB_HZ * Math.PI * 2;
@@ -267,7 +267,7 @@ export class FPCamera {
     speedFraction = 0,
     grounded = true,
   ): void {
-    if (this.droneActive || this.flyActive) return;
+    if (this.droneActive) return;
 
     if (grounded && speedFraction > 0.05) {
       this._bobPhase += dt * HEAD_BOB_HZ * Math.PI * 2;
