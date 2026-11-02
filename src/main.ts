@@ -19,6 +19,7 @@ import { createSphereMap } from './render/sphere-map';
 import { createSphereDroneMode } from './player/sphere-drone';
 import { createSphereFlyMode } from './player/sphere-fly';
 import { createSphereDog } from './player/sphere-dog';
+import { PLANET_RADIUS } from './core/sphere-voxel';
 
 export let currentSeedWord = 'LusaliBenoruLezagi';
 const urlWord = new URLSearchParams(location.search).get('seed');
@@ -99,8 +100,16 @@ async function start(): Promise<void> {
     if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
   };
   const enterFly = () => {
-    if (drone.active) exitDrone();
-    fly.enter(controller.dir, controller.groundRadius);
+    if (drone.active) {
+      // Preserve drone's in-air position rather than snapping to surface first
+      const fromDir = drone.dir.clone();
+      const fromRadius = drone.altitude + PLANET_RADIUS;
+      drone.exit();
+      fpCam.droneActive = false;
+      fly.enter(fromDir, fromRadius);
+    } else {
+      fly.enter(controller.dir, controller.groundRadius);
+    }
     fpCam.flyActive = true;
   };
   const exitFly = () => {
@@ -301,7 +310,7 @@ async function start(): Promise<void> {
     const mapFwd = drone.active
       ? drone.heading
       : controller.forwardInPlane(fpCam.camera.getWorldDirection(new THREE.Vector3()));
-    sphereMap.update(mapDir, mapFwd);
+    sphereMap.update(mapDir, mapFwd, world.landmarks);
     if (drone.active) {
       const droneInput = {
         yaw:      fpCam.drainDroneMX() * 0.0015,

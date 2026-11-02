@@ -1,9 +1,18 @@
 // src/world/sphere-landmarks.ts
 // Sphere-native landmark structures — ported geometry from voxel-world/stamps.ts,
 // rewritten to use SphereVoxelGrid face-local (face, u, v, layer) coordinates.
+import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/sphere-voxel';
 import { BLOCKS } from '../core/palette';
 import { makeRng } from '../core/rng';
+import { columnDir } from '../core/geoutil';
+
+export interface LandmarkRecord {
+  kind: 'spire' | 'obelisk' | 'ring' | 'tombs' | 'biosphere' | 'well' | 'arch';
+  dir: THREE.Vector3; // world-space unit direction from planet centre
+}
+
+const _tmp = new THREE.Vector3();
 
 const SEA_LAYER = 9;
 const LANDMARKS_PER_FACE = 2; // ~12 total across the planet
@@ -249,7 +258,14 @@ function ruinedArch(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
 const BUILDERS = [twistedSpire, obelisk, monolithRing, tombstoneField,
                   floatingBiosphere, ancientWell, ruinedArch];
 
-export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<typeof makeRng>): void {
+const KINDS: LandmarkRecord['kind'][] = ['spire', 'obelisk', 'ring', 'tombs', 'biosphere', 'well', 'arch'];
+
+export function buildSphereLandmarks(
+  grid: SphereVoxelGrid,
+  rng: ReturnType<typeof makeRng>,
+): LandmarkRecord[] {
+  const records: LandmarkRecord[] = [];
+
   for (let face = 0; face < 6; face++) {
     const placed: [number, number][] = [];
     let attempts = 0;
@@ -257,22 +273,26 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
 
     while (placed.length < LANDMARKS_PER_FACE && attempts < 400) {
       attempts++;
-      // Sample a random column on this face
       const u = 10 + Math.floor(rng() * (FACE_RES - 20));
       const v = 10 + Math.floor(rng() * (FACE_RES - 20));
 
       if (!isLand(grid, face, u, v)) continue;
 
-      // Reject if too close to an already-placed landmark on this face
       const tooClose = placed.some(([pu, pv]) =>
         Math.abs(u - pu) < MIN_SEP && Math.abs(v - pv) < MIN_SEP,
       );
       if (tooClose) continue;
 
+      const kind = KINDS[landmarkIdx % KINDS.length];
       const builder = BUILDERS[landmarkIdx % BUILDERS.length];
       builder(grid, face, u, v, makeRng(rng() * 0xffffffff | 0));
       placed.push([u, v]);
       landmarkIdx++;
+
+      columnDir(face, u, v, FACE_RES, _tmp);
+      records.push({ kind, dir: _tmp.clone() });
     }
   }
+
+  return records;
 }

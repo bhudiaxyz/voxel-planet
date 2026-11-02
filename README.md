@@ -1,29 +1,27 @@
 # Voxel Planet
 
-A first-person explorer for a procedurally generated spherical Voxel Planet (Three.js + TypeScript + Vite). Walk, drone, or fly across an archipelago of continents connected by bridges, exploring terraced terrain, rivers, blossom trees, a companion dog, and a real-time day/night cycle with animated aurora. The world bends away from you at the horizon — a Mario-Galaxy-style curve applied entirely on the GPU.
+A first-person explorer on a procedurally generated spherical voxel planet (Three.js + TypeScript + Vite). Walk, drone, or fly across a genuine sphere — continents, oceans, forests, and ancient landmarks all mapped onto a cubemap grid. The horizon curves away naturally; physics and rendering agree because the world truly is a sphere.
 
 Inspired by **Verdant** [https://github.com/xikhar/verdant] and **Petalfell** [https://github.com/xikhar/voxel-game-original], along with aspects of **Beyond Fable** [https://github.com/xikhar/beyond-fable].
 
 ## Highlights
 
-- **Archipelago worldgen** — 3–5 main continents scattered across the ocean, connected by chains of stepping-stone islands and arched wooden bridges. Each seed produces a distinct layout.
-- **Curved planet** — GPU vertex bending gives the world a sphere-like horizon. Physics stay flat; only the visuals curve.
-- **Day/night cycle** — a 20-minute day with seven keyframed sky palettes and time-of-day tints pushed live to the voxel material. Watch the sun rise through orange haze, reach a pale noon, and set again.
+- **True sphere world** — `SphereVoxelGrid` maps the planet surface onto a 6-face cubemap (`FACE_RES = 400`, `PLANET_RADIUS = 350`). Physics, terrain, vegetation, and collision all work in sphere-native coordinates — no flat-world approximation.
+- **Procedural terrain** — sculpted with domain-warped FBM noise into terraced continents, beaches, and highlands. Each seed produces a distinct world; share the URL (`?seed=word`) to share an exact planet.
+- **Day/night cycle** — a 20-minute day with seven keyframed sky palettes. Watch the sun rise through orange haze, reach a pale noon, and set again.
 - **Night sky** — procedural stars, a Milky Way with Great Rift dust lane, emission nebulae, and a moon disc.
-- **Aurora** — animated curtain aurora at deep night: flickering vertical rays, sweeping pulse waves, and colour that shifts from green through cyan to magenta and ghostly white at peaks.
-- **Volumetric-style atmosphere** — sunrise/sunset limb glow, crepuscular rays (eight-tap radial blur), and animated cloud cover.
-- **Fly and drone modes** — free-flight (F) or terrain-following drone (G) with P-controller altitude hold and smooth landing state machine.
+- **Aurora** — animated curtain aurora at deep night: flickering vertical rays, sweeping pulse waves, and colour that shifts from green through cyan to magenta.
+- **Volumetric-style atmosphere** — sunrise/sunset limb glow, crepuscular rays, animated cloud cover, aerial perspective, and exponential ground mist.
+- **Fly and drone modes** — free-flight (F) or terrain-following drone (V) with P-controller altitude hold, auto-climb over obstacles, and smooth landing state machine. Both modes floor against the full voxel column height (including tree canopy).
 - **Ink edge rendering** — toon-style dark and light strokes at block boundaries, composited in display space after tone mapping. Toggle with E.
-- **Rich vegetation** — fourteen tree silhouette forms (round, stack, twin, bunch, nub, spire, umbrella, broad, tall birch, layered pagoda, weeping cherry, palm, dead/skeletal, mangrove), ferns, moss, lichen, grass, and scattered mushrooms and crystals. Each biome seeds its own palette of forms and leaf colours.
-- **Touch controls** — full nippleJS virtual joystick overlay with compass-aware minimap, auto-detected on load.
-- **Seasonal palettes** — five world colour palettes (Autumn, Spring, Alpine, Desert, Alien) selectable from the pause menu. Switching re-colours everything live: sky dome, fog, hemisphere light, water, atmospheric grade, and petal particles. No scene reload required.
-- **GPU tiering** — five quality tiers (high / mobile-high / mid / low / very-low) tuned at startup from device cores, memory, texture-unit size, and UA. Flagship phones and iPads land on `mobile-high`; desktop discrete GPUs on `high`.
-- **Rivers** — trunks meander from highland peaks to the coast, fed by tributaries and fine streams. Above sea level they are filled with teal-blue voxels (true swimming physics); at sea level the ocean water plane takes over. All rivers are drawn on the minimap with glow outlines, clipped at the coastline.
-- **Wind sway** — leaves and shrubs sway in the breeze. Wind strength is adjustable from Developer Settings (0–1.5). Skipped on very-low tier for performance.
-- **Scenic stamps** — hand-crafted micro-scenes seeded across each continent: waterfall gardens, stone river crossings, lily ponds, blossom groves with torii gates, cliff overlooks, and bubbling hot springs ringed by boulders and steam-moss. Each re-validates the terrain before building and downgrades gracefully if conditions aren't met.
-- **Landmarks** — ancient structures appear on each continent: twisted spires, obelisks, monolith rings, tombstone fields, floating biospheres, stone-rimmed ancient wells, and ruined arches with fractured lintels. All marked on the map.
-- **Real wave geometry** — the water plane has true vertex displacement driven by the same analytic wave field as the surface normal, so crests cast light consistently.
-- **Seeded worlds** — the seed word is always visible in the URL (`?seed=word`). Share a URL to share an exact world; generate a new one from the pause menu.
+- **Rich vegetation** — five tree forms (spire, palm, broad, weeping, round) with tall trunks and bushy canopies, plus ferns, red ferns, shrubs, reeds, tall grass, moss, and lichen. All placed in sphere-native face-local coordinates.
+- **Sphere landmarks** — seven ancient structure types seeded across the planet (2 per face, ~12 total): twisted spires, obelisks, monolith rings, tombstone fields, floating biospheres, ancient wells, and ruined arches. Each appears on the map with a distinct icon; hover for a label.
+- **Equirectangular map** — press M to open a full-planet map baked from terrain block colours. Your position is a directional arrow; landmarks show as colour-coded icons.
+- **Companion dog** — follows you across the sphere surface; `Y` to sit or stand.
+- **Touch controls** — full virtual joystick overlay with map button, auto-detected on load.
+- **Seasonal palettes** — five world colour palettes (Autumn, Spring, Alpine, Desert, Alien) selectable from the pause menu. Switching re-colours sky, fog, lights, water, grade, and meshes live — no reload.
+- **GPU tiering** — five quality tiers tuned at startup from device cores, memory, and texture unit size.
+- **Wind sway** — leaves and shrubs sway in the breeze; adjustable wind strength in settings.
 
 For architecture and implementation details, see [DESIGN.md](DESIGN.md).
 
@@ -51,11 +49,11 @@ npm run preview   # serve that bundle locally
 | --- | --- |
 | WASD | Move |
 | Mouse | Look |
-| Space | Jump (hold in water to swim up) |
+| Space | Jump |
 | Shift | Sprint |
 | F | Toggle fly mode (free flight, terrain floor) |
-| G | Enter drone mode (terrain-following, A/D steer) |
-| L | Land (drone) |
+| V | Toggle drone mode (terrain-following, A/D steer) |
+| L | Land drone |
 | Space / C | Ascend / descend (fly or drone) |
 | Scroll | Ascend / descend (drone) |
 | E | Toggle edge outlines |
@@ -63,41 +61,28 @@ npm run preview   # serve that bundle locally
 | M | Toggle map |
 | [ / ] | Step time of day back / forward by 3 hours |
 | Esc | Pause / release pointer |
-| `` ` `` | Settings |
 
-Click in the viewport to capture the pointer. Press Esc to release it. While landing the drone, press Space to abort and resume cruising.
+Click in the viewport to capture the pointer. Press Esc to release it.
 
 ### Touch (phone / tablet)
 
 | Control | Action |
 | --- | --- |
-| Left joystick | Move / steer (joystick Y brakes the drone) |
+| Left joystick | Move / steer |
 | Swipe right half | Look |
 | ↑ | Jump / ascend |
 | ↓ | Descend (drone or fly) |
 | ⚡ | Sprint |
-| ✈ | Toggle fly mode (tap again to exit) |
+| ✈ | Toggle fly mode |
 | 🚁 | Enter drone mode |
-| 🛬 | Land drone (visible while drone is airborne) |
+| 🛬 | Land drone |
 | ⬡ | Toggle edge outlines |
-| ◀ / ▶ | Step time of day back / forward by 3 hours |
-
-The joystick overlay appears automatically on touch devices and is hidden on desktop.
+| ◀ / ▶ | Step time of day back / forward |
+| ⬡ M | Toggle map |
 
 ## Settings
 
-The settings panel (`` ` ``) exposes:
-
-| Setting | Range | Effect |
-| --- | --- | --- |
-| Planet radius | 100 – 1000 | Tighter or looser horizon curve |
-| Day speed | 0.1× – 5× | Slow sunrise or fast time-lapse |
-| Load radius | — | How many chunks stream around the player |
-| Shadow resolution | — | Shadow map quality |
-| Bloom | — | Post-process bloom intensity |
-| World seed | text | The seed word for the current world |
-
-The pause menu (Esc) also has a **Generate new world** button that picks a random seed, writes it to the URL, and reloads.
+The settings panel (Esc → Settings) exposes day speed, shadow resolution, bloom, wind strength, and the world seed. The pause menu (Esc) also has a **Generate new world** button.
 
 ## Dependencies
 

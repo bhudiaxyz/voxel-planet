@@ -17,7 +17,7 @@ import { generateSphereTerrain } from './sphere-terrain';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
 import { scatterSphereVegetation } from './sphere-vegetation';
-import { buildSphereLandmarks } from './sphere-landmarks';
+import { buildSphereLandmarks, LandmarkRecord } from './sphere-landmarks';
 
 /** The assembled world returned by buildWorld. */
 export interface World {
@@ -149,6 +149,7 @@ export interface SphereWorld {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   animated: any[];
   sphereWater: ReturnType<typeof createSphereWater>;
+  landmarks: LandmarkRecord[];
 }
 
 export async function buildSphereWorld(
@@ -166,7 +167,7 @@ export async function buildSphereWorld(
   await yieldFrame();
 
   onProgress(0.72, 'placing landmarks');
-  buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f));
+  const landmarks = buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f));
   await yieldFrame();
 
   onProgress(0.73, 'building terrain meshes');
@@ -197,7 +198,7 @@ export async function buildSphereWorld(
   const animated = [...veg.animated];
 
   onProgress(1.0, 'ready');
-  return { grid, streaming, group, spawnDir, animated, sphereWater };
+  return { grid, streaming, group, spawnDir, animated, sphereWater, landmarks };
 }
 
 /** Pick a pleasant, walkable, well-framed spawn point near the river. */

@@ -39,7 +39,8 @@ export function createSphereFlyMode(): SphereFlyMode {
 
   function surfR(grid: SphereVoxelGrid): number {
     const { face, u, v } = dirToFaceUV(dir, FACE_RES);
-    return grid.surfaceRadius(face, u, v);
+    const top = grid.columnTop(face, u, v);
+    return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
   }
 
   return {
@@ -85,7 +86,8 @@ export function createSphereFlyMode(): SphereFlyMode {
         _axis.crossVectors(dir, _step).normalize();
         const probeDir = dir.clone().applyAxisAngle(_axis, probeAngle).normalize();
         const { face: pf, u: pu, v: pv } = dirToFaceUV(probeDir, FACE_RES);
-        const aheadFloor = grid.surfaceRadius(pf, pu, pv) - PLANET_RADIUS + FLOOR_CLEARANCE;
+        const pTop = grid.columnTop(pf, pu, pv);
+        const aheadFloor = (pTop < 0 ? 0 : pTop + 1) + FLOOR_CLEARANCE;
         const needed = aheadFloor - altitude;
         if (needed > 0) altitude += Math.min(needed, AUTO_CLIMB_RATE * dt);
       }

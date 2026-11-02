@@ -89,10 +89,10 @@ export function generateSphereTerrain(
 
         const roll = treeRng();
         if (sl > SEA_LAYER + 1 && GRASS_IDS.has(topId)) {
-          if      (roll < 0.022) plantSphereTree(grid, face, u, v, sl, treeRng, LEAVES);
-          else if (roll < 0.065) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(BUSH_PALETTE));
-          else if (roll < 0.095) plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
-          else if (roll < 0.115) plantSingle(grid, face, u, v, sl, sl < SEA_LAYER + 4 ? GRASS_TALL : SHRUB_TALL);
+          if      (roll < 0.012) plantSphereTree(grid, face, u, v, sl, treeRng, LEAVES);
+          else if (roll < 0.042) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(BUSH_PALETTE));
+          else if (roll < 0.065) plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
+          else if (roll < 0.080) plantSingle(grid, face, u, v, sl, sl < SEA_LAYER + 4 ? GRASS_TALL : SHRUB_TALL);
         } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
           if      (roll < 0.018) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.chance(0.7) ? SCRUB_BLOCK : BUSH_MAUVE);
           else if (roll < 0.055) plantSingle(grid, face, u, v, sl, treeRng.chance(0.5) ? MOSS_THICK : LICHEN_PALE);
@@ -222,13 +222,13 @@ function plantSphereTree(
       break;
     case 'broad':
       if (large) {
-        fill(0,0,0, 7,2,5, leaf.id); fill(4*dx,0,dz, 2,2,3, leaf.id); fill(-3*dx,0,-2*dz, 3,2,2, leaf.id);
-        fill(dx,2,-dz, 4,2,4, li); fill(-2*dx,2,2*dz, 2,2,2, li); fill(0,4,0, 4,2,4, li);
+        fill(0,0,0, 5,2,5, leaf.id); fill(3*dx,0,dz, 2,2,3, leaf.id); fill(-2*dx,0,-2*dz, 3,2,2, leaf.id);
+        fill(dx,2,-dz, 4,2,4, li); fill(-2*dx,2,2*dz, 2,2,2, li); fill(0,4,0, 3,2,3, li);
       } else if (unit===2) {
-        fill(0,0,0, 5,2,4, leaf.id); fill(3*dx,0,dz, 2,2,2, leaf.id);
-        fill(dx,2,0, 4,2,3, li); fill(-dx,2,2*dz, 2,2,2, li); fill(0,4,0, 3,2,3, li);
+        fill(0,0,0, 4,2,4, leaf.id); fill(2*dx,0,dz, 2,2,2, leaf.id);
+        fill(dx,2,0, 3,2,3, li); fill(-dx,2,2*dz, 2,2,2, li); fill(0,4,0, 3,2,3, li);
       } else {
-        fill(0,0,0, 4,2,3, leaf.id); fill(2*dx,0,dz, 2,2,2, leaf.id); fill(dx,2,dz, 3,2,3, li);
+        fill(0,0,0, 3,2,3, leaf.id); fill(2*dx,0,dz, 2,2,2, leaf.id); fill(dx,2,dz, 3,2,3, li);
       }
       break;
     case 'spire':
@@ -254,13 +254,13 @@ function plantSphereTree(
       break;
     case 'weeping':
       if (large) {
-        fill(0,0,0, 7,2,7, leaf.id); fill(3*dx,0,dz, 3,3,2, leaf.id); fill(-2*dx,0,3*dz, 2,3,3, leaf.id);
-        fill(0,3,0, 5,2,5, li); fill(dx,5,dz, 3,2,3, li);
+        fill(0,0,0, 5,2,5, leaf.id); fill(3*dx,0,dz, 2,3,2, leaf.id); fill(-2*dx,0,3*dz, 2,3,2, leaf.id);
+        fill(0,3,0, 4,2,4, li); fill(dx,5,dz, 3,2,3, li);
       } else if (unit===2) {
-        fill(0,0,0, 5,2,5, leaf.id); fill(2*dx,0,dz, 2,3,2, leaf.id);
-        fill(0,3,0, 4,2,4, li); fill(dx,5,dz, 2,2,2, li);
+        fill(0,0,0, 4,2,4, leaf.id); fill(2*dx,0,dz, 2,3,2, leaf.id);
+        fill(0,3,0, 3,2,3, li); fill(dx,5,dz, 2,2,2, li);
       } else {
-        fill(0,0,0, 4,2,3, leaf.id); fill(dx,2,dz, 2,2,2, li); fill(0,4,0, 3,2,3, li);
+        fill(0,0,0, 3,2,3, leaf.id); fill(dx,2,dz, 2,2,2, li); fill(0,4,0, 3,2,3, li);
       }
       break;
     case 'palm': {

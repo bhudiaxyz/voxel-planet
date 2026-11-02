@@ -2,56 +2,173 @@
 
 Developer reference. For user-facing documentation see [README.md](README.md).
 
+The active game mode is the **sphere world** (`buildSphereWorld`). The flat-world pipeline (`buildWorld`, `planner.ts`, `terrain.ts`, etc.) still exists in the codebase as a reference implementation but is not the entry point.
+
 ---
 
 ## Source layout
 
 ```text
 src/
-├── main.ts                  ← entry point: scene setup, game loop (frame()), input wiring, window.__game debug handle
+├── main.ts                      ← entry point: sphere world init, game loop, input wiring, drone/fly/dog/map
 │
 ├── core/
-│   ├── palette.ts           ← art bible: all colours, BLOCK_BY_ID, setVoxelPalette(), GRADE/SKY/LIGHT/WATER/FOG constants
-│   ├── voxel.ts             ← VoxelGrid (dense Uint8Array), greedy mesher, chunk streamer, LOD fade, CHUNK=16, EDGE_LAYER
-│   └── rng.ts               ← seeded PRNG, 2D/3D noise, FBM helpers
+│   ├── palette.ts               ← art bible: all colours, BLOCK_BY_ID, setVoxelPalette(), GRADE/SKY/LIGHT/WATER/FOG constants
+│   ├── sphere-voxel.ts          ← SphereVoxelGrid (6-face cubemap), PLANET_RADIUS=350, FACE_RES=400, SHELL_DEPTH=96
+│   │                               columnTop(), groundColumnTop(), surfaceRadius(), isSolid(), createSphereChunkStreamer()
+│   ├── voxel.ts                 ← VoxelGrid (flat world, dense Uint8Array), greedy mesher, chunk streamer
+│   ├── geoutil.ts               ← dirToFaceUV(), columnDir(), basisFromCode(), crossFaceUV()
+│   └── rng.ts                   ← seeded PRNG, 2D/3D noise, FBM helpers
 │
 ├── world/
-│   ├── planner.ts           ← planWorld(): island layout, stepping stones, bridge chains, biome fields, river routing
-│   ├── terrain.ts           ← generateTerrain(): contour-disc terracing, river carving, voxel fill, RIVER_WATER blocks
-│   ├── water.ts             ← makeDepthMap() (RG texture), createWater() (wave shader, Beer-Lambert absorption)
-│   ├── vegetation.ts        ← plantTree() (14 silhouette forms), plantBush(), ferns, moss, lichen, grass, mushrooms, crystals; BIOME_FLORA tables
-│   ├── props.ts             ← bridges, rocks, and other static props placed from terrain data
-│   └── stamps.ts            ← buildStamps(): scenic grammars (waterfall, crossing, pond, grove, overlook, hotspring), landmark grammars (spire, obelisk, ring, tombs, biosphere, well, arch)
+│   ├── world.ts                 ← buildSphereWorld() (active), buildWorld() (flat world reference)
+│   ├── sphere-terrain.ts        ← generateSphereTerrain(): FBM sculpt, voxel fill, tree/vegetation scatter
+│   │                               plantSphereTree(), plantSphereBush(), plantSingle()
+│   ├── sphere-landmarks.ts      ← buildSphereLandmarks() → LandmarkRecord[]; 7 landmark builders
+│   ├── sphere-vegetation.ts     ← scatterSphereVegetation(): animated grass/foliage on sphere
+│   ├── water.ts                 ← createSphereWater() (sphere water sphere), createWater() (flat world)
+│   ├── planner.ts               ← (flat world) planWorld(): island layout, bridge chains, rivers
+│   ├── terrain.ts               ← (flat world) generateTerrain(): contour-disc terracing, river carving
+│   ├── vegetation.ts            ← (flat world) plantTree() (14 forms), BIOME_FLORA tables
+│   ├── props.ts                 ← (flat world) bridges, rocks
+│   └── stamps.ts                ← (flat world) scenic + landmark grammars
 │
 ├── render/
-│   ├── renderer.ts          ← WebGLRenderer setup, shadow map config per tier
-│   ├── lighting.ts          ← Atmosphere: sun/hemi/fill lights, sky dome mesh, skyUniformValues()
-│   ├── sky.ts               ← shared GLSL: SKY_UNIFORMS_GLSL, SKY_FN_GLSL (skyRadiance, nightSkyAddons, _aurora)
-│   ├── day-night.ts         ← DayNight: keyframe palette animation, getNightFactor(), aurora and star uniforms
-│   ├── postfx.ts            ← createPostFX(): SceneDepth → EdgeMask → Atmosphere → Bloom → Crepuscular → Grade → SMAA
-│   ├── planet.glsl.ts       ← PLANET_BEND_GLSL vertex snippet, updatePlanetUniforms()
-│   ├── fp-camera.ts         ← FPCamera: pointer lock, key/mouse state, drainDroneAltDelta(), touch state
-│   └── gpu-tier.ts          ← detectGpuTier(), TIER_SETTINGS table (high/mobile-high/mid/low/very-low)
+│   ├── renderer.ts              ← WebGLRenderer setup, shadow map config per tier
+│   ├── lighting.ts              ← Atmosphere: sun/hemi/fill lights, sky dome mesh
+│   ├── sky.ts                   ← shared GLSL: SKY_UNIFORMS_GLSL, SKY_FN_GLSL (skyRadiance, nightSkyAddons, _aurora)
+│   ├── day-night.ts             ← DayNight: keyframe palette animation, getNightFactor(), aurora uniforms
+│   ├── postfx.ts                ← createPostFX(): SceneDepth → EdgeMask → Atmosphere → Bloom → Crepuscular → Grade → SMAA
+│   ├── sphere-map.ts            ← createSphereMap(): equirectangular terrain bake, player arrow, landmark icons + tooltips
+│   ├── planet.glsl.ts           ← PLANET_BEND_GLSL vertex snippet (flat world bend), updatePlanetUniforms()
+│   ├── fp-camera.ts             ← FPCamera: pointer lock, key/mouse state, drainDroneAltDelta(), flyActive/droneActive flags
+│   └── gpu-tier.ts              ← detectGpuTier(), TIER_SETTINGS table (high/mobile-high/mid/low/very-low)
 │
 ├── player/
-│   ├── controller.ts        ← Controller: AABB physics, stepping, swimming, sprint
-│   ├── drone.ts             ← createDroneMode(): P-controller terrain-follow, landing state machine
-│   ├── fly.ts               ← createFlyMode(): free-flight with terrain floor
-│   ├── character.ts         ← third-person character mesh and animation state
-│   ├── dog.ts               ← dog AI: pathfinding to player, sit/stand commands
-│   └── pathfinding.ts       ← A* grid pathfinder, path navigator
+│   ├── sphere-controller.ts     ← SphereController: sphere-surface physics, snapToDir(), forwardInPlane()
+│   ├── sphere-drone.ts          ← createSphereDroneMode(): P-controller terrain-follow on sphere, landing state machine
+│   ├── sphere-fly.ts            ← createSphereFlyMode(): sphere free-flight, columnTop-based terrain floor
+│   ├── sphere-dog.ts            ← createSphereDog(): dog follows player on sphere surface
+│   ├── controller.ts            ← (flat world) AABB physics controller
+│   ├── drone.ts                 ← (flat world) drone mode
+│   ├── fly.ts                   ← (flat world) fly mode
+│   ├── character.ts             ← third-person character mesh + animation
+│   ├── dog.ts                   ← (flat world) dog AI with A* pathfinding
+│   └── pathfinding.ts           ← A* grid pathfinder
 │
 ├── ui/
-│   ├── map.ts               ← minimap: bakeTerrain(), river network (glow+solid passes, ocean-clipped), invalidateTerrain()
-│   ├── touch-controls.ts    ← createTouchControls(): nippleJS joystick, swipe-to-look, button wiring
-│   ├── hud.ts               ← heads-up display overlays
-│   ├── pause.ts             ← pause menu, generate-new-world button
-│   ├── settings.ts          ← settings panel (planet radius, day speed, load radius, shadow res, bloom, seed)
-│   └── bubbles.ts           ← speech bubble system
+│   ├── touch-controls.ts        ← createTouchControls(): nippleJS joystick, swipe-to-look, button wiring
+│   ├── hud.ts                   ← heads-up display overlays
+│   ├── pause.ts                 ← pause menu, generate-new-world button
+│   ├── settings.ts              ← settings panel
+│   ├── map.ts                   ← (flat world) minimap with river overlay
+│   └── bubbles.ts               ← speech bubble system
 │
 └── fx/
-    └── particles.ts         ← billboarded particle system (leaves, dust)
+    └── particles.ts             ← billboarded particle system (leaves, dust)
 ```
+
+---
+
+## Sphere world architecture
+
+### SphereVoxelGrid (`src/core/sphere-voxel.ts`)
+
+The planet surface is stored as a 6-face cubemap. Each face is a `FACE_RES × FACE_RES × SHELL_DEPTH` voxel volume:
+
+| Constant | Value | Meaning |
+| --- | --- | --- |
+| `PLANET_RADIUS` | 350 | World-space units from centre to surface layer 0 |
+| `FACE_RES` | 400 | Face resolution in voxels (each face is 400 × 400 columns) |
+| `SHELL_DEPTH` | 96 | Radial voxel layers per column (layers 0–95 outward) |
+
+**Addressing** — `grid.get(face, u, v, layer)` / `grid.set(...)`. Face 0–5 follow cube-face convention. `u` and `v` are column coordinates (0–399); `layer` is the radial depth (0 = deepest, SHELL_DEPTH−1 = highest possible).
+
+**Key methods:**
+- `columnTop(face, u, v)` — highest solid layer in the column (`surfaceLayer` cache, O(1)).
+- `groundColumnTop(face, u, v)` — highest non-foliage, non-trunk layer (scans down from `columnTop`, skips blocks with `sway` or `isTrunk`). Used for player physics so the player walks on ground, not treetops.
+- `surfaceRadius(face, u, v)` — world-space radius above planet centre: `PLANET_RADIUS + groundColumnTop + 1`. Used for player/drone height calculations.
+- `isSolid(face, u, v, layer)` — respects cross-face seams via `crossFaceUV()`.
+
+**Column direction** — `columnDir(face, u, v, FACE_RES, out)` in `geoutil.ts` converts a face UV to a world-space unit vector pointing outward from the planet centre. Used by the terrain scatter pass and landmark placement to record world-space `dir` vectors.
+
+### Sphere terrain generation (`src/world/sphere-terrain.ts`)
+
+`generateSphereTerrain(seed, onProgress)` runs once per seed:
+
+1. **FBM height field** — for each face column, a multi-octave FBM sample of the world-space unit direction gives a `[0,1]` height value. This is multiplied by a continentality mask (based on `dir.y` and longitude noise) to separate land from ocean.
+2. **Voxel fill** — columns below the height threshold are filled from layer 0 up to `heightLayer`, using biome-appropriate block IDs (grass, soil, stone, sand near coast). Ocean columns are left as air (the water sphere covers them).
+3. **Scatter pass** — after fill, a second pass seeds trees, bushes, ferns, shrubs, reeds, and tall grass with biome-appropriate density. Thresholds (example): roll < 0.012 → tree, < 0.042 → bush, < 0.065 → fern/fern_red, < 0.080 → grass_tall/shrub_tall. Reeds are placed at waterline columns.
+
+**Tree placement** — `plantSphereTree(grid, face, u, v, rng, scale)` builds a trunk column plus a canopy box fill via the `fill(ou, oy, ov, su, sy, sv, id)` helper (places a box offset from trunk top in face-local UV+layer coords). Four forms: `spire`, `palm`, `broad`, `weeping`. Trunk heights are 4–16 layers with ±1–2 random jitter so adjacent trees vary in height. Canopy fills use `sy ≥ 2` for volume.
+
+### Sphere controller (`src/player/sphere-controller.ts`)
+
+`SphereController` replaces AABB physics with sphere-surface physics:
+
+- **State** — `dir: THREE.Vector3` (unit outward direction from planet centre) + `groundRadius: number` (distance from centre to eye).
+- **Movement** — each frame, `getWishSphere()` projects camera forward/right onto the tangent plane at `dir`. The wish vector is converted to a rotation axis (`cross(dir, wish)`) and `dir` is rotated by `speed * dt / groundRadius` radians.
+- **Ground adherence** — `groundRadius` is clamped each frame to `surfaceRadius(face,u,v) + EYE_HEIGHT` (1.75 m), keeping the player on the terrain surface.
+- **`snapToDir(newDir, grid)`** — teleports to `newDir`, re-queries surface radius, zeroes vertical velocity. Called when exiting drone or fly mode to land the player at the correct terrain height without snapping to spawn.
+
+### Drone mode (`src/player/sphere-drone.ts`)
+
+`createSphereDroneMode()` operates in sphere coordinates:
+
+- `dir` = current radial direction (outward unit vector from centre).
+- `heading` = forward direction in the tangent plane at `dir`.
+- **Terrain-follow** — each frame, `surfaceRadius(grid)` is fetched using `columnTop` (includes tree canopy). A P-controller (`TERRAIN_FOLLOW_GAIN = 3`) pulls altitude toward `HOVER_HEIGHT = 14` m above the full column top. Manual vertical input (`Space`/`C`) adds on top.
+- **Landing** — `beginLanding()` starts a lerp toward `surfR − PLANET_RADIUS + 0.5`; when altitude reaches that level, `active` goes false. `main.ts` detects the `active → false` transition and calls `controller.snapToDir(drone.dir, grid)` to land the player.
+- **Floor guard** — `MIN_CLEARANCE = 1.5` m above `columnTop` (not `groundColumnTop`) so the drone never clips through tree canopy.
+
+### Fly mode (`src/player/sphere-fly.ts`)
+
+`createSphereFlyMode()` — free flight on the sphere. `FLOOR_CLEARANCE = 1.75` m is applied against `columnTop` (full voxel stack including trees). Auto-climb probes LOOK_AHEAD = 6 arc-metres ahead and pushes the player up at `AUTO_CLIMB_RATE = 14` m/s if an obstacle is detected. Both the current column and the probe column use `columnTop`, not `surfaceRadius`, so the fly floor is always above tree canopy.
+
+### Drone→Fly position handoff
+
+When switching from drone to fly (`enterFly` in `main.ts`), `fly.enter(controller.dir, controller.groundRadius)` is called with the **current controller position** — which was last updated by `snapToDir` when drone landed, or by the continuous `controller.update` if on foot. This ensures the fly mode starts at the player's current on-surface position, not the drone's in-air position.
+
+### Sphere landmarks (`src/world/sphere-landmarks.ts`)
+
+`buildSphereLandmarks(grid, rng)` returns `LandmarkRecord[]` (`{ kind, dir: THREE.Vector3 }`):
+
+- 2 landmarks per face (~12 total), minimum 20-column UV separation.
+- Placed only on dry land (`columnTop > SEA_LAYER + 1`).
+- Seven builders cycle round-robin per face (seeded with `rng()` so each face gets a different pair).
+- Each builder uses face-local `(face, u, v, layer)` coordinates. `put()` never overwrites occupied blocks; `overwrite()` does (for base footings). Both clip to grid bounds.
+- After placing, `columnDir(face, u, v, FACE_RES, _tmp)` converts the site UV to a world-space unit vector stored as `dir` in the record.
+
+| Kind | Structure |
+| --- | --- |
+| `spire` | 3×3 STONE_WARM base, drifting STONE_PALE shaft 14–22 layers tall |
+| `obelisk` | 3×3 base, straight 1×1 shaft 8–13 layers, flanking lanterns |
+| `ring` | 7–8 standing stones at radius 8–11, every-other lintel |
+| `tombs` | 14–22 scattered upright slabs 2–4 layers, random lean caps |
+| `biosphere` | Ovoid body floating 18–28 layers above terrain, stalactite drips, small tree on top |
+| `well` | Stone rim (3×3 ring hollow centre), crossbeam, scattered worn stones |
+| `arch` | Two pillars 5–7 layers, partial lintel (1–2 blocks missing), rubble scatter |
+
+### Sphere map (`src/render/sphere-map.ts`)
+
+`createSphereMap(grid)` bakes a `1024 × 512` equirectangular terrain image once at world load:
+
+```ts
+lon = (px / MAP_W) * 2π − π
+lat = π/2 − (py / MAP_H) * π
+dir = (cos(lat)cos(lon), sin(lat), cos(lat)sin(lon))
+```
+
+Each pixel queries `dirToFaceUV(dir, FACE_RES)` then reads the block colour from `BLOCK_BY_ID`. The baked image is stored in a `ctx.ImageData` and `putImageData`'d every frame before drawing dynamic layers.
+
+**Dynamic layers (drawn each frame):**
+1. **Player arrow** — projects `forwardDir` onto the equirectangular tangent (east/north components) and draws a directional arrow at the player's `lon/lat` position.
+2. **Landmark icons** — each `LandmarkRecord` is projected to `(lpx, lpy)` by the same lon/lat formula. A per-kind canvas icon is drawn at `ICON_R = 8` px radius. Seven distinct icons (triangle, trapezoid, double-circle, rectangles, filled circle, square+arc, pillar pair).
+3. **Hover tooltip** — `mousemove` scans all cached landmark positions; on proximity < `ICON_R * 2`, a fixed `<div>` tooltip appears at cursor position with the full landmark name.
+
+### Sphere water (`src/world/water.ts`)
+
+`createSphereWater()` places a `THREE.SphereGeometry` at radius `PLANET_RADIUS + SEA_LAYER_SPHERE + 0.3` where `SEA_LAYER_SPHERE = 9`. This constant is deliberately 0.3 above layer 9 so it covers ocean columns (column top ≤ layer 9) but sits below terrain columns that break above the waterline (top ≥ layer 10). The water shader is the same wave/Beer-Lambert shader as the flat world; `uSunDir` is pushed each frame from `dayNight.sunDir`.
 
 ---
 

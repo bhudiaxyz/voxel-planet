@@ -44,7 +44,8 @@ export function createSphereDroneMode(): SphereDroneMode {
 
   function surfaceRadius(grid: SphereVoxelGrid): number {
     const { face, u, v } = dirToFaceUV(dir, FACE_RES);
-    return grid.surfaceRadius(face, u, v);
+    const top = grid.columnTop(face, u, v);
+    return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
   }
 
   /** Keep heading perpendicular to dir (renormalise after dir arcs). */
