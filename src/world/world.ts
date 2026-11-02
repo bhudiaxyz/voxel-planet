@@ -17,6 +17,7 @@ import { generateSphereTerrain } from './sphere-terrain';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
 import { scatterSphereVegetation } from './sphere-vegetation';
+import { buildSphereLandmarks } from './sphere-landmarks';
 
 /** The assembled world returned by buildWorld. */
 export interface World {
@@ -162,6 +163,10 @@ export async function buildSphereWorld(
   const { grid, spawn } = generateSphereTerrain(seed, (p) =>
     onProgress(0.01 + p * 0.70, 'sculpting the planet'),
   );
+  await yieldFrame();
+
+  onProgress(0.72, 'placing landmarks');
+  buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f));
   await yieldFrame();
 
   onProgress(0.73, 'building terrain meshes');
