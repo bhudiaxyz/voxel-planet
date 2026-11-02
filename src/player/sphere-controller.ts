@@ -86,6 +86,14 @@ export class SphereController {
     }
   }
 
+  /** Teleport to a new direction, snapping groundRadius to the terrain surface. */
+  snapToDir(newDir: THREE.Vector3, grid: SphereVoxelGrid): void {
+    this.dir.copy(newDir).normalize();
+    const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
+    this.groundRadius = grid.surfaceRadius(face, u, v) + EYE_HEIGHT;
+    this.verticalVelocity = 0;
+  }
+
   /** Forward direction in tangent plane at dir (for camera reference). */
   forwardInPlane(cameraForward: THREE.Vector3): THREE.Vector3 {
     return _scratchStep.copy(cameraForward)

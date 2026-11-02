@@ -93,8 +93,10 @@ async function start(): Promise<void> {
     fpCam.droneActive = true;
   };
   const exitDrone = () => {
+    controller.snapToDir(drone.dir, world.grid);
     drone.exit();
     fpCam.droneActive = false;
+    if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
   };
   const enterFly = () => {
     if (drone.active) exitDrone();
@@ -102,8 +104,10 @@ async function start(): Promise<void> {
     fpCam.flyActive = true;
   };
   const exitFly = () => {
+    controller.snapToDir(fly.dir, world.grid);
     fly.exit();
     fpCam.flyActive = false;
+    if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
   };
 
   document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -308,6 +312,12 @@ async function start(): Promise<void> {
         sprint,
       };
       drone.update(dt, droneInput, world.grid, fpCam.camera);
+      // Landing completed inside drone.update — sync controller and re-lock
+      if (!drone.active && fpCam.droneActive) {
+        controller.snapToDir(drone.dir, world.grid);
+        fpCam.droneActive = false;
+        if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
+      }
     } else if (fly.active) {
       fly.update(dt, wish, fpCam.drainDroneAltDelta(dt), sprint, world.grid, fpCam.camera);
       // Use normal sphere camera update (mouse yaw/pitch applies, up = fly.dir)

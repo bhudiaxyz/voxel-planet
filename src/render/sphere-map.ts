@@ -70,7 +70,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
       // Map: +x = east (+px), +y = south (-N)
       const angle = Math.atan2(fwdE, fwdN); // angle from north, clockwise
 
-      const R = 7, HEAD = 5;
+      const R = 13, HEAD = 9.5;
       ctx.save();
       ctx.translate(px, py);
       ctx.rotate(angle);
