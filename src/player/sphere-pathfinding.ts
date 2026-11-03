@@ -23,6 +23,7 @@ function columnDirVec(face: number, u: number, v: number): THREE.Vector3 {
 
 export interface SpherePathNavigator {
   setGoal(face: number, u: number, v: number): void;
+  setStart(face: number, u: number, v: number): void;
   step(): void;
   path: Array<{ face: number; u: number; v: number }> | null;
   done: boolean;
@@ -32,6 +33,7 @@ export function createSpherePathNavigator(
   grid: SphereVoxelGrid,
   startFace: number, startU: number, startV: number,
 ): SpherePathNavigator {
+  let curFace = startFace, curU = startU, curV = startV;
   let goalFace = startFace, goalU = startU, goalV = startV;
   let goalDir = columnDirVec(goalFace, goalU, goalV);
   let open = new Map<number, Node>();
@@ -79,9 +81,9 @@ export function createSpherePathNavigator(
     nodes = new Map();
     path = null;
     done = false;
-    const startKey = nodeKey(startFace, startU, startV);
-    const h = heuristic(startFace, startU, startV);
-    const start: Node = { face: startFace, u: startU, v: startV, g: 0, f: h, parent: null };
+    const startKey = nodeKey(curFace, curU, curV);
+    const h = heuristic(curFace, curU, curV);
+    const start: Node = { face: curFace, u: curU, v: curV, g: 0, f: h, parent: null };
     open.set(startKey, start);
     nodes.set(startKey, start);
   }
@@ -92,6 +94,9 @@ export function createSpherePathNavigator(
     get path() { return path; },
     get done() { return done; },
 
+    setStart(face: number, u: number, v: number) {
+      curFace = face; curU = u; curV = v;
+    },
     setGoal(face: number, u: number, v: number) {
       goalFace = face; goalU = u; goalV = v;
       goalDir = columnDirVec(face, u, v);

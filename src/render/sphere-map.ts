@@ -4,7 +4,7 @@ import { dirToFaceUV } from '../core/geoutil';
 import { BLOCK_BY_ID, WATER } from '../core/palette';
 import { LandmarkRecord } from '../world/sphere-landmarks';
 
-const SEA_LAYER = 9; // must match sphere-terrain / sphere-landmarks
+const SEA_LAYER = 11; // must match sphere-terrain / sphere-landmarks
 
 const MAP_W = 1024; // render resolution — keep high for quality
 const MAP_H = 512;

@@ -25,7 +25,7 @@ import { WATER, SKY, LIGHT } from '../core/palette';
 import { PLANET_RADIUS } from '../core/sphere-voxel';
 import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
 
-const SEA_LAYER_SPHERE = 9;
+const SEA_LAYER_SPHERE = 11;
 // Radius sits just below layer-9 voxel bases (350+9=359) to avoid z-fighting
 // with shoreline voxel side faces at grazing angles.
 const SPHERE_WATER_RADIUS = PLANET_RADIUS + SEA_LAYER_SPHERE - 0.5;

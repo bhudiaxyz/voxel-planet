@@ -7,7 +7,7 @@ import { makeRng } from '../core/rng';
 import { BLOCKS, PATTERN, registerBlock } from '../core/palette';
 
 // Sea level is layer 9; terrace step is 2 (same aesthetic as flat terrain)
-const SEA_LAYER = 9;
+const SEA_LAYER = 11;
 const TERRACE_STEP = 2;
 const AMPLITUDE = 24; // max layers above/below sea level
 

@@ -81,7 +81,7 @@ async function start(): Promise<void> {
   const sphereMap = createSphereMap(world.grid);
   const drone = createSphereDroneMode();
   const fly   = createSphereFlyMode();
-  const dog = createSphereDog(world.grid, scene);
+  const dog = createSphereDog(world.grid, scene, world.spawnDir);
 
   const controller = new SphereController(world.spawnDir, world.grid);
   const input = new Input(renderer.domElement);
@@ -134,6 +134,7 @@ async function start(): Promise<void> {
     }
     // Map toggle — direct, no pause-menu required
     if (e.code === 'KeyM') { sphereMapToggle.toggle(); return; }
+    if (e.code === 'KeyY') { dog.toggleSit(); return; }
     if (!canAct()) return;
     if (e.code === 'KeyE') {
       const g = post.grade.uniforms;
@@ -212,6 +213,7 @@ async function start(): Promise<void> {
   touch.onLand(()  => { if (drone.active) drone.beginLanding(); else if (fly.active) exitFly(); });
   touch.onFly(()   => { if (fly.active) exitFly(); else enterFly(); });
   touch.onMap(() => sphereMapToggle.toggle());
+  touch.onDog(() => dog.toggleSit());
 
   // Initial camera frame
   fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);

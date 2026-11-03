@@ -2445,7 +2445,7 @@ export function makeVoxelMaterial() {
 
     /* --- sphere radius ------------------------------------------------ */
     uPlanetRadius: { value: 350.0 },
-    uSeaLevelRadius: { value: 359.5 },  // PLANET_RADIUS(350) + SEA_LAYER(9) + 0.5
+    uSeaLevelRadius: { value: 361.5 },  // PLANET_RADIUS(350) + SEA_LAYER(11) + 0.5
   };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, mat.userData.uniforms);

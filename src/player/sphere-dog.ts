@@ -5,15 +5,17 @@ import { dirToFaceUV, columnDir } from '../core/geoutil';
 import { createSpherePathNavigator, SpherePathNavigator } from './sphere-pathfinding';
 
 const DOG_SPEED = 8; // m/s
-const FOLLOW_DIST = 0.3; // radians (~17 degrees) before dog starts following
+const FOLLOW_DIST = 0.05; // radians (~3 degrees, ~17 units) before dog starts following
 
 export interface SphereDog {
   mesh: THREE.Object3D;
+  sitting: boolean;
+  toggleSit(): void;
   update(dt: number, playerDir: THREE.Vector3): void;
   dispose(): void;
 }
 
-export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene): SphereDog {
+export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawnDir?: THREE.Vector3): SphereDog {
   // ponytail: placeholder box mesh; swap for GLTF when art is ready
   const geo = new THREE.BoxGeometry(0.6, 0.8, 1.0);
   const mat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
@@ -21,19 +23,48 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene): Sphe
   mesh.castShadow = true;
   scene.add(mesh);
 
-  const startDir = new THREE.Vector3(1, 0, 0);
-  const { face: sf, u: su, v: sv } = dirToFaceUV(startDir, FACE_RES);
-  let face = sf, u = su, v = sv;
+  const baseDir = spawnDir ? spawnDir.clone().normalize() : new THREE.Vector3(1, 0, 0);
+  const { face: sf, u: su, v: sv } = dirToFaceUV(baseDir, FACE_RES);
+  // Offset 4 columns sideways so dog is visible beside the player at spawn
+  let face = sf, u = Math.min(su + 4, FACE_RES - 1), v = sv;
   const dir = new THREE.Vector3();
   columnDir(face, u, v, FACE_RES, dir);
 
   let pathNav: SpherePathNavigator = createSpherePathNavigator(grid, face, u, v);
   const _scratch = new THREE.Vector3();
+  const _lookTarget = new THREE.Vector3();
+  let sitting = false;
+
+
+  /** Orient mesh upright on sphere surface, facing lookFwd (a world-space direction). */
+  function orientMesh(r: number, lookFwd: THREE.Vector3) {
+    mesh.up.copy(dir);
+    // Project lookFwd onto the tangent plane at dir
+    _scratch.copy(lookFwd).addScaledVector(dir, -lookFwd.dot(dir)).normalize();
+    if (_scratch.lengthSq() > 0.001) {
+      _lookTarget.copy(mesh.position).add(_scratch);
+      mesh.lookAt(_lookTarget);
+    }
+  }
 
   function update(dt: number, playerDir: THREE.Vector3) {
+    // Use player surface as fallback if dog column is unloaded
+    const { face: pf, u: pu, v: pv } = dirToFaceUV(playerDir, FACE_RES);
+    const baseR = grid.surfaceRadius(face, u, v);
+    const playerR = grid.surfaceRadius(pf, pu, pv);
+    const r = (baseR > PLANET_RADIUS ? baseR : playerR) + 0.5;
+    mesh.position.copy(dir).multiplyScalar(r);
+
+    if (sitting) {
+      // Face the player while sitting
+      orientMesh(r, playerDir);
+      return;
+    }
+
     const angDist = Math.acos(Math.max(-1, Math.min(1, dir.dot(playerDir))));
     if (angDist > FOLLOW_DIST) {
       const { face: pf, u: pu, v: pv } = dirToFaceUV(playerDir, FACE_RES);
+      pathNav.setStart(face, u, v);
       pathNav.setGoal(pf, pu, pv);
     }
 
@@ -50,22 +81,21 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene): Sphe
       }
       if (dir.angleTo(_scratch) < 0.02) {
         face = next.face; u = next.u; v = next.v;
+        pathNav.setStart(face, u, v);
         if (path.length > 1) path.shift();
       }
-    }
-
-    const r = grid.surfaceRadius(face, u, v) + 0.3;
-    mesh.position.copy(dir).multiplyScalar(r);
-    mesh.up.copy(dir);
-    if (path && path.length > 1) {
-      columnDir(path[1].face, path[1].u, path[1].v, FACE_RES, _scratch);
-      const lookTarget = _scratch.clone().multiplyScalar(r + 0.5).add(dir.clone().multiplyScalar(r));
-      mesh.lookAt(lookTarget);
+      // Face movement direction
+      orientMesh(r, _scratch);
+    } else {
+      // Idle — face the player
+      orientMesh(r, playerDir);
     }
   }
 
   return {
     mesh,
+    get sitting() { return sitting; },
+    toggleSit() { sitting = !sitting; },
     update,
     dispose() {
       scene.remove(mesh);

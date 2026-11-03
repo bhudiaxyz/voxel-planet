@@ -5,7 +5,7 @@ import { BLOCK_BY_ID } from '../core/palette';
 import { DetailField, createDetailChunk } from './veg-detail';
 import { makeRng } from '../core/rng';
 
-const SEA_LAYER = 9;
+const SEA_LAYER = 11;
 const TREE_P    = 0.04;
 const GRASS_P   = 0.35;
 const VEG_CHUNK = 32;

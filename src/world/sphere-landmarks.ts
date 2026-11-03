@@ -14,7 +14,7 @@ export interface LandmarkRecord {
 
 const _tmp = new THREE.Vector3();
 
-const SEA_LAYER = 9;
+const SEA_LAYER = 11;
 const LANDMARKS_PER_FACE = 2; // ~12 total across the planet
 const MIN_SEP = 20;           // minimum u/v distance between two landmarks on same face
 
