@@ -72,10 +72,17 @@ export class SphereController {
       _scratchStep.multiplyScalar(speed * dt / this.groundRadius);
       this.dir.add(_scratchStep).normalize();
 
-      // Terrain collision: revert move if new column is too high to step onto
+      // Destination column check
       const { face: nf, u: nu, v: nv } = dirToFaceUV(this.dir, FACE_RES);
       const newSurfR = grid.surfaceRadius(nf, nu, nv);
-      if (newSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP) {
+      // Standoff probe: one extra step forward — keeps the player a column-width
+      // away from vertical wall faces, preventing near-plane clipping.
+      const { face: af, u: au, v: av } = dirToFaceUV(
+        _scratchPos.copy(this.dir).add(_scratchStep).normalize(), FACE_RES);
+      const aheadSurfR = grid.surfaceRadius(af, au, av);
+
+      if (newSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP ||
+          aheadSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP) {
         this.dir.copy(_oldDir);
         this.speed = 0;
       } else {

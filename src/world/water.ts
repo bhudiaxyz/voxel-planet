@@ -26,7 +26,9 @@ import { PLANET_RADIUS } from '../core/sphere-voxel';
 import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
 
 const SEA_LAYER_SPHERE = 9;
-const SPHERE_WATER_RADIUS = PLANET_RADIUS + SEA_LAYER_SPHERE + 0.3;
+// Radius sits just below layer-9 voxel bases (350+9=359) to avoid z-fighting
+// with shoreline voxel side faces at grazing angles.
+const SPHERE_WATER_RADIUS = PLANET_RADIUS + SEA_LAYER_SPHERE - 0.5;
 
 /**
  * Half-range of the signed depth field, in world units. The texture is
@@ -391,6 +393,9 @@ export function createSphereWater(tier: string = 'high') {
     depthWrite: false,
     fog: true,
     side: THREE.FrontSide,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
       {
