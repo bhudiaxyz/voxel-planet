@@ -1,8 +1,10 @@
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
 import { dirToFaceUV } from '../core/geoutil';
-import { BLOCK_BY_ID } from '../core/palette';
+import { BLOCK_BY_ID, WATER } from '../core/palette';
 import { LandmarkRecord } from '../world/sphere-landmarks';
+
+const SEA_LAYER = 9; // must match sphere-terrain / sphere-landmarks
 
 const MAP_W = 1024; // render resolution — keep high for quality
 const MAP_H = 512;
@@ -14,6 +16,8 @@ export interface SphereMap {
   displayW: number;
   displayH: number;
   update(playerDir: THREE.Vector3, forwardDir?: THREE.Vector3, landmarks?: LandmarkRecord[]): void;
+  /** Re-bake the terrain image from current palette colours. Call after setVoxelPalette(). */
+  rebake(): void;
   dispose(): void;
 }
 
@@ -79,30 +83,47 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
   canvas.height = MAP_H;
   const ctx = canvas.getContext('2d')!;
 
-  // Bake terrain once
   const baked = ctx.createImageData(MAP_W, MAP_H);
   const _dir = new THREE.Vector3();
 
-  for (let py = 0; py < MAP_H; py++) {
-    const lat = Math.PI / 2 - (py / MAP_H) * Math.PI;
-    const cosLat = Math.cos(lat);
-    const sinLat = Math.sin(lat);
-    for (let px = 0; px < MAP_W; px++) {
-      const lon = (px / MAP_W) * 2 * Math.PI - Math.PI;
-      _dir.set(cosLat * Math.cos(lon), sinLat, cosLat * Math.sin(lon));
-      const { face, u, v } = dirToFaceUV(_dir, FACE_RES);
-      const top = grid.columnTop(face, u, v);
-      const id = grid.get(face, u, v, Math.max(0, top));
-      const block = BLOCK_BY_ID[id] as any;
-      let r = 136, g = 136, b = 136;
-      if (block) {
-        const col: THREE.Color = block.mapColor ?? block.top ?? block.side;
-        if (col) { r = Math.round(col.r * 255); g = Math.round(col.g * 255); b = Math.round(col.b * 255); }
+  function rebake() {
+    for (let py = 0; py < MAP_H; py++) {
+      const lat = Math.PI / 2 - (py / MAP_H) * Math.PI;
+      const cosLat = Math.cos(lat);
+      const sinLat = Math.sin(lat);
+      for (let px = 0; px < MAP_W; px++) {
+        const lon = (px / MAP_W) * 2 * Math.PI - Math.PI;
+        _dir.set(cosLat * Math.cos(lon), sinLat, cosLat * Math.sin(lon));
+        const { face, u, v } = dirToFaceUV(_dir, FACE_RES);
+        const top = grid.columnTop(face, u, v);
+        let r: number, g: number, b: number;
+        if (top <= SEA_LAYER) {
+          // Ocean — blend from shoal to deep based on distance below sea level
+          const depth = SEA_LAYER - top; // 0 = at surface, larger = deeper
+          const waterCol: THREE.Color =
+            depth < 2 ? WATER.shoal :
+            depth < 6 ? WATER.shallow :
+                        WATER.deep;
+          r = Math.round(waterCol.r * 255);
+          g = Math.round(waterCol.g * 255);
+          b = Math.round(waterCol.b * 255);
+        } else {
+          // Land — use the top block's palette colour (includes foliage)
+          const id = grid.get(face, u, v, top);
+          const block = BLOCK_BY_ID[id] as any;
+          r = 120; g = 120; b = 120;
+          if (block) {
+            const col: THREE.Color = block.mapColor ?? block.top ?? block.side;
+            if (col) { r = Math.round(col.r * 255); g = Math.round(col.g * 255); b = Math.round(col.b * 255); }
+          }
+        }
+        const i = (py * MAP_W + px) * 4;
+        baked.data[i] = r; baked.data[i+1] = g; baked.data[i+2] = b; baked.data[i+3] = 255;
       }
-      const i = (py * MAP_W + px) * 4;
-      baked.data[i] = r; baked.data[i+1] = g; baked.data[i+2] = b; baked.data[i+3] = 255;
     }
   }
+
+  rebake();
 
   function update(playerDir: THREE.Vector3, forwardDir?: THREE.Vector3, landmarks?: LandmarkRecord[]) {
     ctx.putImageData(baked, 0, 0);
@@ -218,6 +239,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
     displayW: MAP_DISPLAY_W,
     displayH: MAP_DISPLAY_H,
     update: updateWithCache,
+    rebake,
     dispose() { tip.remove(); },
   };
 }

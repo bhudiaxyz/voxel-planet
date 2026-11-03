@@ -197,6 +197,7 @@ async function start(): Promise<void> {
       post.bloom.radius    = GRADE.bloom.radius;
       post.bloom.threshold = GRADE.bloom.threshold;
     }
+    sphereMap.rebake();
   });
 
   touch.onEdgeToggle(() => {
