@@ -161,6 +161,7 @@ async function start(): Promise<void> {
   hud.onSettingsClick(() => { if (!settings.open) settings.toggle(); });
   sphereMap.el.style.cssText = `display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:${sphereMap.displayW}px;height:${sphereMap.displayH}px;max-width:90vw;max-height:90vh;border:2px solid rgba(255,255,255,0.3);border-radius:4px;z-index:20;`;
   document.body.appendChild(sphereMap.el);
+  if (isTouchDevice) sphereMap.el.addEventListener('click', () => { sphereMap.el.style.display = 'none'; });
   const sphereMapToggle = { toggle: () => { sphereMap.el.style.display = sphereMap.el.style.display === 'none' ? 'block' : 'none'; } };
   const pause = createPause({ input, map: sphereMapToggle, onNewWorld: () => { pushSeedUrl(genSeedWord()); location.reload(); } });
 
@@ -317,8 +318,8 @@ async function start(): Promise<void> {
     if (drone.active) {
       const droneInput = {
         yaw:      fpCam.drainDroneMX() * 0.0015,
-        yawKey:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0),
-        forward:  (fpCam.isKeyDown('KeyW') ? 1 : 0) - (fpCam.isKeyDown('KeyS') ? 1 : 0),
+        yawKey:   (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0) + fpCam._joyX,
+        forward:  (fpCam.isKeyDown('KeyW') ? 1 : 0) - (fpCam.isKeyDown('KeyS') ? 1 : 0) + fpCam._joyY,
         vertical: fpCam.drainDroneAltDelta(dt),
         land:     false,
         sprint,

@@ -66,9 +66,11 @@ const KEYBOARD_BINDINGS = [
   ['C', 'Descend'],
   ['Shift', 'Sprint'],
   ['F', 'Toggle fly mode'],
-  ['G', 'Enter drone'],
-  ['L', 'Land (drone)'],
+  ['V', 'Toggle drone'],
+  ['L', 'Land'],
   ['E', 'Edge toggle'],
+  ['[ ]', 'Time of day'],
+  ['Y', 'Dog sit / stand'],
   ['M', 'Map'],
   ['Esc', 'Pause'],
 ];
@@ -83,7 +85,10 @@ const TOUCH_BINDINGS = [
   ['🚁', 'Enter drone'],
   ['🛬', 'Land (drone)'],
   ['⬡', 'Edges'],
-  ['Esc', 'Pause'],
+  ['◀ ▶', 'Time of day'],
+  ['🐕', 'Dog sit / stand'],
+  ['🗺', 'Map'],
+  ['⚙', 'Settings'],
 ];
 
 function buildBindings(rows: string[][]): string {

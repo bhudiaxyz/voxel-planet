@@ -29,7 +29,6 @@ export class FPCamera {
   private _jumpEdge: boolean;
   private _bobPhase: number;
   private _wishV: THREE.Vector3;
-  private _touchWish: THREE.Vector3;
   /** Raw joystick axes set by setTouchMove — used by drone for its own yaw. */
   _joyX = 0;
   _joyY = 0;
@@ -55,7 +54,6 @@ export class FPCamera {
     this._jumpEdge = false;
     this._bobPhase = 0;
     this._wishV = new THREE.Vector3();
-    this._touchWish = new THREE.Vector3();
     this._prevSpace = false;
     this._droneMX = 0;
     this._droneAltDelta = 0;
@@ -121,10 +119,6 @@ export class FPCamera {
    */
   getWish(): THREE.Vector3 {
     const w = this._wishV.set(0, 0, 0);
-    // Touch wish is already in world space (set by touch-controls.ts)
-    if (this.touchActive && this._touchWish.lengthSq() > 0) {
-      return w.copy(this._touchWish);
-    }
     if (!this.isLocked || this.droneActive || this.flyActive) return w;
     const fwd = -Math.sin(this.yaw);
     const rgt = Math.cos(this.yaw);
@@ -154,13 +148,9 @@ export class FPCamera {
    */
   getWishSphere(playerDir: THREE.Vector3): THREE.Vector3 {
     const w = this._wishV.set(0, 0, 0);
-    if (this.touchActive && this._touchWish.lengthSq() > 0) {
-      // Project touch wish onto tangent plane
-      return w.copy(this._touchWish)
-        .addScaledVector(playerDir, -this._touchWish.dot(playerDir))
-        .normalize();
-    }
-    if (!this.isLocked || this.droneActive) return w;
+    if (this.droneActive) return w;
+    const touching = this.touchActive && (this._joyX !== 0 || this._joyY !== 0);
+    if (!this.isLocked && !touching) return w;
 
     // Build the same tangent-plane forward as updateSphere
     const ref = Math.abs(playerDir.y) > 0.9
@@ -168,9 +158,15 @@ export class FPCamera {
       : new THREE.Vector3(0, 1, 0);
     const fwd = ref.clone().addScaledVector(playerDir, -ref.dot(playerDir)).normalize();
     fwd.applyAxisAngle(playerDir, this.yaw);
-    // right = playerDir × fwd (outward cross forward = right-hand rule tangent)
-    const rgt = new THREE.Vector3().crossVectors(playerDir, fwd).normalize();
+    // Camera right = forward × up (three.js cameras look down -Z, so +X = Y × Z = up × -fwd).
+    const rgt = new THREE.Vector3().crossVectors(fwd, playerDir).normalize();
 
+    if (touching) {
+      // Joystick: y+ = forward, x+ = right. Keep analogue magnitude (≤1).
+      w.addScaledVector(fwd, this._joyY).addScaledVector(rgt, this._joyX);
+      if (w.lengthSq() > 1) w.normalize();
+      return w;
+    }
     if (this._keys.has('KeyW') || this._keys.has('ArrowUp'))    w.addScaledVector(fwd,  1);
     if (this._keys.has('KeyS') || this._keys.has('ArrowDown'))  w.addScaledVector(fwd, -1);
     if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) w.addScaledVector(rgt,  1);
@@ -184,10 +180,6 @@ export class FPCamera {
     if (!this.touchActive) return;
     this._joyX = nx;
     this._joyY = ny;
-    const fwd = -Math.sin(this.yaw);
-    const rgt = Math.cos(this.yaw);
-    this._touchWish.set(fwd * ny + rgt * nx, 0, -rgt * ny + fwd * nx);
-    if (this._touchWish.lengthSq() > 0) this._touchWish.normalize();
   }
 
   /** Accumulate touch look delta (radians). */
