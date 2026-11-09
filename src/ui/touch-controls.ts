@@ -52,6 +52,7 @@ export interface TouchControls {
   onTimeForward: (fn: () => void) => void;
   onMap: (fn: () => void) => void;
   onDog: (fn: () => void) => void;
+  onPause: (fn: () => void) => void;
   /** Call each frame with current mode state to show/hide contextual buttons. */
   update(droneActive: boolean, landing: boolean, flyActive: boolean): void;
   destroy(): void;
@@ -66,9 +67,14 @@ export interface TouchControls {
  *   Space        → ↑ button  (jump on foot / ascend in drone)
  *   C            → ↓ button  (descend in drone)
  *   Shift        → ⚡ button  (sprint)
- *   F/G          → ✈ button  (enter drone)
+ *   F            → ✈ button  (fly toggle)
+ *   V            → 🚁 button  (enter drone)
  *   L            → 🛬 button  (land — visible only while airborne)
  *   E            → ⬡ button  (edge toggle)
+ *   [ ]          → ◀ ▶ buttons (time of day)
+ *   Y            → 🐕 button  (dog sit/stand)
+ *   M            → 🗺 button  (map)
+ *   Esc          → ⏸ button  (pause)
  */
 export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchControls {
   const stub: TouchControls = {
@@ -80,6 +86,7 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
     onTimeForward: () => {},
     onMap: () => {},
     onDog: () => {},
+    onPause: () => {},
     update: () => {},
     destroy: () => {},
   };
@@ -98,6 +105,7 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
   const btns = document.createElement('div');
   btns.id = 'touch-btns';
   btns.innerHTML = `
+    <button id="btn-pause"        aria-label="Pause">⏸</button>
     <button id="btn-map"          aria-label="Toggle map">🗺</button>
     <button id="btn-jump"    aria-label="Jump / Ascend">↑</button>
     <button id="btn-descend" aria-label="Descend">↓</button>
@@ -230,77 +238,27 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
   );
 
   // ---- tap-only buttons wired externally via returned setters -------------
+  const tap = (id: string) => (fn: () => void) =>
+    document.getElementById(id)!.addEventListener(
+      'touchend',
+      (e) => {
+        e.stopPropagation();
+        fn();
+      },
+      { passive: true },
+    );
+  const edges = document.getElementById('btn-edges')!;
+
   const controls: TouchControls = {
-    onFly(fn) {
-      document.getElementById('btn-fly')!.addEventListener(
-        'touchend',
-        (e) => {
-          e.stopPropagation();
-          fn();
-        },
-        { passive: true },
-      );
-    },
-    onDrone(fn) {
-      document.getElementById('btn-drone')!.addEventListener(
-        'touchend',
-        (e) => {
-          e.stopPropagation();
-          fn();
-        },
-        { passive: true },
-      );
-    },
-    onLand(fn) {
-      document.getElementById('btn-land')!.addEventListener(
-        'touchend',
-        (e) => {
-          e.stopPropagation();
-          fn();
-        },
-        { passive: true },
-      );
-    },
-    onEdgeToggle(fn) {
-      const el = document.getElementById('btn-edges')!;
-      el.addEventListener(
-        'touchend',
-        (e) => {
-          e.stopPropagation();
-          fn();
-          el.classList.toggle('active');
-        },
-        { passive: true },
-      );
-    },
-    onTimeBack(fn) {
-      document.getElementById('btn-time-back')!.addEventListener(
-        'touchend',
-        (e) => { e.stopPropagation(); fn(); },
-        { passive: true },
-      );
-    },
-    onTimeForward(fn) {
-      document.getElementById('btn-time-forward')!.addEventListener(
-        'touchend',
-        (e) => { e.stopPropagation(); fn(); },
-        { passive: true },
-      );
-    },
-    onMap(fn) {
-      document.getElementById('btn-map')!.addEventListener(
-        'touchend',
-        (e) => { e.stopPropagation(); fn(); },
-        { passive: true },
-      );
-    },
-    onDog(fn) {
-      document.getElementById('btn-dog')!.addEventListener(
-        'touchend',
-        (e) => { e.stopPropagation(); fn(); },
-        { passive: true },
-      );
-    },
+    onFly: tap('btn-fly'),
+    onDrone: tap('btn-drone'),
+    onLand: tap('btn-land'),
+    onEdgeToggle: (fn) => tap('btn-edges')(() => { fn(); edges.classList.toggle('active'); }),
+    onTimeBack: tap('btn-time-back'),
+    onTimeForward: tap('btn-time-forward'),
+    onMap: tap('btn-map'),
+    onDog: tap('btn-dog'),
+    onPause: tap('btn-pause'),
     update(droneActive: boolean, landing: boolean, flyActive: boolean) {
       const airborne = droneActive || flyActive;
       const land = document.getElementById('btn-land')! as HTMLElement;

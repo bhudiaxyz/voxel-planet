@@ -5,9 +5,7 @@
  * chrome is a small pair of shortcuts for the two non-obvious overlays.
  */
 
-import type * as THREE from 'three';
 import type { DayNight } from '../render/day-night';
-import type { DroneMode } from '../player/drone';
 
 const CSS = `
 #hud {
@@ -80,11 +78,10 @@ const CSS = `
 
 interface HudDeps {
   dayNight: DayNight;
-  drone: DroneMode;
-  camera: THREE.PerspectiveCamera;
+  drone: { active: boolean; altitude: number };
 }
 
-export function createHud({ dayNight, drone, camera }: HudDeps) {
+export function createHud({ dayNight, drone }: HudDeps) {
   const style = document.createElement('style');
   style.textContent = CSS;
   document.head.appendChild(style);
@@ -101,7 +98,7 @@ export function createHud({ dayNight, drone, camera }: HudDeps) {
     </div>
     <div class="status-bar">
       <div class="status-chip" id="hud-time">🕐 --:--</div>
-      <div class="status-chip" id="hud-drone" style="display:none">↑ -- m  -- u/s</div>
+      <div class="status-chip" id="hud-drone" style="display:none">↑ -- m</div>
     </div>
   `;
   document.body.appendChild(root);
@@ -130,11 +127,8 @@ export function createHud({ dayNight, drone, camera }: HudDeps) {
       // Drone stats — only when active
       if (drone.active) {
         droneEl.style.display = 'flex';
-        const alt = Math.round(
-          (drone as any).altitude ?? drone.getAltitude?.(camera) ?? 0
-        );
-        const spd = Math.round((drone as any).getSpeed?.() ?? 0);
-        droneEl.textContent = `↑ ${alt} m  ${spd} u/s`;
+        const alt = Math.round(drone.altitude);
+        droneEl.textContent = `↑ ${alt} m`;
       } else {
         droneEl.style.display = 'none';
       }

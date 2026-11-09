@@ -95,7 +95,7 @@ function buildBindings(rows: string[][]): string {
   return rows.map(([key, label]) => `<div class="binding"><kbd>${key}</kbd><span>${label}</span></div>`).join('');
 }
 
-export function createPause({ input, map, onNewWorld }: any) {
+export function createPause({ input, map }: { input: { paused: boolean }; map: { toggle(): void } }) {
   const style = document.createElement('style');
   style.textContent = CSS;
   document.head.appendChild(style);
@@ -130,7 +130,6 @@ export function createPause({ input, map, onNewWorld }: any) {
     if (open) {
       wasPaused = input.paused;
       input.paused = true;
-      input.keys.clear();
       (resume as any).focus({ preventScroll: true });
     } else {
       input.paused = wasPaused;

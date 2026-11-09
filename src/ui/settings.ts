@@ -235,8 +235,7 @@ interface SettingsDeps {
     setFogEnabled(v: boolean): void;
     setShadowResolution(v: number): void;
   };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  input: any;
+  input: { paused: boolean };
   world: {
     streaming?: {
       loadRadius?: number;
@@ -522,7 +521,6 @@ export function createSettings({ rig, atmo, input, world, dayNight, seed }: Sett
     if (open) {
       wasPaused = input.paused;
       input.paused = true;
-      input.keys.clear();
       syncUi();
     } else {
       input.paused = wasPaused;

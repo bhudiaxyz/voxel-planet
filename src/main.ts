@@ -13,7 +13,6 @@ import { createHud } from './ui/hud';
 import { makeRng, genSeedWord, hashSeedWord } from './core/rng';
 import { detectGpuTier, TIER_SETTINGS } from './render/gpu-tier';
 import { createTouchControls, isTouchDevice } from './ui/touch-controls';
-import { Input } from './player/controller';
 import { createParticles } from './fx/particles';
 import { createSphereMap } from './render/sphere-map';
 import { createSphereDroneMode } from './player/sphere-drone';
@@ -84,7 +83,6 @@ async function start(): Promise<void> {
   const dog = createSphereDog(world.grid, scene, world.spawnDir);
 
   const controller = new SphereController(world.spawnDir, world.grid);
-  const input = new Input(renderer.domElement);
 
   const canAct = () => fpCam.isLocked || fpCam.touchActive;
 
@@ -119,6 +117,16 @@ async function start(): Promise<void> {
     if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
   };
 
+  // Actions shared by keyboard and touch buttons.
+  const toggleFly = () => { if (fly.active) exitFly(); else enterFly(); };
+  const toggleEdges = () => {
+    const g = post.grade.uniforms;
+    const on = g['uEdgeDarkOpacity'].value === 0;
+    g['uEdgeDarkOpacity'].value = on ? 0.64 : 0;
+    g['uEdgeLightOpacity'].value = on ? 0.3 : 0;
+  };
+  const stepTime = (dir: 1 | -1) => { dayNight.timeOfDay = (dayNight.timeOfDay + dir * 0.125 + 1) % 1; };
+
   document.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.repeat) return;
     // Drone/fly exit — works even without pointer lock
@@ -128,22 +136,14 @@ async function start(): Promise<void> {
       if (drone.active) exitDrone(); else enterDrone();
       return;
     }
-    if (e.code === 'KeyF') {
-      if (fly.active) exitFly(); else enterFly();
-      return;
-    }
+    if (e.code === 'KeyF') { toggleFly(); return; }
     // Map toggle — direct, no pause-menu required
     if (e.code === 'KeyM') { sphereMapToggle.toggle(); return; }
     if (e.code === 'KeyY') { dog.toggleSit(); return; }
     if (!canAct()) return;
-    if (e.code === 'KeyE') {
-      const g = post.grade.uniforms;
-      const on = g['uEdgeDarkOpacity'].value === 0;
-      g['uEdgeDarkOpacity'].value = on ? 0.64 : 0;
-      g['uEdgeLightOpacity'].value = on ? 0.3 : 0;
-    }
-    if (e.code === 'BracketLeft')  dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1;
-    if (e.code === 'BracketRight') dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1;
+    if (e.code === 'KeyE') toggleEdges();
+    if (e.code === 'BracketLeft')  stepTime(-1);
+    if (e.code === 'BracketRight') stepTime(1);
   });
 
   const touch = createTouchControls(fpCam, renderer.domElement);
@@ -152,18 +152,18 @@ async function start(): Promise<void> {
   const settings = createSettings({
     rig: { setZoomRange: () => {} },
     atmo,
-    input,
+    input: fpCam,
     world: null as any,
     dayNight,
     seed: { currentWord: () => currentSeedWord, push: pushSeedUrl, gen: genSeedWord },
   });
-  const hud = createHud({ dayNight, drone: drone as any, camera: fpCam.camera });
+  const hud = createHud({ dayNight, drone });
   hud.onSettingsClick(() => { if (!settings.open) settings.toggle(); });
   sphereMap.el.style.cssText = `display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:${sphereMap.displayW}px;height:${sphereMap.displayH}px;max-width:90vw;max-height:90vh;border:2px solid rgba(255,255,255,0.3);border-radius:4px;z-index:20;`;
   document.body.appendChild(sphereMap.el);
   if (isTouchDevice) sphereMap.el.addEventListener('click', () => { sphereMap.el.style.display = 'none'; });
   const sphereMapToggle = { toggle: () => { sphereMap.el.style.display = sphereMap.el.style.display === 'none' ? 'block' : 'none'; } };
-  const pause = createPause({ input, map: sphereMapToggle, onNewWorld: () => { pushSeedUrl(genSeedWord()); location.reload(); } });
+  const pause = createPause({ input: fpCam, map: sphereMapToggle });
 
   settings.onPaletteChange((name) => {
     setVoxelPalette(name);
@@ -202,19 +202,15 @@ async function start(): Promise<void> {
     sphereMap.rebake();
   });
 
-  touch.onEdgeToggle(() => {
-    const g = post.grade.uniforms;
-    const on = g['uEdgeDarkOpacity'].value === 0;
-    g['uEdgeDarkOpacity'].value = on ? 0.64 : 0;
-    g['uEdgeLightOpacity'].value = on ? 0.3 : 0;
-  });
-  touch.onTimeBack(    () => { dayNight.timeOfDay = (dayNight.timeOfDay - 0.125 + 1) % 1; });
-  touch.onTimeForward( () => { dayNight.timeOfDay = (dayNight.timeOfDay + 0.125) % 1; });
+  touch.onEdgeToggle(toggleEdges);
+  touch.onTimeBack(() => stepTime(-1));
+  touch.onTimeForward(() => stepTime(1));
   touch.onDrone(() => { if (!drone.active) enterDrone(); });
-  touch.onLand(()  => { if (drone.active) drone.beginLanding(); else if (fly.active) exitFly(); });
-  touch.onFly(()   => { if (fly.active) exitFly(); else enterFly(); });
-  touch.onMap(() => sphereMapToggle.toggle());
+  touch.onLand(() => { if (drone.active) drone.beginLanding(); else if (fly.active) exitFly(); });
+  touch.onFly(toggleFly);
+  touch.onMap(sphereMapToggle.toggle);
   touch.onDog(() => dog.toggleSit());
+  touch.onPause(pause.toggle);
 
   // Initial camera frame
   fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
@@ -346,7 +342,7 @@ async function start(): Promise<void> {
     if (!started) {
       started = true;
       ctrlEl.textContent = isTouchDevice
-        ? 'Left stick · move   Swipe right · look   ↑ · jump'
+        ? 'Left stick · move   Swipe right · look   ↑ · jump   ⏸ · controls'
         : 'WASD · move   Mouse · look   Space · jump   E · edges';
       bootEl.classList.add('ready');
       bootEl.addEventListener(

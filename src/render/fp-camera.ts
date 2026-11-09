@@ -1,10 +1,29 @@
 import * as THREE from 'three';
 
-const EYE_HEIGHT = 1.75;
 const SENSITIVITY = 0.0021;
 const PITCH_LIMIT = Math.PI / 2 - 0.05;
 const HEAD_BOB_AMP = 0.022; // metres of vertical oscillation
 const HEAD_BOB_HZ = 2.2; // cycles per second at full sprint
+
+const _X = new THREE.Vector3(1, 0, 0);
+const _Y = new THREE.Vector3(0, 1, 0);
+const _fwd = new THREE.Vector3();
+const _rgt = new THREE.Vector3();
+const _look = new THREE.Vector3();
+
+/**
+ * Camera forward/right on the tangent plane at `up`, rotated by `yaw`.
+ * Single source of truth for both movement and the view, so W is always
+ * "visually forward" and D is always screen-right. Returns shared scratch vectors.
+ */
+export function tangentBasis(up: THREE.Vector3, yaw: number): { fwd: THREE.Vector3; rgt: THREE.Vector3 } {
+  // Reference tangent: world-up projected onto the plane; (1,0,0) near the poles.
+  const ref = Math.abs(up.y) > 0.9 ? _X : _Y;
+  _fwd.copy(ref).addScaledVector(up, -ref.dot(up)).normalize().applyAxisAngle(up, yaw);
+  // Camera right = forward × up (three.js cameras look down -Z).
+  _rgt.crossVectors(_fwd, up).normalize();
+  return { fwd: _fwd, rgt: _rgt };
+}
 
 export class FPCamera {
   camera: THREE.PerspectiveCamera;
@@ -13,6 +32,13 @@ export class FPCamera {
   isLocked: boolean;
   droneActive: boolean;
   _keys: Set<string>;
+  /** True while a menu (pause/settings) is open: movement, jump and look are ignored. */
+  get paused(): boolean { return this._paused; }
+  set paused(on: boolean) {
+    this._paused = on;
+    if (on) { this._keys.clear(); this._prevSpace = false; this.touchAltAxis = 0; }
+  }
+  private _paused = false;
 
   /** Set true on touch devices; bypasses pointer-lock requirement for movement. */
   touchActive: boolean;
@@ -88,6 +114,7 @@ export class FPCamera {
     });
 
     document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (this.paused) return;
       this._keys.add(e.code);
       if (e.code === 'Space') {
         e.preventDefault();
@@ -114,52 +141,17 @@ export class FPCamera {
   }
 
   /**
-   * Horizontal wish direction in world space (normalised, Y=0),
-   * or zero vector when no movement keys held or not locked.
-   */
-  getWish(): THREE.Vector3 {
-    const w = this._wishV.set(0, 0, 0);
-    if (!this.isLocked || this.droneActive || this.flyActive) return w;
-    const fwd = -Math.sin(this.yaw);
-    const rgt = Math.cos(this.yaw);
-    if (this._keys.has('KeyW') || this._keys.has('ArrowUp')) {
-      w.x += fwd;
-      w.z -= rgt;
-    }
-    if (this._keys.has('KeyS') || this._keys.has('ArrowDown')) {
-      w.x -= fwd;
-      w.z += rgt;
-    }
-    if (this._keys.has('KeyD') || this._keys.has('ArrowRight')) {
-      w.x += rgt;
-      w.z += fwd;
-    }
-    if (this._keys.has('KeyA') || this._keys.has('ArrowLeft')) {
-      w.x -= rgt;
-      w.z -= fwd;
-    }
-    if (w.lengthSq() > 0) w.normalize();
-    return w;
-  }
-
-  /**
    * Wish direction on the sphere tangent plane at playerDir.
    * Matches the forward basis used by updateSphere so W is always "visually forward".
    */
   getWishSphere(playerDir: THREE.Vector3): THREE.Vector3 {
     const w = this._wishV.set(0, 0, 0);
-    if (this.droneActive) return w;
+    if (this.droneActive || this.paused) return w;
     const touching = this.touchActive && (this._joyX !== 0 || this._joyY !== 0);
     if (!this.isLocked && !touching) return w;
 
-    // Build the same tangent-plane forward as updateSphere
-    const ref = Math.abs(playerDir.y) > 0.9
-      ? new THREE.Vector3(1, 0, 0)
-      : new THREE.Vector3(0, 1, 0);
-    const fwd = ref.clone().addScaledVector(playerDir, -ref.dot(playerDir)).normalize();
-    fwd.applyAxisAngle(playerDir, this.yaw);
-    // Camera right = forward × up (three.js cameras look down -Z, so +X = Y × Z = up × -fwd).
-    const rgt = new THREE.Vector3().crossVectors(fwd, playerDir).normalize();
+    tangentBasis(playerDir, this.yaw);
+    const fwd = _fwd, rgt = _rgt;
 
     if (touching) {
       // Joystick: y+ = forward, x+ = right. Keep analogue magnitude (≤1).
@@ -184,6 +176,7 @@ export class FPCamera {
 
   /** Accumulate touch look delta (radians). */
   applyTouchLook(dyaw: number, dpitch: number): void {
+    if (this.paused) return;
     this.yaw -= dyaw;
     this.pitch -= dpitch;
     this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch));
@@ -195,17 +188,13 @@ export class FPCamera {
 
   /** Returns true on the frame Space is first pressed, then resets. */
   getJumpEdge(): boolean {
-    const v = this._jumpEdge;
+    const v = this._jumpEdge && !this.paused;
     this._jumpEdge = false;
     return v;
   }
 
-  getJumpHeld(): boolean {
-    return this._keys.has('Space');
-  }
-
   isKeyDown(code: string): boolean {
-    return this._keys.has(code);
+    return !this.paused && this._keys.has(code);
   }
 
   /** Drain accumulated drone yaw input since last call. */
@@ -231,24 +220,6 @@ export class FPCamera {
   }
 
   /**
-   * Position camera at eye height above controllerPos, apply yaw/pitch.
-   * Adds head-bob when grounded and moving.
-   */
-  update(dt: number, controllerPos: THREE.Vector3, speedFraction = 0, grounded = true): void {
-    if (this.droneActive) return;
-
-    if (grounded && speedFraction > 0.05) {
-      this._bobPhase += dt * HEAD_BOB_HZ * Math.PI * 2;
-    } else {
-      this._bobPhase *= Math.max(0, 1 - dt * 8);
-    }
-    const bob = Math.sin(this._bobPhase) * HEAD_BOB_AMP * speedFraction;
-
-    this.camera.position.set(controllerPos.x, controllerPos.y + EYE_HEIGHT + bob, controllerPos.z);
-    this.camera.rotation.set(this.pitch, this.yaw, 0);
-  }
-
-  /**
    * Spherical surface camera. `up` = radial outward, yaw rotates around `up`,
    * pitch tilts the look direction from the tangent plane.
    */
@@ -271,20 +242,13 @@ export class FPCamera {
     this.camera.up.copy(playerDir);
     this.camera.position.copy(playerDir).multiplyScalar(groundRadius + bob);
 
-    // Choose a yaw reference tangent: world-up projected onto the tangent plane.
-    // Near poles, use (1,0,0) instead to avoid singularity.
-    const ref = Math.abs(playerDir.y) > 0.9
-      ? new THREE.Vector3(1, 0, 0)
-      : new THREE.Vector3(0, 1, 0);
-    const forward = ref.clone().addScaledVector(playerDir, -ref.dot(playerDir)).normalize();
-    forward.applyAxisAngle(playerDir, this.yaw);
-
-    const look = forward.clone()
+    tangentBasis(playerDir, this.yaw);
+    _look.copy(_fwd)
       .multiplyScalar(Math.cos(this.pitch))
       .addScaledVector(playerDir, Math.sin(this.pitch))
-      .normalize();
-
-    this.camera.lookAt(this.camera.position.clone().add(look));
+      .normalize()
+      .add(this.camera.position);
+    this.camera.lookAt(_look);
   }
 
   resize(aspect: number): void {
