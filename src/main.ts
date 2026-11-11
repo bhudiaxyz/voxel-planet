@@ -33,6 +33,7 @@ pushSeedUrl(currentSeedWord);
 
 const _sunWorld = new THREE.Vector3();
 const _sunNDC = new THREE.Vector3();
+const _dogFwd = new THREE.Vector3();
 
 const container = document.getElementById('app')!;
 const bootEl = document.getElementById('boot')!;
@@ -54,19 +55,42 @@ const fail = (msg: string) => {
 
 async function start(): Promise<void> {
     // three r163+ is WebGL2-only; say so plainly instead of throwing deep in the renderer.
-    if (!document.createElement('canvas').getContext('webgl2')) {
-        fail('This browser or device does not support WebGL 2');
+    // The browser reports *why* creation failed (disabled, blocked after GPU
+    // crashes, no hardware acceleration) only through this event.
+    const probe = document.createElement('canvas');
+    let reason = '';
+    probe.addEventListener('webglcontextcreationerror', (e) => {
+        reason = (e as WebGLContextEvent).statusMessage || '';
+    });
+    const gl2 = probe.getContext('webgl2');
+    if (!gl2) {
+        console.error('WebGL 2 context creation failed:', reason || '(no reason given)');
+        fail(
+            `WebGL 2 is unavailable${reason ? `: ${reason}` : ''}. ` +
+                'Check hardware acceleration is on, then fully restart the browser.',
+        );
         return;
     }
+    gl2.getExtension('WEBGL_lose_context')?.loseContext();
     const tier = detectGpuTier();
     const renderer = createRenderer(container, tier);
     // Mobile GPUs drop the context when backgrounded or memory-starved. Streamed
     // chunks and render targets would all need rebuilding, so reload instead.
+    // Reload at most once per session: repeated GPU resets make Chrome block
+    // WebGL for the whole site, which then fails every load until a restart.
+    const RELOAD_KEY = 'voxel-planet.gl-reloaded';
     renderer.domElement.addEventListener('webglcontextlost', (e) => {
         e.preventDefault();
+        if (sessionStorage.getItem(RELOAD_KEY)) {
+            fail('The graphics driver reset again. Try a lighter profile: add ?tier=low to the address.');
+            return;
+        }
+        sessionStorage.setItem(RELOAD_KEY, '1');
         fail('Graphics reset — reloading…');
         setTimeout(() => location.reload(), 800);
     });
+    // A minute of stable running re-arms the one automatic reload.
+    setTimeout(() => sessionStorage.removeItem(RELOAD_KEY), 60_000);
     const scene = new THREE.Scene();
 
     const ts = TIER_SETTINGS[tier];
@@ -361,7 +385,7 @@ async function start(): Promise<void> {
 
         atmo.update(dt, fpCam.camera);
         particles.update(dt, fpCam.camera);
-        dog.update(dt, controller.dir);
+        dog.update(dt, controller.dir, fpCam.camera.getWorldDirection(_dogFwd));
         const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
         const mapFwd = drone.active
             ? drone.heading
@@ -417,7 +441,7 @@ async function start(): Promise<void> {
     frame();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__game = { scene, renderer, fpCam, world, controller, post, atmo, dayNight, tier };
+    (window as any).__game = { scene, renderer, fpCam, world, controller, post, atmo, dayNight, tier, dog };
 }
 
 start().catch((err: unknown) => {
