@@ -4,12 +4,17 @@ import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/sphere-voxel';
 import { dirToFaceUV, columnDir } from '../core/geoutil';
 import { createSpherePathfinder, type Col } from './sphere-path';
 
-const SEA_LAYER = 11;
+/**
+ * Deepest walkable layer. The sea surface sits at layer 11.5, so layer-11
+ * shallows (sand just under the waterline) are wadeable, as they are for the
+ * player; only layer 10 and below is deep water.
+ */
+const DEEP_WATER = 10;
 const HEEL_DIST = 4.0 / PLANET_RADIUS; // radians — counts as "at heel" inside this…
 const SAME_LEVEL = 0.6; // …but only if its ground is within this of the player's
-/** Heel spot relative to the player, in world units: on their right, a step ahead while walking. */
-const HEEL_SIDE = 1.8;
-const HEEL_AHEAD = 2.2;
+/** Heel spot relative to the player, in world units: ahead and to their right, further ahead while walking. */
+const HEEL_SIDE = 1.5;
+const HEEL_AHEAD = 4.0;
 const TELEPORT_DIST = 45 / PLANET_RADIUS; // beyond this (after fly/drone, or outrun) it reappears and runs in
 const TROT_SPEED = 8; // m/s
 const RUN_SPEED = 22; // m/s — faster than the player's sprint (20) so it can catch up
@@ -19,6 +24,8 @@ const APPEAR_AHEAD = 4.5;
 const APPEAR_SIDE = 1.6;
 /** When it has to reappear: this far ahead, so the player sees it run in. */
 const RUN_IN_AHEAD = 12;
+/** Unreachable and further than this → it reappears; closer, it waits for a route. */
+const STRANDED_DIST = 8 / PLANET_RADIUS;
 /** Path search: nodes per frame; re-plan if the heel spot moves this many columns, or every N s. */
 const SEARCH_BUDGET = 400;
 const REPLAN_DRIFT = 2;
@@ -89,8 +96,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
     mesh.name = 'dog';
     scene.add(mesh);
 
-    (globalThis as any).__dogDbg = { far: 0, fail: 0, last: null };
-    const router = createSpherePathfinder(grid, { maxUp: 2, maxDown: 4, seaLayer: SEA_LAYER });
+    const router = createSpherePathfinder(grid, { maxUp: 2, maxDown: 4, seaLayer: DEEP_WATER });
     const dir = new THREE.Vector3();
     const _axis = new THREE.Vector3();
     const _look = new THREE.Vector3();
@@ -201,13 +207,14 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
         let travelled = 0;
 
         if (!sitting) {
-            if (dir.angleTo(playerDir) > TELEPORT_DIST) { (globalThis as any).__dogDbg.far++; appear(playerDir, viewFwd, RUN_IN_AHEAD); }
+            if (dir.angleTo(playerDir) > TELEPORT_DIST) appear(playerDir, viewFwd, RUN_IN_AHEAD);
 
             // Heel spot: the player's right, a step ahead while they walk so the dog stays in view.
             const playerMoving = playerDir.angleTo(_lastPlayer) > (0.5 * dt) / PLANET_RADIUS;
             _lastPlayer.copy(playerDir);
             frameAt(playerDir, viewFwd);
-            const heel = spotNear(playerDir, playerMoving ? HEEL_AHEAD : 0, HEEL_SIDE);
+            // Ahead at all times (~20° off-centre), so it sits in view rather than at the frame edge.
+            const heel = spotNear(playerDir, playerMoving ? HEEL_AHEAD + 1.5 : HEEL_AHEAD, HEEL_SIDE);
             const me = colOf(dir);
             const atHeel = dir.angleTo(playerDir) < HEEL_DIST && Math.abs(surfaceAt(dir) - playerGround) <= SAME_LEVEL;
 
@@ -215,7 +222,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
             replanIn -= dt;
             if (!searching && !(atHeel && route.length === 0)) {
                 const drifted = !goal || colDist(goal, heel) > REPLAN_DRIFT;
-                if (drifted || replanIn <= 0 || (route.length === 0 && !sameCol(me, heel))) {
+                if (drifted || replanIn <= 0 || (route.length === 0 && !sameCol(me, heel) && !fallback)) {
                     fallback = false;
                     plan(me, heel);
                 }
@@ -238,8 +245,10 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
                         plan(me, colOf(playerDir));
                     } else {
                         fallback = false;
-                        (globalThis as any).__dogDbg.fail++; (globalThis as any).__dogDbg.last = { me, goal, gMe: groundR(me), gGoal: goal && groundR(goal) };
-                        appear(playerDir, viewFwd, RUN_IN_AHEAD);
+                        // Only jump if it's genuinely stranded away from the player; close by, a
+                        // failed search (player standing somewhere odd) just waits and re-plans.
+                        if (dir.angleTo(playerDir) > STRANDED_DIST) appear(playerDir, viewFwd, RUN_IN_AHEAD);
+                        else replanIn = REPLAN_EVERY;
                     }
                 }
             }
