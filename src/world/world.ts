@@ -16,7 +16,7 @@ import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
 import { generateSphereTerrain } from './sphere-terrain';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
-import { scatterSphereVegetation } from './sphere-vegetation';
+import { createSphereVegetation } from './sphere-vegetation';
 import { buildSphereLandmarks, LandmarkRecord } from './sphere-landmarks';
 
 /** The assembled world returned by buildWorld. */
@@ -159,6 +159,8 @@ export async function buildSphereWorld(
     seed: number,
     scene: THREE.Scene,
     onProgress: (p: number, s?: string) => void = () => {},
+    streamRadius = 10,
+    grassDensity = 1,
 ): Promise<SphereWorld> {
     const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
 
@@ -172,7 +174,7 @@ export async function buildSphereWorld(
     await yieldFrame();
 
     onProgress(0.73, 'building terrain meshes');
-    const streaming = createSphereChunkStreamer(grid);
+    const streaming = createSphereChunkStreamer(grid, { loadRadius: streamRadius });
 
     const spawnDir = new THREE.Vector3();
     const _n = new THREE.Vector3(),
@@ -185,7 +187,12 @@ export async function buildSphereWorld(
         .addScaledVector(_tv, (2 * (spawn.v + 0.5)) / FACE_RES - 1)
         .normalize();
 
-    streaming.update(spawnDir);
+    // Vegetation follows the streamer: a patch builds when terrain under it loads.
+    // Hooked up before the first fill so the opening view has grass.
+    const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity);
+    streaming.setListener(veg);
+    // Fill the whole view before the first frame; streaming after this is budgeted per frame.
+    streaming.update(spawnDir, Infinity);
 
     onProgress(0.9, 'adding ocean');
     await yieldFrame();
@@ -196,10 +203,7 @@ export async function buildSphereWorld(
     group.add(streaming.meshes.solid, streaming.meshes.glow, streaming.meshes.edges);
     scene.add(group);
 
-    onProgress(0.92, 'scattering vegetation');
-    await yieldFrame();
-    const veg = scatterSphereVegetation(grid, makeRng(seed ^ 0x3b1e7f), scene);
-    const animated = [...veg.animated];
+    const animated = [veg];
 
     onProgress(1.0, 'ready');
     return { grid, streaming, group, spawnDir, animated, sphereWater, landmarks };

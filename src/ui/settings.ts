@@ -5,18 +5,20 @@
  * streaming. Values persist in localStorage and apply immediately.
  */
 
-import { DEFAULT_STREAM_RADIUS } from '../core/voxel';
 import { DEFAULT_SHADOW_RESOLUTION } from '../render/lighting';
 import { PLANET_RADIUS_DEFAULT } from '../render/planet.glsl';
 import type { DayNight } from '../render/day-night';
 import { VOXEL_PALETTES, activePaletteName } from '../core/palette';
 
 const STORE_KEY = 'VoxelWorld.settings';
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 const INK_BASE = 0.05;
 const PREVIOUS_INK_DEFAULT = INK_BASE * 1.12;
 const PREVIOUS_LOAD_RADIUS_DEFAULT = 5;
+/** v2 default. The streamer clamps to the tier ceiling, so the new default is simply 'max'. */
+const V2_LOAD_RADIUS_DEFAULT = 12;
+const MAX_LOAD_RADIUS = 16;
 const PREVIOUS_SHADOW_RESOLUTION_DEFAULT = 4096;
 
 /**
@@ -30,7 +32,7 @@ export const DEFAULTS = {
     zoomMax: 120,
     fogEnabled: true,
     fogStart: 420,
-    loadRadius: DEFAULT_STREAM_RADIUS,
+    loadRadius: MAX_LOAD_RADIUS,
     shadowResolution: DEFAULT_SHADOW_RESOLUTION,
     planetRadius: PLANET_RADIUS_DEFAULT,
     daySpeed: 1,
@@ -43,7 +45,7 @@ const RANGES = {
     zoomMin: { min: 12, max: 50, step: 1 },
     zoomMax: { min: 40, max: 140, step: 1 },
     fogStart: { min: 70, max: 420, step: 2 },
-    loadRadius: { min: 3, max: 12, step: 1 },
+    loadRadius: { min: 3, max: MAX_LOAD_RADIUS, step: 1 },
     shadowResolution: { min: 0, max: 4096, step: 1024 },
     planetRadius: { min: 100, max: 1000, step: 10 },
     daySpeed: { min: 0.1, max: 5, step: 0.1 },
@@ -169,7 +171,7 @@ function load(): SettingsValues {
             out.inkWidth = DEFAULTS.inkWidth;
         }
         if (((parsed['_version'] as number) || 1) < SETTINGS_VERSION) {
-            if (out.loadRadius === PREVIOUS_LOAD_RADIUS_DEFAULT) {
+            if (out.loadRadius === PREVIOUS_LOAD_RADIUS_DEFAULT || out.loadRadius === V2_LOAD_RADIUS_DEFAULT) {
                 out.loadRadius = DEFAULTS.loadRadius;
             }
             if (out.shadowResolution === PREVIOUS_SHADOW_RESOLUTION_DEFAULT) {

@@ -115,6 +115,9 @@ const REED_BLOCK = registerBlock('REED', {
 
 const BUSH_PALETTE = [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, BUSH_ROSE, BUSH_MAUVE];
 
+/** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
+export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK };
+
 export function generateSphereTerrain(
     seed: number,
     onProgress?: (p: number) => void,
@@ -487,6 +490,12 @@ function plantSphereBush(
 }
 
 /** Place a single decorative block one layer above the surface. */
+/**
+ * Ground cover (ferns, tall grass, reeds, moss, lichen). Recorded per column
+ * and drawn by the vegetation layer as blades/fronds — not a voxel cube, so
+ * it doesn't block movement or read as a box. Same occupancy rule as before:
+ * only where nothing already stands on the column.
+ */
 function plantSingle(
     grid: SphereVoxelGrid,
     face: number,
@@ -498,7 +507,7 @@ function plantSingle(
     const nl = surfaceLayer + 1;
     if (nl >= SHELL_DEPTH) return;
     if (grid.get(face, u, v, nl) !== 0) return;
-    grid.set(face, u, v, nl, block.id);
+    grid.setPlant(face, u, v, block.id);
 }
 
 function findSpawn(grid: SphereVoxelGrid): { face: number; u: number; v: number } {

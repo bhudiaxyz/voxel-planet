@@ -73,11 +73,26 @@ export class SphereVoxelGrid {
     readonly data: Uint8Array;
     // highest solid layer per column, -1 if empty
     readonly surfaceLayer: Int16Array;
+    /**
+     * Ground-cover plant per column (a block id, 0 = none) drawn as sprite
+     * vegetation on top of the column instead of as a voxel cube.
+     */
+    readonly plants: Uint8Array;
 
     constructor() {
         // ponytail: 92 MB for the voxel data; acceptable on desktop
         this.data = new Uint8Array(6 * FACE_RES * FACE_RES * SHELL_DEPTH);
         this.surfaceLayer = new Int16Array(6 * FACE_RES * FACE_RES).fill(-1);
+        this.plants = new Uint8Array(6 * FACE_RES * FACE_RES);
+    }
+
+    plantAt(face: number, u: number, v: number): number {
+        if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return 0;
+        return this.plants[this.colIdx(face, u, v)];
+    }
+
+    setPlant(face: number, u: number, v: number, id: number): void {
+        this.plants[this.colIdx(face, u, v)] = id;
     }
 
     private idx(face: number, u: number, v: number, layer: number): number {

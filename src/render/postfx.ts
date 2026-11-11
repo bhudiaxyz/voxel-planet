@@ -384,7 +384,9 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
       ${SKY_FN_GLSL}
 
       float viewZ(vec2 uv) {
-        float d = texture2D(tDepth, uv).x;
+        // Explicit LOD 0: these targets have no mips, and implicit-derivative
+        // sampling inside the tiered AO loop trips D3D warning X3595.
+        float d = textureLod(tDepth, uv, 0.0).x;
         return perspectiveDepthToViewZ(d, uNear, uFar);
       }
 
@@ -452,7 +454,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
           vec2 px = blurPx / uResolution;
           vec3 acc = col;
           for (int i = 0; i < 4; i++) {
-            acc += texture2D(tDiffuse, vUv + AO_DIR[i * 2] * px).rgb;
+            acc += textureLod(tDiffuse, vUv + AO_DIR[i * 2] * px, 0.0).rgb;
           }
           col = acc / 5.0;
         }
@@ -617,7 +619,7 @@ export function createPostFX(
         for (int i = 0; i < 8; i++) {
           float w = step(float(i), uTaps - 1.0);
           uv -= delta;
-          accum += texture2D(tDiffuse, uv).rgb * illum * w;
+          accum += textureLod(tDiffuse, uv, 0.0).rgb * illum * w;
           illum *= mix(1.0, uDecay, w);
         }
         accum *= uWeight * uSunVisible / max(uTaps, 1.0);

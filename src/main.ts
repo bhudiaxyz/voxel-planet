@@ -46,13 +46,31 @@ const setProgress = (p: number, s?: string): void => {
     if (p >= 1) ctrlEl.textContent = '';
 };
 
+const fail = (msg: string) => {
+    (subEl as HTMLElement).textContent = msg;
+    (subEl as HTMLElement).classList.add('error');
+    (barEl as HTMLElement).style.width = '0';
+};
+
 async function start(): Promise<void> {
+    // three r163+ is WebGL2-only; say so plainly instead of throwing deep in the renderer.
+    if (!document.createElement('canvas').getContext('webgl2')) {
+        fail('This browser or device does not support WebGL 2');
+        return;
+    }
     const tier = detectGpuTier();
     const renderer = createRenderer(container, tier);
+    // Mobile GPUs drop the context when backgrounded or memory-starved. Streamed
+    // chunks and render targets would all need rebuilding, so reload instead.
+    renderer.domElement.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        fail('Graphics reset — reloading…');
+        setTimeout(() => location.reload(), 800);
+    });
     const scene = new THREE.Scene();
 
     const ts = TIER_SETTINGS[tier];
-    const world = await buildSphereWorld(SEED, scene, setProgress);
+    const world = await buildSphereWorld(SEED, scene, setProgress, ts.streamRadius, ts.grassDensity);
 
     const fpCam = new FPCamera(container.clientWidth / container.clientHeight, renderer.domElement, ts.cameraFar);
     const atmo = new Atmosphere(scene, 800, tier);
@@ -176,7 +194,7 @@ async function start(): Promise<void> {
         rig: { setZoomRange: () => {} },
         atmo,
         input: fpCam,
-        world: null as any,
+        world: { streaming: world.streaming } as any,
         dayNight,
         seed: { currentWord: () => currentSeedWord, push: pushSeedUrl, gen: genSeedWord },
     });
@@ -251,7 +269,7 @@ async function start(): Promise<void> {
 
     // Initial camera frame
     fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
-    world.streaming.update(controller.dir, undefined);
+    world.streaming.update(controller.dir);
     const camPos = fpCam.camera.position;
     atmo.followTarget(camPos.x, camPos.z);
 
@@ -305,7 +323,7 @@ async function start(): Promise<void> {
         }
 
         const streamDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
-        world.streaming.update(streamDir, drone.active || fly.active ? 0.0 : undefined);
+        world.streaming.update(streamDir);
         world.streaming.tick(dt);
 
         const camPos2 = fpCam.camera.position;
@@ -404,6 +422,5 @@ async function start(): Promise<void> {
 
 start().catch((err: unknown) => {
     console.error(err);
-    (subEl as HTMLElement).textContent = 'Unable to start';
-    (subEl as HTMLElement).classList.add('error');
+    fail('Unable to start');
 });

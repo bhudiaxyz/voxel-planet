@@ -2,21 +2,13 @@
  * Lightweight GPU tier detection.
  *
  * Buckets:
- *   high         — desktop discrete GPU (≥8 cores, ≥6 GB, large texture units)
- *   mobile-high  — flagship phone/iPad (≥8 cores, ≥8 GB mobile)
- *   mid          — laptop / modern tablet / capable mid-range phone
- *   low          — older or constrained desktop device
- *   very-low     — 7-year-old or weaker mobile
+ *   high         — desktop discrete GPU or Apple Silicon Mac
+ *   mobile-high  — flagship phone / any recent iPad
+ *   mid          — modern integrated laptop GPU, upper-mid phone
+ *   low          — older integrated laptop GPU, software rendering
+ *   very-low     — old/budget phone, or no WebGL2
  *
- * Samsung Galaxy S22 Ultra (8-core, 12 GB)     → mobile-high
- * Apple iPad Pro M2 (8-core, 8 GB)             → mobile-high (Safari: deviceMemory absent, probe=4, threshold ≥4 catches it)
- * Apple iPad Air M2 (8-core, 4 GB)             → mobile-high
- * Apple iPad Air A14 (6-core, 4 GB)            → mid
- * MacBook Air M2 (8-core, 8 GB, no mobile UA)  → high  (maxTex=16384)
- * Intel UHD laptop (8-core, 16 GB, maxTex≤8192)→ mid   (downclassed by texture probe)
- * 2019 mid-range phone (6-core, 3 GB)          → mid
- * Budget phone (4-core, 2 GB, WebGL2)          → low (desktop) / very-low (mobile)
- * 7-year-old mobile (no WebGL2)                → very-low
+ * See classifyGpu() for the reference-device table.
  */
 
 export type GpuTier = 'high' | 'mobile-high' | 'mid' | 'low' | 'very-low';
@@ -48,12 +40,14 @@ export interface TierSettings {
     nightSkyFull: boolean;
     /** Anti-aliasing quality. 'smaa' = full SMAA, 'fxaa' = single-pass, 'none' = off. */
     aaQuality: 'smaa' | 'fxaa' | 'none';
-    /** Chunk stream radius in chunk units. Lower = fewer draw calls on weak devices. */
+    /** Terrain stream radius in chunks (~28 surface units each). The outer quarter dither-fades out. */
     streamRadius: number;
     /** Water plane subdivision (NxN quads). Higher = smoother waves but more vertices. */
     waterSubdivision: number;
     /** Particle instance count for leaves/dust effects. */
     particleCount: number;
+    /** Grass tuft coverage, 0..1. Trees are kept at every tier. */
+    grassDensity: number;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -72,9 +66,10 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: true,
         nightSkyFull: true,
         aaQuality: 'smaa',
-        streamRadius: 12,
+        streamRadius: 16,
         waterSubdivision: 64,
         particleCount: 1200,
+        grassDensity: 1,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -90,9 +85,10 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: true,
         nightSkyFull: true,
         aaQuality: 'smaa',
-        streamRadius: 11,
+        streamRadius: 12,
         waterSubdivision: 32,
         particleCount: 700,
+        grassDensity: 0.7,
     },
     mid: {
         dprCap: 1.25,
@@ -108,9 +104,10 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: true,
         nightSkyFull: true,
         aaQuality: 'smaa',
-        streamRadius: 11,
+        streamRadius: 13,
         waterSubdivision: 32,
         particleCount: 600,
+        grassDensity: 0.8,
     },
     low: {
         dprCap: 1,
@@ -126,9 +123,10 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: false,
         nightSkyFull: false,
         aaQuality: 'fxaa',
-        streamRadius: 8,
+        streamRadius: 9,
         waterSubdivision: 16,
         particleCount: 200,
+        grassDensity: 0.45,
     },
     'very-low': {
         dprCap: 1,
@@ -144,79 +142,116 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: false,
         nightSkyFull: false,
         aaQuality: 'none',
-        streamRadius: 6,
+        streamRadius: 7,
         waterSubdivision: 4,
         particleCount: 0,
+        grassDensity: 0.25,
     },
 };
 
+/** What the hardware probe saw — kept for the HUD/debug overlay and for tests. */
+export interface GpuProbe {
+    renderer: string;
+    webgl2: boolean;
+    mobile: boolean;
+    cores: number;
+    memGB: number | undefined;
+}
+
+export function probeGpu(): GpuProbe {
+    const cores = navigator.hardwareConcurrency || 4;
+    const ua = navigator.userAgent;
+    // iPadOS 13+ Safari reports a desktop Mac UA; touch points give it away
+    // (no Mac has a touchscreen).
+    const iPadOS = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    const mobile = iPadOS || /Mobi|Android|iPad|iPhone|iPod/i.test(ua);
+
+    let renderer = '';
+    let webgl2 = false;
+    try {
+        const gl = document.createElement('canvas').getContext('webgl2');
+        if (gl) {
+            webgl2 = true;
+            // Chrome/Edge/Safari 16+ expose the real renderer string through
+            // RENDERER; the debug extension is only needed on older browsers.
+            const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+            renderer = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+            // Release the probe context — holding it occupies GPU memory until the tab closes.
+            gl.getExtension('WEBGL_lose_context')?.loseContext();
+        }
+    } catch {
+        /* treated as no WebGL2 */
+    }
+    return { renderer, webgl2, mobile, cores, memGB: (navigator as any).deviceMemory };
+}
+
 /**
- * Detect GPU tier from hardware signals.
+ * Classify a probe into a tier. Pure, so it can be checked without a browser.
  *
- * Uses hardwareConcurrency, deviceMemory (with canvas-timing fallback for
- * Firefox/Safari), MAX_TEXTURE_SIZE (discriminates integrated vs discrete GPU),
- * WebGL2 availability, and UA mobile detection.
+ * The GPU name is the primary signal. MAX_TEXTURE_SIZE was used before, but
+ * ANGLE reports 16384 for current Intel/AMD integrated GPUs too, so it no
+ * longer separates them from discrete cards. Core count and deviceMemory are
+ * secondary — Safari/Firefox omit deviceMemory, so it is only ever used to
+ * push a device down, never up.
+ *
+ * Reference devices (≤7 years old as of 2026):
+ *   Desktop RTX/RX/Arc discrete              → high
+ *   Apple M-series Mac                        → high
+ *   Intel Iris Xe / Arc iGPU / Radeon iGPU    → mid
+ *   Intel UHD/HD 6xx (2017–2020 laptops)      → low
+ *   iPad (any, A12+/M-series; "Apple GPU")    → mobile-high (A12–A13: still fine at mobile-high caps)
+ *   iPhone XS+ ("Apple GPU")                  → mobile-high
+ *   Galaxy S22 Ultra (Adreno 730 / Xclipse 920) → mobile-high
+ *   Adreno 6xx / Mali-G7x (2019–2021 mid/flagship) → mid
+ *   Adreno 5xx / Mali-G5x/T-series, PowerVR   → very-low
+ *   No WebGL2                                 → very-low
+ */
+export function classifyGpu(p: GpuProbe): GpuTier {
+    if (!p.webgl2) return 'very-low';
+    const r = p.renderer.toLowerCase();
+    const weakMem = p.memGB !== undefined && p.memGB <= 2;
+    const software = /swiftshader|llvmpipe|software|microsoft basic render/.test(r);
+    if (software) return p.mobile ? 'very-low' : 'low';
+
+    if (p.mobile) {
+        if (weakMem || p.cores <= 4) return 'very-low';
+        // Apple hides the model behind "Apple GPU"; every iOS/iPadOS device that
+        // runs a WebGL2-capable Safari (A12+, 2018+) handles mobile-high caps.
+        if (/apple/.test(r)) return 'mobile-high';
+        const adreno = /adreno[^0-9]*(\d{3})/.exec(r);
+        if (adreno) {
+            const n = +adreno[1];
+            return n >= 700 ? 'mobile-high' : n >= 610 ? 'mid' : 'very-low';
+        }
+        if (/xclipse|immortalis/.test(r)) return 'mobile-high';
+        const mali = /mali-g(\d+)/.exec(r);
+        if (mali) return +mali[1] >= 710 || +mali[1] === 78 || +mali[1] === 77 || +mali[1] === 76 ? 'mid' : 'very-low';
+        // Unknown mobile GPU: middle of the road beats guessing high.
+        return p.cores >= 8 ? 'mid' : 'very-low';
+    }
+
+    if (weakMem || p.cores <= 2) return 'low';
+    // Discrete GPUs and Apple Silicon.
+    if (/nvidia|geforce|quadro|rtx|radeon (rx|pro)|\brx ?\d{3,4}|apple m\d|apple gpu/.test(r) && !/radeon\(tm\) graphics|vega \d+ graphics/.test(r))
+        return p.cores >= 4 ? 'high' : 'mid';
+    // Intel Arc discrete (A-series) vs Arc integrated (Core Ultra "Arc(TM) Graphics" / "Arc Pro 1xxT").
+    if (/arc\(tm\) a\d{3}/.test(r)) return 'high';
+    // Modern integrated: Arc iGPU, Iris Xe, Radeon 680M/780M-class.
+    if (/arc|iris\(r\) xe|iris xe|radeon\(tm\) (6|7|8)\d0m|radeon(\(tm\))? graphics/.test(r)) return 'mid';
+    // Older Intel UHD/HD and Iris Plus.
+    if (/intel/.test(r)) return 'low';
+    // Unknown desktop renderer (e.g. masked by privacy settings): fall back to cores.
+    return p.cores >= 8 ? 'mid' : 'low';
+}
+
+const TIERS: GpuTier[] = ['high', 'mobile-high', 'mid', 'low', 'very-low'];
+
+/**
+ * Detect GPU tier. `?tier=<name>` in the URL overrides detection, for testing
+ * a phone profile on a desktop or rescuing a misclassified device.
  */
 export function detectGpuTier(): GpuTier {
-    const cores = navigator.hardwareConcurrency ?? 4;
-    const mobile = /Mobi|Android|iPad|iPhone|iPod/i.test(navigator.userAgent);
-
-    // WebGL2 absence is a strong low-tier signal on 7-year-old devices.
-    const gl2 = (() => {
-        try {
-            return document.createElement('canvas').getContext('webgl2');
-        } catch {
-            return null;
-        }
-    })();
-    const hasWebGL2 = !!gl2;
-
-    // MAX_TEXTURE_SIZE: integrated Intel/AMD tops out at 8192; discrete and all
-    // Apple Silicon report 16384+. This is the most reliable way to separate
-    // a 16-core i9 laptop with integrated graphics from a desktop discrete GPU.
-    const maxTexSize: number = gl2 ? (gl2.getParameter(gl2.MAX_TEXTURE_SIZE) as number) : 4096;
-    // Release the probe context — it has served its purpose and holding it
-    // occupies GPU memory until the tab closes.
-    gl2?.getExtension('WEBGL_lose_context')?.loseContext();
-
-    // deviceMemory is absent on Firefox/Safari; fall back to a canvas timing
-    // probe or WebGL2 presence as a proxy.
-    const declaredMem = (navigator as any).deviceMemory as number | undefined;
-    const estimatedMem =
-        declaredMem ??
-        (() => {
-            if (!hasWebGL2) return 1;
-            try {
-                const cv = document.createElement('canvas');
-                cv.width = cv.height = 512;
-                const ctx = cv.getContext('2d');
-                if (!ctx) return 4;
-                const t0 = performance.now();
-                for (let i = 0; i < 20; i++) ctx.fillRect(0, 0, 512, 512);
-                return performance.now() - t0 > 15 ? 2 : 4;
-            } catch {
-                return 4;
-            }
-        })();
-
-    // very-low: no WebGL2, or weak mobile hardware
-    if (mobile && (!hasWebGL2 || cores <= 4 || estimatedMem <= 2)) return 'very-low';
-    // low: weak desktop/non-mobile (≤4 cores OR ≤2 GB)
-    if (cores <= 4 || estimatedMem <= 2) return 'low';
-
-    // mobile-high: flagship phone/tablet (replaces old 'high' mobile path to avoid
-    // enabling EdgeMask on mobile, which doubles draw calls for little visual gain)
-    if (mobile && cores >= 8 && estimatedMem >= 4) return 'mobile-high';
-
-    // high: desktop with discrete GPU — requires large texture units to exclude
-    // integrated Intel/AMD which tops out at maxTexSize=8192.
-    if (!mobile && cores >= 8 && estimatedMem >= 6 && maxTexSize >= 16384) return 'high';
-
-    // mid: capable device — requires BOTH ≥6 cores AND ≥3 GB.
-    // Also catches integrated-GPU desktops (maxTexSize≤8192) that would otherwise
-    // hit high but can't sustain EdgeMask + 3072 shadow.
-    if (cores >= 6 && estimatedMem >= 3) return 'mid';
-
-    // anything else (e.g. 6-core/2 GB or 4-core/4 GB) falls to low
-    return 'low';
+    const forced = new URLSearchParams(location.search).get('tier') as GpuTier | null;
+    if (forced && TIERS.includes(forced)) return forced;
+    return classifyGpu(probeGpu());
 }

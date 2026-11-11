@@ -486,22 +486,85 @@ function buildSphereMeshChunk(
 }
 
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
-const COS_LOAD = 0.71; // ~45° angular radius
-const COS_UNLOAD = 0.64; // ~50° — small hysteresis
+/** Angle one chunk spans at a cube-face centre (columns shrink slightly toward the corners). */
+const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
+/** Unload a little past the load edge so walking along the boundary doesn't thrash. */
+const UNLOAD_MARGIN = 1.5;
+/** Rescan the planet only after moving this far (radians) — about a third of a chunk. */
+const RESCAN_ANGLE = CHUNK_ANGLE / 3;
+/** Main-thread time allowed for chunk meshing per frame. At least one chunk always builds. */
+const BUILD_BUDGET_MS = 4;
+/** Outer fraction of the load radius that dither-fades out with distance. */
+const FADE_BAND = 0.28;
+/** Beyond this (chunks), outlines are hidden and chunks stop casting shadows. */
+const DETAIL_RADIUS = 7;
 
-export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadCos?: number; unloadCos?: number } = {}) {
+/**
+ * Streams terrain chunks within `loadRadius` chunks (great-circle) of the player.
+ *
+ * The radius is the tier's ceiling; `setLoadRadius` (the settings slider) can
+ * lower it but never raise it past what the device was classed for. Beyond
+ * ~10 chunks (~280 units) the aerial haze is opaque, so more would be invisible.
+ */
+export interface ChunkListener {
+    chunkLoaded(face: number, u0: number, v0: number): void;
+    chunkUnloaded(face: number, u0: number, v0: number): void;
+}
+
+export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number } = {}) {
     const meshes = createMeshRoots();
     const loaded = new Map<string, any>();
     const fadingMeshes = new Set<any>();
-    let loadQueue: Array<[number, number, number]> = [];
+    let loadQueue: Array<{ face: number; ci: number; ck: number; dot: number }> = [];
     let disposed = false;
-    const loadCos = opts.loadCos ?? COS_LOAD;
-    const unloadCos = opts.unloadCos ?? COS_UNLOAD;
+    const maxRadius = opts.loadRadius ?? 10;
+    let radius = maxRadius;
+    let loadCos = 1,
+        unloadCos = 1;
+    const fadeUniforms = meshes.material.userData.uniforms;
+    let detailCos = 1;
+    const setCos = () => {
+        loadCos = Math.cos(radius * CHUNK_ANGLE);
+        unloadCos = Math.cos((radius + UNLOAD_MARGIN) * CHUNK_ANGLE);
+        detailCos = Math.cos(Math.min(DETAIL_RADIUS, radius) * CHUNK_ANGLE);
+        // Fade band in world units along the ground (chord ≈ arc at these angles).
+        // Measured from the camera, so it fades against what's on screen.
+        const surf = PLANET_RADIUS + 14;
+        fadeUniforms.uFadeFar.value = radius * CHUNK_ANGLE * surf;
+        fadeUniforms.uFadeNear.value = radius * (1 - FADE_BAND) * CHUNK_ANGLE * surf;
+    };
+    let listener: ChunkListener | null = null;
+    /** Chunks whose detail state (outlines/shadow) last applied; flipped as the player moves. */
+    const detailed = new Map<string, boolean>();
+    setCos();
+    const lastScan = new THREE.Vector3();
+    let forceScan = true;
 
-    const _n = new THREE.Vector3(),
-        _tu = new THREE.Vector3(),
-        _tv = new THREE.Vector3();
-    const _chunkDir = new THREE.Vector3();
+    // Chunk centre directions never change — compute all 3,750 once.
+    const chunkDirs = new Float32Array(6 * CHUNKS_PER_FACE_EDGE * CHUNKS_PER_FACE_EDGE * 3);
+    {
+        const n = new THREE.Vector3(),
+            tu = new THREE.Vector3(),
+            tv = new THREE.Vector3(),
+            d = new THREE.Vector3();
+        let o = 0;
+        for (let face = 0; face < 6; face++) {
+            basisFromCode(face, n, tu, tv);
+            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
+                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
+                    const u = (ci + 0.5) * CHUNK,
+                        v = (ck + 0.5) * CHUNK;
+                    d.copy(n)
+                        .addScaledVector(tu, (2 * u) / FACE_RES - 1)
+                        .addScaledVector(tv, (2 * v) / FACE_RES - 1)
+                        .normalize();
+                    chunkDirs[o++] = d.x;
+                    chunkDirs[o++] = d.y;
+                    chunkDirs[o++] = d.z;
+                }
+            }
+        }
+    }
 
     const keyOf = (face: number, ci: number, ck: number) => `${face},${ci},${ck}`;
 
@@ -521,12 +584,21 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadCos
         }
     };
 
-    const loadChunk = (face: number, ci: number, ck: number) => {
+    const setDetail = (record: any, on: boolean) => {
+        if (record.edges) record.edges.visible = on;
+        if (record.solid) record.solid.castShadow = on;
+    };
+
+    const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
         const key = keyOf(face, ci, ck);
         if (loaded.has(key) || disposed) return;
         const record = buildSphereMeshChunk(grid, face, ci, ck, meshes);
-        initFade(record);
+        if (fade) initFade(record);
+        const near = dot >= detailCos;
+        setDetail(record, near);
+        detailed.set(key, near);
         loaded.set(key, record);
+        listener?.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
     };
 
     const unloadChunk = (key: string) => {
@@ -538,66 +610,80 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadCos
         }
         removeMeshChunk(meshes, record);
         loaded.delete(key);
+        detailed.delete(key);
+        const [face, ci, ck] = key.split(',').map(Number);
+        listener?.chunkUnloaded(face, ci * CHUNK, ck * CHUNK);
+    };
+
+    const scan = (playerDir: THREE.Vector3) => {
+        lastScan.copy(playerDir);
+        forceScan = false;
+        loadQueue = [];
+        const keep = new Set<string>();
+        let o = 0;
+        for (let face = 0; face < 6; face++) {
+            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
+                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++, o += 3) {
+                    const dot = chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
+                    if (dot < unloadCos) continue;
+                    const key = keyOf(face, ci, ck);
+                    keep.add(key);
+                    const record = loaded.get(key);
+                    if (record) {
+                        const near = dot >= detailCos;
+                        if (detailed.get(key) !== near) {
+                            setDetail(record, near);
+                            detailed.set(key, near);
+                        }
+                    } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
+                }
+            }
+        }
+        // Closest first; popped from the end.
+        loadQueue.sort((a, b) => a.dot - b.dot);
+        for (const key of loaded.keys()) if (!keep.has(key)) unloadChunk(key);
     };
 
     return {
         meshes,
-
-        update(playerDir: THREE.Vector3, overrideCos?: number) {
-            loadQueue = [];
-            const desired = new Set<string>();
-            const activeCos = overrideCos ?? loadCos;
-
-            for (let face = 0; face < 6; face++) {
-                basisFromCode(face, _n, _tu, _tv);
-                for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
-                    for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
-                        const u = (ci + 0.5) * CHUNK,
-                            v = (ck + 0.5) * CHUNK;
-                        _chunkDir
-                            .copy(_n)
-                            .addScaledVector(_tu, (2 * u) / FACE_RES - 1)
-                            .addScaledVector(_tv, (2 * v) / FACE_RES - 1)
-                            .normalize();
-                        const dot = _chunkDir.dot(playerDir);
-                        if (dot >= activeCos) {
-                            const key = keyOf(face, ci, ck);
-                            desired.add(key);
-                            if (!loaded.has(key)) loadQueue.push([face, ci, ck]);
-                        }
-                    }
-                }
-            }
-
-            // Sort load queue by angular proximity (closest first)
-            loadQueue.sort(([fa, ca, ka], [fb, cb, kb]) => {
-                const da = new THREE.Vector3();
-                basisFromCode(fa, _n, _tu, _tv);
-                const ua = (ca + 0.5) * CHUNK,
-                    va = (ka + 0.5) * CHUNK;
-                da.copy(_n)
-                    .addScaledVector(_tu, (2 * ua) / FACE_RES - 1)
-                    .addScaledVector(_tv, (2 * va) / FACE_RES - 1)
-                    .normalize();
-                const dotA = da.dot(playerDir);
-                basisFromCode(fb, _n, _tu, _tv);
-                const ub = (cb + 0.5) * CHUNK,
-                    vb = (kb + 0.5) * CHUNK;
-                da.copy(_n)
-                    .addScaledVector(_tu, (2 * ub) / FACE_RES - 1)
-                    .addScaledVector(_tv, (2 * vb) / FACE_RES - 1)
-                    .normalize();
-                const dotB = da.dot(playerDir);
-                return dotB - dotA;
-            });
-
-            // Unload far chunks
+        get loadRadius() {
+            return radius;
+        },
+        get loadedCount() {
+            return loaded.size;
+        },
+        get pendingCount() {
+            return loadQueue.length;
+        },
+        /** Something that tracks chunk load/unload — the vegetation layer. */
+        setListener(l: ChunkListener) {
+            listener = l;
             for (const key of loaded.keys()) {
-                if (!desired.has(key)) unloadChunk(key);
+                const [face, ci, ck] = key.split(',').map(Number);
+                l.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
             }
+        },
+        setLoadRadius(r: number) {
+            const next = Math.max(3, Math.min(maxRadius, Math.round(r)));
+            if (next === radius) return;
+            radius = next;
+            setCos();
+            forceScan = true;
+        },
 
-            // Load up to 4 chunks per update to avoid frame spikes
-            for (const [face, ci, ck] of loadQueue.splice(0, 4)) loadChunk(face, ci, ck);
+        /**
+         * @param budgetMs main-thread meshing budget this call. Pass Infinity at
+         *        startup to fill the view before the first frame (no fade-in then).
+         */
+        update(playerDir: THREE.Vector3, budgetMs = BUILD_BUDGET_MS) {
+            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
+            const fade = Number.isFinite(budgetMs);
+            const t0 = performance.now();
+            do {
+                const next = loadQueue.pop();
+                if (!next) break;
+                loadChunk(next.face, next.ci, next.ck, next.dot, fade);
+            } while (performance.now() - t0 < budgetMs);
         },
 
         tick(dt: number) {
@@ -2311,6 +2397,7 @@ const FRAG_DECL = /* glsl */ `
   varying vec3 vNrmW;
   varying vec3 vPosW;
   uniform float uLodAlpha;
+  uniform float uFadeNear, uFadeFar;
   uniform float uAoStrength;
   uniform float uPlanetRadius;
   uniform float uSeaLevelRadius;
@@ -2404,7 +2491,10 @@ const BAYER_DITHER_GLSL = /* glsl */ `
     int bx = int(gl_FragCoord.x) & 3;
     int by = int(gl_FragCoord.y) & 3;
     float threshold = (bayer[by * 4 + bx] + 0.5) / 16.0;
-    if (uLodAlpha < threshold) discard;
+    // Chunk fade-in on load, times the distance fade at the edge of the stream
+    // radius: far terrain screen-doors out instead of ending in a hard rim.
+    float distFade = 1.0 - smoothstep(uFadeNear, uFadeFar, distance(vPosW, cameraPosition));
+    if (uLodAlpha * distFade < threshold) discard;
   }
 `;
 
@@ -2538,6 +2628,9 @@ export function makeVoxelMaterial() {
     });
     mat.userData.uniforms = {
         uLodAlpha: { value: 1.0 },
+        /* Distance dither: fully drawn inside uFadeNear, gone at uFadeFar (world units from camera). */
+        uFadeNear: { value: 1e9 },
+        uFadeFar: { value: 2e9 },
         uAoStrength: { value: 0.25 },
         uAoTint: { value: new THREE.Color(0.64, 0.59, 0.74) },
         uShadowHue: { value: new THREE.Vector3(1.05, 0.9, 1.18) },
@@ -2594,7 +2687,7 @@ export function makeVoxelMaterial() {
             );
         mat.userData.shader = shader;
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v9';
+    mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v10';
     return mat;
 }
 
