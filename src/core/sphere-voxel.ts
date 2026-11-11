@@ -38,7 +38,7 @@ const _FTV = [
 ];
 
 /** Convert (face, u, v) where u or v may be out of [0, FACE_RES) to the canonical face+UV. */
-function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
+export function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
     const n = _FN[face],
         tu = _FTU[face],
         tv = _FTV[face];
