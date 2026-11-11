@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
+import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 import { BLOCK_BY_ID, WATER } from '../core/palette';
-import { LandmarkRecord } from '../world/sphere-landmarks';
+import { LandmarkRecord } from '../world/landmarks';
 
 const SEA_LAYER = 11; // must match sphere-terrain / sphere-landmarks
 

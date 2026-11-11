@@ -16,11 +16,194 @@ import * as THREE from 'three';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { BLOCK_BY_ID, WATER, LIGHT } from './palette';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from './sphere-voxel';
 import { basisFromCode } from './geoutil';
 
+/* ================================================================== *
+ * Sphere voxel grid: six cube faces of FACE_RES² columns, SHELL_DEPTH layers.
+ * ================================================================== */
+export const PLANET_RADIUS = 350;
+export const FACE_RES = 400;
+export const SHELL_DEPTH = 96;
+
+// Precomputed face bases matching basisFromCode:
+//   face 0 +X: n=(1,0,0), tu=(0,1,0), tv=(0,0,1)
+//   face 1 -X: n=(-1,0,0), tu=(0,1,0), tv=(0,0,-1)
+//   face 2 +Y: n=(0,1,0), tu=(1,0,0), tv=(0,0,-1)
+//   face 3 -Y: n=(0,-1,0), tu=(1,0,0), tv=(0,0,1)
+//   face 4 +Z: n=(0,0,1), tu=(0,1,0), tv=(-1,0,0)
+//   face 5 -Z: n=(0,0,-1), tu=(0,1,0), tv=(1,0,0)
+const _FN = [
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+];
+const _FTU = [
+    [0, 1, 0],
+    [0, 1, 0],
+    [1, 0, 0],
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 1, 0],
+];
+const _FTV = [
+    [0, 0, 1],
+    [0, 0, -1],
+    [0, 0, -1],
+    [0, 0, 1],
+    [-1, 0, 0],
+    [1, 0, 0],
+];
+
+/** Convert (face, u, v) where u or v may be out of [0, FACE_RES) to the canonical face+UV. */
+export function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
+    const n = _FN[face],
+        tu = _FTU[face],
+        tv = _FTV[face];
+    // Column centre in cube space (unnormalised — dominant axis determines new face)
+    const pu = (2 * (u + 0.5)) / FACE_RES - 1;
+    const pv = (2 * (v + 0.5)) / FACE_RES - 1;
+    const cx = n[0] + tu[0] * pu + tv[0] * pv;
+    const cy = n[1] + tu[1] * pu + tv[1] * pv;
+    const cz = n[2] + tu[2] * pu + tv[2] * pv;
+    // Find dominant axis → new face
+    const ax = Math.abs(cx),
+        ay = Math.abs(cy),
+        az = Math.abs(cz);
+    let axis = 0;
+    if (ay > ax) axis = 1;
+    if (az > Math.max(ax, ay)) axis = 2;
+    const comp = axis === 0 ? cx : axis === 1 ? cy : cz;
+    const f2 = axis * 2 + (comp < 0 ? 1 : 0);
+    // Project cube vector onto new face plane
+    const n2 = _FN[f2],
+        tu2 = _FTU[f2],
+        tv2 = _FTV[f2];
+    const dn = cx * n2[0] + cy * n2[1] + cz * n2[2];
+    const du = cx * tu2[0] + cy * tu2[1] + cz * tu2[2];
+    const dv = cx * tv2[0] + cy * tv2[1] + cz * tv2[2];
+    const u2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((du / dn + 1) * FACE_RES) / 2)));
+    const v2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((dv / dn + 1) * FACE_RES) / 2)));
+    return [f2, u2, v2];
+}
+
+export class SphereVoxelGrid {
+    readonly data: Uint8Array;
+    // highest solid layer per column, -1 if empty
+    readonly surfaceLayer: Int16Array;
+    /**
+     * Ground-cover plant per column (a block id, 0 = none) drawn as sprite
+     * vegetation on top of the column instead of as a voxel cube.
+     */
+    readonly plants: Uint8Array;
+
+    constructor() {
+        // ponytail: 92 MB for the voxel data; acceptable on desktop
+        this.data = new Uint8Array(6 * FACE_RES * FACE_RES * SHELL_DEPTH);
+        this.surfaceLayer = new Int16Array(6 * FACE_RES * FACE_RES).fill(-1);
+        this.plants = new Uint8Array(6 * FACE_RES * FACE_RES);
+    }
+
+    plantAt(face: number, u: number, v: number): number {
+        if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return 0;
+        return this.plants[this.colIdx(face, u, v)];
+    }
+
+    setPlant(face: number, u: number, v: number, id: number): void {
+        this.plants[this.colIdx(face, u, v)] = id;
+    }
+
+    private idx(face: number, u: number, v: number, layer: number): number {
+        return ((face * FACE_RES + v) * FACE_RES + u) * SHELL_DEPTH + layer;
+    }
+
+    private colIdx(face: number, u: number, v: number): number {
+        return (face * FACE_RES + v) * FACE_RES + u;
+    }
+
+    get(face: number, u: number, v: number, layer: number): number {
+        if (
+            face < 0 ||
+            face >= 6 ||
+            u < 0 ||
+            u >= FACE_RES ||
+            v < 0 ||
+            v >= FACE_RES ||
+            layer < 0 ||
+            layer >= SHELL_DEPTH
+        )
+            return 0;
+        return this.data[this.idx(face, u, v, layer)];
+    }
+
+    set(face: number, u: number, v: number, layer: number, id: number): void {
+        if (
+            face < 0 ||
+            face >= 6 ||
+            u < 0 ||
+            u >= FACE_RES ||
+            v < 0 ||
+            v >= FACE_RES ||
+            layer < 0 ||
+            layer >= SHELL_DEPTH
+        )
+            return;
+        this.data[this.idx(face, u, v, layer)] = id;
+        const col = this.colIdx(face, u, v);
+        if (id !== 0) {
+            if (layer > this.surfaceLayer[col]) this.surfaceLayer[col] = layer;
+        } else if (this.surfaceLayer[col] === layer) {
+            let l = layer - 1;
+            while (l >= 0 && this.data[this.idx(face, u, v, l)] === 0) l--;
+            this.surfaceLayer[col] = l;
+        }
+    }
+
+    isSolid(face: number, u: number, v: number, layer: number): boolean {
+        const id = this.get(face, u, v, layer);
+        return id !== 0 && !(BLOCK_BY_ID[id] as any)?.isWater;
+    }
+
+    /** Like isSolid but crosses face boundaries when u/v are out of [0, FACE_RES). */
+    isSolidGlobal(face: number, u: number, v: number, layer: number): boolean {
+        if (u >= 0 && u < FACE_RES && v >= 0 && v < FACE_RES) return this.isSolid(face, u, v, layer);
+        const [f2, u2, v2] = crossFaceUV(face, u, v);
+        return this.isSolid(f2, u2, v2, layer);
+    }
+
+    /** Highest solid layer in the column, or -1 if empty. */
+    columnTop(face: number, u: number, v: number): number {
+        if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
+        return this.surfaceLayer[this.colIdx(face, u, v)];
+    }
+
+    /** Highest walkable (non-foliage) layer — ignores TRUNK, LEAF, and air. */
+    groundColumnTop(face: number, u: number, v: number): number {
+        if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
+        let l = this.surfaceLayer[this.colIdx(face, u, v)];
+        while (l >= 0) {
+            const id = this.data[this.idx(face, u, v, l)];
+            if (id === 0) {
+                l--;
+                continue;
+            }
+            const b = BLOCK_BY_ID[id] as any;
+            if (!b?.sway && !b?.isTrunk) break;
+            l--;
+        }
+        return l;
+    }
+
+    /** World-space radius of the surface (columnTop + 1 above planet centre), min PLANET_RADIUS. */
+    surfaceRadius(face: number, u: number, v: number): number {
+        const top = this.groundColumnTop(face, u, v);
+        return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
+    }
+}
+
 export const CHUNK = 16;
-export const DEFAULT_STREAM_RADIUS = 12;
 
 /**
  * Objects on this layer are drawn only by the edge-mask pass, never by the
@@ -30,106 +213,6 @@ export const EDGE_LAYER = 2;
 
 /* ================================================================== *
  * VoxelGrid
- * ================================================================== */
-export class VoxelGrid {
-    sx: number;
-    sy: number;
-    sz: number;
-    data: Uint8Array;
-    /** highest solid voxel per column, for fast ground queries */
-    height: Int16Array;
-
-    constructor(sx: number, sy: number, sz: number) {
-        this.sx = sx;
-        this.sy = sy;
-        this.sz = sz;
-        this.data = new Uint8Array(sx * sy * sz);
-        this.height = new Int16Array(sx * sz).fill(-1);
-    }
-
-    idx(x: number, y: number, z: number) {
-        return (y * this.sz + z) * this.sx + x;
-    }
-
-    inside(x: number, y: number, z: number) {
-        return x >= 0 && y >= 0 && z >= 0 && x < this.sx && y < this.sy && z < this.sz;
-    }
-
-    get(x: number, y: number, z: number) {
-        if (!this.inside(x, y, z)) return 0;
-        return this.data[this.idx(x, y, z)];
-    }
-
-    set(x: number, y: number, z: number, id: number) {
-        if (!this.inside(x, y, z)) return;
-        this.data[this.idx(x, y, z)] = id;
-        const h = z * this.sx + x;
-        if (id !== 0) {
-            if (y > this.height[h]) this.height[h] = y;
-        } else if (this.height[h] === y) {
-            let yy = y - 1;
-            while (yy >= 0 && this.data[this.idx(x, yy, z)] === 0) yy--;
-            this.height[h] = yy;
-        }
-    }
-
-    /** y of the topmost solid block in a column, or -1. */
-    columnTop(x: number, z: number) {
-        if (x < 0 || z < 0 || x >= this.sx || z >= this.sz) return -1;
-        return this.height[z * this.sx + x];
-    }
-
-    /** World-space Y of the surface (top + 1), or 0 if the column is empty. */
-    surfaceY(x: number, z: number): number {
-        const t = this.columnTop(Math.round(x), Math.round(z));
-        return t < 0 ? 0 : t + 1;
-    }
-
-    isSolid(x: number, y: number, z: number) {
-        const id = this.get(x, y, z);
-        return id !== 0 && !BLOCK_BY_ID[id]?.isWater;
-    }
-
-    /** Fill an axis-aligned box (inclusive bounds). */
-    box(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, id: number) {
-        for (let y = y0; y <= y1; y++)
-            for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) this.set(x, y, z, id);
-    }
-
-    /** Fill a sphere/ellipsoid, optionally with a predicate for shaping. */
-    ellipsoid(
-        cx: number,
-        cy: number,
-        cz: number,
-        rx: number,
-        ry: number,
-        rz: number,
-        id: number,
-        predicate: ((x: number, y: number, z: number, d: number) => boolean) | null = null,
-    ) {
-        const x0 = Math.floor(cx - rx),
-            x1 = Math.ceil(cx + rx);
-        const y0 = Math.floor(cy - ry),
-            y1 = Math.ceil(cy + ry);
-        const z0 = Math.floor(cz - rz),
-            z1 = Math.ceil(cz + rz);
-        for (let y = y0; y <= y1; y++)
-            for (let z = z0; z <= z1; z++)
-                for (let x = x0; x <= x1; x++) {
-                    const dx = (x + 0.5 - cx) / rx,
-                        dy = (y + 0.5 - cy) / ry,
-                        dz = (z + 0.5 - cz) / rz;
-                    const d = dx * dx + dy * dy + dz * dz;
-                    if (d <= 1.0 && (!predicate || predicate(x, y, z, Math.sqrt(d)))) this.set(x, y, z, id);
-                }
-    }
-}
-
-/* ================================================================== *
- * Face table
- *
- * Each face lists its normal, its 4 corner offsets in CCW winding, and the
- * two in-plane axes so we can derive AO neighbours generically.
  * ================================================================== */
 const FACES = [
     {
@@ -351,101 +434,6 @@ function createMeshRoots() {
     };
 }
 
-function edgeBelongsToChunk(edge: any, ci: any, ck: any, grid: any) {
-    // Unit edges lying exactly on a chunk plane need one stable owner. Using
-    // the cell on the positive side means every edge is emitted once, while the
-    // one-block meshing halo still supplies both of its owning faces.
-    const midpointX = (edge.start[0] + edge.end[0]) * 0.5;
-    const midpointZ = (edge.start[2] + edge.end[2]) * 0.5;
-    const cellX = THREE.MathUtils.clamp(Math.floor(midpointX), 0, grid.sx - 1);
-    const cellZ = THREE.MathUtils.clamp(Math.floor(midpointZ), 0, grid.sz - 1);
-    return Math.floor(cellX / CHUNK) === ci && Math.floor(cellZ / CHUNK) === ck;
-}
-
-function beginMeshChunk(grid: any, ci: any, ck: any, meshes: any) {
-    const x0 = ci * CHUNK;
-    const z0 = ck * CHUNK;
-    const x1 = Math.min(x0 + CHUNK, grid.sx);
-    const z1 = Math.min(z0 + CHUNK, grid.sz);
-    return {
-        grid,
-        ci,
-        ck,
-        meshes,
-        x0,
-        z0,
-        x1,
-        z1,
-        y: 0,
-        solid: new MeshBuffer(),
-        glow: new MeshBuffer(),
-        edgeMap: new Map(),
-    };
-}
-
-function finishMeshChunk(state: any) {
-    const { grid, ci, ck, meshes, x0, z0, x1, z1, solid, glow, edgeMap } = state;
-
-    for (const [key, edge] of edgeMap) {
-        if (!edgeBelongsToChunk(edge, ci, ck, grid)) edgeMap.delete(key);
-    }
-
-    const record: { solid: any; glow: any; edges: any } = { solid: null, glow: null, edges: null };
-    if (!solid.empty) {
-        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.material);
-        record.solid.name = `terrain-${ci}-${ck}`;
-        record.solid.castShadow = true;
-        record.solid.receiveShadow = true;
-        record.solid.matrixAutoUpdate = false;
-        meshes.solid.add(record.solid);
-    }
-    if (!glow.empty) {
-        record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
-        record.glow.name = `glow-${ci}-${ck}`;
-        record.glow.matrixAutoUpdate = false;
-        meshes.glow.add(record.glow);
-    }
-    if (edgeMap.size > 0) {
-        record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial, {
-            x0,
-            z0,
-            x1,
-            z1,
-            sx: grid.sx,
-            sz: grid.sz,
-        } as any);
-        record.edges.name = `voxel-edges-${ci}-${ck}`;
-        meshes.edges.add(record.edges);
-    }
-    return record;
-}
-
-function stepMeshChunk(state: any, layers = 6) {
-    const y1 = Math.min(state.y + layers, state.grid.sy);
-    // Edges can be jointly owned by faces on opposite sides of a chunk plane.
-    // The one-cell halo gathers that topology without duplicating surface
-    // geometry; the ownership filter in finishMeshChunk assigns each edge once.
-    meshRegion(
-        state.grid,
-        state.x0,
-        state.z0,
-        state.x1,
-        state.z1,
-        state.solid,
-        state.glow,
-        state.edgeMap,
-        1,
-        state.y,
-        y1,
-    );
-    state.y = y1;
-    return state.y === state.grid.sy ? finishMeshChunk(state) : null;
-}
-
-function buildMeshChunk(grid: any, ci: any, ck: any, meshes: any) {
-    return stepMeshChunk(beginMeshChunk(grid, ci, ck, meshes), grid.sy);
-}
-
 /** Build one sphere chunk. ci/ck are chunk indices within the face. */
 function buildSphereMeshChunk(
     grid: SphereVoxelGrid,
@@ -624,7 +612,8 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
         for (let face = 0; face < 6; face++) {
             for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
                 for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++, o += 3) {
-                    const dot = chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
+                    const dot =
+                        chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
                     if (dot < unloadCos) continue;
                     const key = keyOf(face, ci, ck);
                     keep.add(key);
@@ -696,210 +685,20 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
             }
         },
 
+        /**
+         * Drop every chunk and reload around `playerDir`. Block colours are baked into
+         * the meshes, so a palette switch must rebuild them. Fills the view at once.
+         */
+        rebuildAll(playerDir: THREE.Vector3) {
+            for (const key of [...loaded.keys()]) unloadChunk(key);
+            forceScan = true;
+            this.update(playerDir, Infinity);
+        },
+
         dispose() {
             disposed = true;
             for (const key of loaded.keys()) unloadChunk(key);
         },
-    };
-}
-
-const BLOCK_COLOR_FIELDS = new Set(['top', 'side', 'bottom', 'tint', 'topTint', 'fringeColor']);
-
-/**
- * Content modules register some voxel materials after the base palette module
- * has loaded. Module workers have their own palette instance, so copy the
- * completed registry into the chunk mesher before it receives any work.
- */
-function serializeBlockRegistry() {
-    return BLOCK_BY_ID.filter(Boolean).map((block: any) => {
-        const definition: Record<string, any> = {};
-        for (const [key, value] of Object.entries(block)) {
-            if (BLOCK_COLOR_FIELDS.has(key) && (value as any)?.isColor) {
-                definition[key] = [(value as any).r, (value as any).g, (value as any).b];
-            } else if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
-                definition[key] = value;
-            }
-        }
-        return definition;
-    });
-}
-
-/** Worker entrypoint: install the main thread's completed content palette. */
-export function installBlockRegistry(definitions: any[]) {
-    for (const definition of definitions) {
-        const block = { ...definition };
-        for (const key of BLOCK_COLOR_FIELDS) {
-            const value = definition[key];
-            if (!value) continue;
-            const color = new THREE.Color();
-            // Values already use Three's linear working space. Assigning components
-            // directly avoids applying an sRGB conversion a second time.
-            [color.r, color.g, color.b] = value;
-            block[key] = color;
-        }
-        BLOCK_BY_ID[block.id] = block;
-    }
-}
-
-function serializeBufferGeometry(geometry: any) {
-    const attributes: Record<string, any> = {};
-    for (const [name, attribute] of Object.entries(geometry.attributes)) {
-        attributes[name] = {
-            array: (attribute as any).array,
-            itemSize: (attribute as any).itemSize,
-            normalized: (attribute as any).normalized,
-        };
-    }
-    return {
-        attributes,
-        index: geometry.index
-            ? {
-                  array: geometry.index.array,
-                  itemSize: geometry.index.itemSize,
-                  normalized: geometry.index.normalized,
-              }
-            : null,
-    };
-}
-
-function restoreBufferGeometry(payload: any) {
-    if (!payload) return null;
-    const geometry = new THREE.BufferGeometry();
-    for (const [name, attribute] of Object.entries(payload.attributes)) {
-        geometry.setAttribute(
-            name,
-            new THREE.BufferAttribute(
-                (attribute as any).array,
-                (attribute as any).itemSize,
-                (attribute as any).normalized,
-            ),
-        );
-    }
-    if (payload.index) {
-        geometry.setIndex(
-            new THREE.BufferAttribute(payload.index.array, payload.index.itemSize, payload.index.normalized),
-        );
-    }
-    geometry.computeBoundingSphere();
-    return geometry;
-}
-
-function serializeEdgeGeometry(edges: any) {
-    if (!edges) return null;
-    const geometry = edges.geometry;
-    const start = geometry.getAttribute('instanceStart');
-    const attribute = (name: string) => {
-        const value = geometry.getAttribute(name);
-        return {
-            array: value.array,
-            itemSize: value.itemSize,
-            normalized: value.normalized,
-        };
-    };
-    return {
-        // LineSegmentsGeometry stores start/end interleaved in this one array.
-        positions: start.data.array,
-        normalA: attribute('instanceNormalA'),
-        normalB: attribute('instanceNormalB'),
-        light: attribute('instanceLightEligible'),
-        roundCaps: attribute('instanceRoundCaps'),
-    };
-}
-
-function restoreMeshChunk(payload: any, ci: any, ck: any, meshes: any) {
-    const record: { solid: any; glow: any; edges: any } = { solid: null, glow: null, edges: null };
-    const solidGeometry = restoreBufferGeometry(payload.solid);
-    if (solidGeometry) {
-        record.solid = new THREE.Mesh(solidGeometry, meshes.material);
-        record.solid.name = `terrain-${ci}-${ck}`;
-        record.solid.castShadow = true;
-        record.solid.receiveShadow = true;
-        record.solid.matrixAutoUpdate = false;
-        meshes.solid.add(record.solid);
-    }
-    const glowGeometry = restoreBufferGeometry(payload.glow);
-    if (glowGeometry) {
-        record.glow = new THREE.Mesh(glowGeometry, meshes.glowMaterial);
-        record.glow.name = `glow-${ci}-${ck}`;
-        record.glow.matrixAutoUpdate = false;
-        meshes.glow.add(record.glow);
-    }
-    if (payload.edges) {
-        const geometry = new LineSegmentsGeometry();
-        geometry.setPositions(payload.edges.positions);
-        const set = (name: string, data: any) =>
-            geometry.setAttribute(name, new THREE.InstancedBufferAttribute(data.array, data.itemSize, data.normalized));
-        set('instanceNormalA', payload.edges.normalA);
-        set('instanceNormalB', payload.edges.normalB);
-        set('instanceLightEligible', payload.edges.light);
-        set('instanceRoundCaps', payload.edges.roundCaps);
-        record.edges = new LineSegments2(geometry, meshes.edgeMaterial as any);
-        record.edges.name = `voxel-edges-${ci}-${ck}`;
-        record.edges.matrixAutoUpdate = false;
-        prepareEdgeObject(record.edges);
-        meshes.edges.add(record.edges);
-    }
-    return record;
-}
-
-function makeChunkWindow(grid: any, ci: any, ck: any, margin = 2) {
-    const x0 = Math.max(0, ci * CHUNK - margin);
-    const z0 = Math.max(0, ck * CHUNK - margin);
-    const x1 = Math.min(grid.sx, (ci + 1) * CHUNK + margin);
-    const z1 = Math.min(grid.sz, (ck + 1) * CHUNK + margin);
-    const width = x1 - x0,
-        depth = z1 - z0;
-    const data = new Uint8Array(width * grid.sy * depth);
-    let target = 0;
-    for (let y = 0; y < grid.sy; y++) {
-        for (let z = z0; z < z1; z++) {
-            const source = grid.idx(x0, y, z);
-            data.set(grid.data.subarray(source, source + width), target);
-            target += width;
-        }
-    }
-    return {
-        ci,
-        ck,
-        sx: grid.sx,
-        sy: grid.sy,
-        sz: grid.sz,
-        x0,
-        z0,
-        width,
-        depth,
-        data,
-    };
-}
-
-/** Worker entrypoint: mesh one copied chunk window without DOM or WebGL. */
-export function buildChunkTransferPayload(window: any) {
-    const grid = {
-        sx: window.sx,
-        sy: window.sy,
-        sz: window.sz,
-        get(x: number, y: number, z: number) {
-            if (
-                x < window.x0 ||
-                x >= window.x0 + window.width ||
-                z < window.z0 ||
-                z >= window.z0 + window.depth ||
-                y < 0 ||
-                y >= window.sy
-            )
-                return 0;
-            return window.data[(y * window.depth + (z - window.z0)) * window.width + (x - window.x0)];
-        },
-        isSolid(x: number, y: number, z: number) {
-            return this.get(x, y, z) !== 0;
-        },
-    };
-    const meshes = createMeshRoots();
-    const record = buildMeshChunk(grid, window.ci, window.ck, meshes);
-    return {
-        solid: record!.solid ? serializeBufferGeometry(record!.solid.geometry) : null,
-        glow: record!.glow ? serializeBufferGeometry(record!.glow.geometry) : null,
-        edges: serializeEdgeGeometry(record!.edges),
     };
 }
 
@@ -914,565 +713,6 @@ function removeMeshChunk(meshes: any, record: any) {
         object.geometry.dispose();
     }
 }
-
-/**
- * Legacy eager builder. Kept for tools that explicitly request a complete
- * render mesh; gameplay uses createWorldChunkStreamer below.
- */
-export function buildWorldMeshes(grid: any, { onProgress }: { onProgress?: (p: number) => void } = {}) {
-    const meshes = createMeshRoots();
-
-    const cx = Math.ceil(grid.sx / CHUNK);
-    const cz = Math.ceil(grid.sz / CHUNK);
-    const total = cx * cz;
-    let done = 0;
-
-    for (let ci = 0; ci < cx; ci++) {
-        for (let ck = 0; ck < cz; ck++) {
-            buildMeshChunk(grid, ci, ck, meshes);
-            done++;
-            if (onProgress) onProgress(done / total);
-        }
-    }
-
-    return meshes;
-}
-
-/**
- * Keeps only the render geometry surrounding the camera/player corridor.
- * Collision, map queries and procedural data continue to use the full CPU
- * grid, so unloading a visual chunk can never change gameplay.
- */
-export function createWorldChunkStreamer(
-    grid: any,
-    { loadRadius = DEFAULT_STREAM_RADIUS, unloadPadding = 1, wrapBuffer = 0, toroidalWrap = false } = {},
-) {
-    const meshes = createMeshRoots();
-    const chunksX = Math.ceil(grid.sx / CHUNK);
-    const chunksZ = Math.ceil(grid.sz / CHUNK);
-    const loaded = new Map<string, any>();
-    const fadingMeshes = new Set<any>(); // only meshes actively fading in
-    let loadQueue: any[] = [];
-    let unloadQueue: string[] = [];
-    let desiredLoadKeys = new Set<string>();
-    let activeLoad: any = null;
-    let meshWorker: Worker | null = null;
-    let workerBusy: any = null;
-    let viewKey = '';
-    let idleHandle: any = null;
-    let disposed = false;
-    let currentLoadRadius = Math.max(1, loadRadius);
-    const currentUnloadPadding = Math.max(1, unloadPadding);
-    let lastPlayer: any = null;
-    let lastCamera: any = null;
-
-    if (typeof globalThis.Worker === 'function') {
-        try {
-            meshWorker = new Worker(new URL('./voxel-worker.ts', import.meta.url), {
-                type: 'module',
-                name: 'VoxelWorld-chunk-mesher',
-            });
-            // Worker messages are processed in order, so every subsequent chunk
-            // sees the same runtime-registered materials as the main-thread preload.
-            meshWorker.postMessage({
-                type: 'block-registry',
-                definitions: serializeBlockRegistry(),
-            });
-        } catch {
-            meshWorker = null;
-        }
-    }
-
-    const keyOf = (ci: any, ck: any) => `${ci},${ck}`;
-    const frameYield = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-    /** Wire up per-chunk lodAlpha fade-in for a freshly built record. */
-    const initChunkFade = (record: any) => {
-        const uniforms = meshes.material.userData.uniforms;
-        for (const mesh of [record.solid, record.glow]) {
-            if (!mesh) continue;
-            mesh.userData.lodAlpha = 0.0;
-            mesh.userData.lodFading = true;
-            fadingMeshes.add(mesh);
-            mesh.onBeforeRender = () => {
-                uniforms.uLodAlpha.value = mesh.userData.lodAlpha;
-            };
-            mesh.onAfterRender = () => {
-                uniforms.uLodAlpha.value = 1.0;
-            };
-        }
-        if (record.edges) {
-            const edgeUniforms = (meshes.edgeMaterial as any).uniforms;
-            const resolveCb = record.edges.onBeforeRender; // resolution callback from prepareEdgeObject
-            record.edges.userData.lodAlpha = 0.0;
-            record.edges.userData.lodFading = true;
-            fadingMeshes.add(record.edges);
-            record.edges.userData.resolveCb = resolveCb;
-            record.edges.onBeforeRender = (renderer: any) => {
-                resolveCb.call(record.edges, renderer);
-                edgeUniforms.uLodAlpha.value = record.edges.userData.lodAlpha;
-            };
-            record.edges.onAfterRender = () => {
-                edgeUniforms.uLodAlpha.value = 1.0;
-            };
-        }
-    };
-
-    const loadChunk = (ci: any, ck: any) => {
-        const key = keyOf(ci, ck);
-        if (loaded.has(key) || disposed) return;
-        const record = buildMeshChunk(grid, ci, ck, meshes);
-        initChunkFade(record);
-        loaded.set(key, record);
-    };
-
-    const unloadChunk = (key: any) => {
-        const record = loaded.get(key);
-        if (!record) return;
-        for (const mesh of [record.solid, record.glow, record.edges]) {
-            if (mesh) fadingMeshes.delete(mesh);
-        }
-        removeMeshChunk(meshes, record);
-        loaded.delete(key);
-    };
-
-    const drainUnloads = (limit: any) => {
-        for (let i = 0; i < limit && unloadQueue.length; i++) {
-            unloadChunk(unloadQueue.shift());
-        }
-    };
-
-    const distanceToSegmentSq = (x: any, z: any, ax: any, az: any, bx: any, bz: any) => {
-        const dx = bx - ax,
-            dz = bz - az;
-        const lengthSq = dx * dx + dz * dz;
-        const t = lengthSq > 0 ? THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / lengthSq, 0, 1) : 0;
-        const px = ax + dx * t,
-            pz = az + dz * t;
-        const ox = x - px,
-            oz = z - pz;
-        return ox * ox + oz * oz;
-    };
-
-    const schedule = () => {
-        const canLoad = meshWorker ? !workerBusy && loadQueue.length > 0 : Boolean(activeLoad || loadQueue.length);
-        if (idleHandle !== null || disposed || (!canLoad && !unloadQueue.length)) return;
-        if (typeof globalThis.requestIdleCallback === 'function') {
-            idleHandle = globalThis.requestIdleCallback(pump, { timeout: 120 });
-        } else {
-            idleHandle = setTimeout(() => pump({ didTimeout: false, timeRemaining: () => 8 }), 0);
-        }
-    };
-
-    const pump = (deadline: any) => {
-        idleHandle = null;
-        if (disposed) return;
-
-        // Releasing stale buffers is cheap, but cap it so crossing a boundary
-        // cannot turn one idle callback into a long garbage-collection spike.
-        drainUnloads(3);
-
-        if (meshWorker) {
-            while (!workerBusy && loadQueue.length) {
-                const next = loadQueue.shift();
-                const key = keyOf(next.ci, next.ck);
-                if (loaded.has(key) || !desiredLoadKeys.has(key)) continue;
-                const window = makeChunkWindow(grid, next.ci, next.ck);
-                workerBusy = { key, ci: next.ci, ck: next.ck };
-                meshWorker.postMessage({ key, window }, [window.data.buffer]);
-            }
-            schedule();
-            return;
-        }
-
-        // A timed-out idle callback still performs one small vertical slice, so a
-        // busy 4k-shadow frame cannot starve a developer-requested radius change.
-        // Genuine idle time can consume up to four slices without monopolising it.
-        const maxSteps = deadline.didTimeout ? 1 : 4;
-        for (let step = 0; step < maxSteps; step++) {
-            if (!deadline.didTimeout && deadline.timeRemaining() <= 2) break;
-            while (!activeLoad && loadQueue.length) {
-                const next = loadQueue.shift();
-                const key = keyOf(next.ci, next.ck);
-                if (loaded.has(key) || !desiredLoadKeys.has(key)) continue;
-                activeLoad = { key, state: beginMeshChunk(grid, next.ci, next.ck, meshes) };
-            }
-            if (!activeLoad) break;
-            const record = stepMeshChunk(activeLoad.state);
-            if (record) {
-                initChunkFade(record);
-                loaded.set(activeLoad.key, record);
-                activeLoad = null;
-            }
-        }
-        schedule();
-    };
-
-    const disableWorker = () => {
-        const interrupted = workerBusy;
-        meshWorker?.terminate();
-        meshWorker = null;
-        workerBusy = null;
-        if (interrupted && desiredLoadKeys.has(interrupted.key)) {
-            loadQueue.unshift({ ci: interrupted.ci, ck: interrupted.ck, distanceSq: 0 });
-        }
-        schedule();
-    };
-
-    if (meshWorker) {
-        meshWorker.onmessage = ({ data }) => {
-            const completed = workerBusy;
-            workerBusy = null;
-            if (data.error) {
-                if (completed && desiredLoadKeys.has(completed.key)) {
-                    loadQueue.unshift({
-                        ci: completed.ci,
-                        ck: completed.ck,
-                        distanceSq: 0,
-                    });
-                }
-                meshWorker!.terminate();
-                meshWorker = null;
-            } else if (completed?.key === data.key && desiredLoadKeys.has(data.key) && !loaded.has(data.key)) {
-                const record = restoreMeshChunk(data.payload, data.ci, data.ck, meshes);
-                initChunkFade(record);
-                loaded.set(data.key, record);
-            }
-            schedule();
-        };
-        meshWorker.onerror = disableWorker;
-    }
-
-    const update = (player: any, camera = player, trimToRadius = false, dt = 0) => {
-        if (disposed || !player) return;
-        // Advance LOD fade-in for newly loaded chunks.
-        // Only meshes actively fading are in fadingMeshes, so this is O(fading) not O(all loaded).
-        if (dt > 0 && fadingMeshes.size > 0) {
-            for (const mesh of fadingMeshes) {
-                mesh.userData.lodAlpha = Math.min(1.0, mesh.userData.lodAlpha + dt * 1.5);
-                if (mesh.userData.lodAlpha >= 1.0) {
-                    mesh.userData.lodFading = false;
-                    mesh.onBeforeRender = mesh.userData.resolveCb ?? (() => {});
-                    mesh.onAfterRender = () => {};
-                    fadingMeshes.delete(mesh);
-                }
-            }
-        }
-        // Unloading is intentionally frame-driven rather than idle-driven. A busy
-        // GPU can starve requestIdleCallback, but stale GPU buffers must still be
-        // released promptly as the player crosses the world.
-        drainUnloads(4);
-        const ax = player.x,
-            az = player.z;
-        const bx = camera?.x ?? ax,
-            bz = camera?.z ?? az;
-        lastPlayer = { x: ax, z: az };
-        lastCamera = { x: bx, z: bz };
-        const nextViewKey = [
-            Math.floor(ax / CHUNK),
-            Math.floor(az / CHUNK),
-            Math.floor(bx / CHUNK),
-            Math.floor(bz / CHUNK),
-        ].join(',');
-        if (nextViewKey === viewKey) return;
-        viewKey = nextViewKey;
-
-        const desired = [];
-        const keep = new Set();
-        const loadMargin = currentLoadRadius * CHUNK;
-        const unloadMargin = (currentLoadRadius + currentUnloadPadding) * CHUNK;
-        const loadSq = loadMargin * loadMargin;
-        const unloadSq = (trimToRadius ? loadMargin : unloadMargin) ** 2;
-
-        // Toroidal pre-loading: when the player is within the stream radius of a
-        // world edge, also evaluate chunk distances from the ±worldSize-shifted
-        // "ghost" positions. This is equivalent to computing wrapped distance on a
-        // torus and ensures the opposite-side chunks are loaded before the modulo
-        // wrap fires.
-        const mirrorOffsets: [number, number][] = [[0, 0]];
-        if (toroidalWrap) {
-            const Sx = grid.sx,
-                Sz = grid.sz;
-            mirrorOffsets.push([Sx, 0], [-Sx, 0], [0, Sz], [0, -Sz]);
-        }
-
-        for (let ci = 0; ci < chunksX; ci++) {
-            const x = Math.min((ci + 0.5) * CHUNK, grid.sx);
-            for (let ck = 0; ck < chunksZ; ck++) {
-                const z = Math.min((ck + 0.5) * CHUNK, grid.sz);
-                let distanceSq = Infinity;
-                for (const [dx, dz] of mirrorOffsets) {
-                    const d = distanceToSegmentSq(x, z, ax + dx, az + dz, bx + dx, bz + dz);
-                    if (d < distanceSq) distanceSq = d;
-                }
-                const key = keyOf(ci, ck);
-                if (distanceSq <= unloadSq) keep.add(key);
-                if (distanceSq <= loadSq && !loaded.has(key)) {
-                    desired.push({ ci, ck, distanceSq });
-                }
-            }
-        }
-
-        desired.sort((a, b) => a.distanceSq - b.distanceSq);
-        loadQueue = desired;
-        desiredLoadKeys = new Set(desired.map(({ ci, ck }) => keyOf(ci, ck)));
-        if (activeLoad && !desiredLoadKeys.has(activeLoad.key)) activeLoad = null;
-        unloadQueue = [...loaded.keys()].filter((key) => !keep.has(key));
-        schedule();
-    };
-
-    const setLoadRadius = (radius: any) => {
-        const next = THREE.MathUtils.clamp(Math.round(radius), 1, 16);
-        if (next === currentLoadRadius) return;
-        currentLoadRadius = next;
-        // The view position has not changed, but both desired sets have. Force a
-        // fresh queue immediately so the developer control is genuinely live.
-        viewKey = '';
-        if (lastPlayer) update(lastPlayer, lastCamera, true);
-    };
-
-    const preload = async (
-        position: any,
-        { radius = 2, onProgress }: { radius?: number; onProgress?: (p: number) => void } = {},
-    ) => {
-        const centerI = THREE.MathUtils.clamp(Math.floor(position.x / CHUNK), 0, chunksX - 1);
-        const centerK = THREE.MathUtils.clamp(Math.floor(position.z / CHUNK), 0, chunksZ - 1);
-        const initial = [];
-        for (let di = -radius; di <= radius; di++) {
-            for (let dk = -radius; dk <= radius; dk++) {
-                const ci = centerI + di,
-                    ck = centerK + dk;
-                if (ci < 0 || ck < 0 || ci >= chunksX || ck >= chunksZ) continue;
-                if (di * di + dk * dk > radius * radius) continue;
-                initial.push({ ci, ck, distanceSq: di * di + dk * dk });
-            }
-        }
-        initial.sort((a, b) => a.distanceSq - b.distanceSq);
-        for (let i = 0; i < initial.length; i++) {
-            loadChunk(initial[i].ci, initial[i].ck);
-            // Preloaded spawn chunks appear fully opaque immediately — no screen-door on start.
-            const record = loaded.get(keyOf(initial[i].ci, initial[i].ck));
-            if (record) {
-                for (const mesh of [record.solid, record.glow, record.edges]) {
-                    if (!mesh) continue;
-                    mesh.userData.lodAlpha = 1.0;
-                    mesh.userData.lodFading = false;
-                }
-            }
-            onProgress?.((i + 1) / initial.length);
-            await frameYield();
-        }
-    };
-
-    const dispose = () => {
-        disposed = true;
-        activeLoad = null;
-        workerBusy = null;
-        meshWorker?.terminate();
-        meshWorker = null;
-        if (idleHandle !== null) {
-            if (typeof globalThis.cancelIdleCallback === 'function') {
-                globalThis.cancelIdleCallback(idleHandle);
-            } else {
-                clearTimeout(idleHandle);
-            }
-            idleHandle = null;
-        }
-        for (const key of [...loaded.keys()]) unloadChunk(key);
-        meshes.material.dispose();
-        meshes.glowMaterial.dispose();
-        meshes.edgeMaterial.dispose();
-    };
-
-    const invalidateAll = () => {
-        // Unload every loaded chunk so they get re-meshed with the current block registry.
-        for (const key of [...loaded.keys()]) unloadChunk(key);
-        viewKey = ''; // force update() to re-queue everything
-        if (lastPlayer) update(lastPlayer, lastCamera);
-        // Push the updated block registry to the worker if one is running.
-        if (meshWorker) {
-            meshWorker.postMessage({ type: 'block-registry', definitions: serializeBlockRegistry() });
-        }
-    };
-
-    return {
-        meshes,
-        update,
-        setLoadRadius,
-        preload,
-        dispose,
-        invalidateAll,
-        /** Planet-bend uniforms for the terrain material — update each frame. */
-        get planetUnis() {
-            return meshes.material.userData.uniforms;
-        },
-        get loadRadius() {
-            return currentLoadRadius;
-        },
-        get loadedCount() {
-            return loaded.size;
-        },
-        get pendingCount() {
-            return loadQueue.length + unloadQueue.length + (activeLoad ? 1 : 0) + (workerBusy ? 1 : 0);
-        },
-    };
-}
-
-function meshRegion(
-    grid: any,
-    x0: any,
-    z0: any,
-    x1: any,
-    z1: any,
-    solid: any,
-    glow: any,
-    edgeMap: any,
-    edgeHalo = 0,
-    y0 = 0,
-    y1 = grid.sy,
-) {
-    const aoOf = (occ: any) => {
-        // occ = [side1, side2, corner] booleans
-        if (occ[0] && occ[1]) return 0;
-        return (3 - (occ[0] + occ[1] + occ[2])) / 3;
-    };
-
-    const ao = new Array(4);
-    const localV = new Array(4);
-    const uvs = [
-        [0, 0],
-        [0, 0],
-        [0, 0],
-        [0, 0],
-    ];
-    const verts = [
-        [0, 0, 0],
-        [0, 0, 0],
-        [0, 0, 0],
-        [0, 0, 0],
-    ];
-
-    const scanX0 = Math.max(0, x0 - edgeHalo);
-    const scanZ0 = Math.max(0, z0 - edgeHalo);
-    const scanX1 = Math.min(grid.sx, x1 + edgeHalo);
-    const scanZ1 = Math.min(grid.sz, z1 + edgeHalo);
-
-    for (let y = y0; y < y1; y++) {
-        for (let z = scanZ0; z < scanZ1; z++) {
-            for (let x = scanX0; x < scanX1; x++) {
-                const id = grid.get(x, y, z);
-                if (id === 0) continue;
-                const block = BLOCK_BY_ID[id];
-                if (!block) continue;
-                const target = block.emissive ? glow : solid;
-                const emitGeometry = x >= x0 && x < x1 && z >= z0 && z < z1;
-
-                for (let f = 0; f < 6; f++) {
-                    const F = FACES[f];
-                    const nx = x + F.n[0],
-                        ny = y + F.n[1],
-                        nz = z + F.n[2];
-                    if (grid.isSolid(nx, ny, nz)) continue;
-
-                    const isTop = F.n[1] === 1;
-                    const isBottom = F.n[1] === -1;
-                    const baseCol = isTop ? block.top : isBottom ? block.bottom || block.side : block.side;
-                    const pattern = isTop ? (block.topPattern ?? block.pattern) : block.pattern;
-                    const tintCol = (isTop ? block.topTint || block.tint : block.tint) || baseCol;
-                    const fringeCol = block.fringeColor || block.top || baseCol;
-
-                    const uA = AXIS_VEC[F.uAxis],
-                        vA = AXIS_VEC[F.vAxis];
-
-                    /**
-                     * Which of this face's four borders are REAL cube edges.
-                     *
-                     * Two adjacent grass blocks on a flat shelf both emit a top face,
-                     * and the seam between them is not an edge at all — it is the middle
-                     * of a continuous surface. Inking every quad border would engrave
-                     * a waffle grid across every lawn. A border is only a genuine convex
-                     * edge when the in-plane neighbour block is absent. These masks now
-                     * feed the explicit shared edge graph; they are never painted into
-                     * an individual face.
-                     */
-                    let convexMask = 0,
-                        concaveMask = 0;
-                    {
-                        const dirs = [
-                            [-uA[0], -uA[1], -uA[2], 1],
-                            [uA[0], uA[1], uA[2], 2],
-                            [-vA[0], -vA[1], -vA[2], 4],
-                            [vA[0], vA[1], vA[2], 8],
-                        ];
-                        for (const [dx, dy, dz, bit] of dirs) {
-                            if (!grid.isSolid(x + dx, y + dy, z + dz)) {
-                                // nothing beside us: an outer corner of the solid
-                                convexMask |= bit;
-                            } else if (grid.isSolid(x + dx + F.n[0], y + dy + F.n[1], z + dz + F.n[2])) {
-                                // neighbour is there AND it rises in front of this face:
-                                // an inner corner, where the surface folds back on itself
-                                concaveMask |= bit;
-                            }
-                            // otherwise the neighbour's face continues ours — a flat seam,
-                            // which is not an edge and must never be drawn.
-                        }
-                    }
-
-                    const forceLightEdge = isTop && block.lightEdge === true;
-                    collectFaceEdges(edgeMap, x, y, z, F, convexMask, baseCol, false, forceLightEdge);
-                    collectFaceEdges(edgeMap, x, y, z, F, concaveMask, baseCol, true, forceLightEdge);
-
-                    if (!emitGeometry) continue;
-
-                    for (let i = 0; i < 4; i++) {
-                        const c = F.corners[i];
-                        verts[i][0] = x + c[0];
-                        verts[i][1] = y + c[1];
-                        verts[i][2] = z + c[2];
-
-                        // AO: sample the two in-plane neighbours and the diagonal, all in
-                        // the layer of air directly in front of this face.
-                        const su = c[F.uAxis] === 1 ? 1 : -1;
-                        const sv = c[F.vAxis] === 1 ? 1 : -1;
-                        const s1 = grid.isSolid(nx + uA[0] * su, ny + uA[1] * su, nz + uA[2] * su);
-                        const s2 = grid.isSolid(nx + vA[0] * sv, ny + vA[1] * sv, nz + vA[2] * sv);
-                        const cn = grid.isSolid(
-                            nx + uA[0] * su + vA[0] * sv,
-                            ny + uA[1] * su + vA[1] * sv,
-                            nz + uA[2] * su + vA[2] * sv,
-                        );
-                        ao[i] = aoOf([s1, s2, cn]);
-
-                        // World-space UVs so patterns tile across block seams.
-                        uvs[i][0] = verts[i][F.uAxis];
-                        uvs[i][1] = verts[i][F.vAxis];
-                        // Local height within THIS block, for the grass fringe.
-                        localV[i] = isTop ? 1 : isBottom ? 0 : c[1];
-                    }
-
-                    // Bit 3 of the pattern byte signals wind sway; mod(aData.y, 8) in the frag shader strips it.
-                    const patternPacked = (pattern || 0) | (block.sway ? 8 : 0);
-                    target.quad(
-                        verts,
-                        F.n,
-                        baseCol,
-                        tintCol,
-                        fringeCol,
-                        uvs,
-                        ao,
-                        patternPacked,
-                        block.fringe || 0,
-                        localV,
-                    );
-                }
-            }
-        }
-    }
-}
-
-/* ================================================================== *
- * Spherical mesher
- * ================================================================== */
 
 /**
  * Fills solid/glow MeshBuffers for a patch of a cube face.
@@ -1779,35 +1019,6 @@ function addEdgeFace(edgeMap: any, p0: any, p1: any, normal: any, light: any, co
         existing.forceLight ||= forceLight;
     } else {
         edge.faces.push({ key: normalKey, normal: [...normal], light, forceLight });
-    }
-}
-
-function collectFaceEdges(
-    edgeMap: any,
-    x: any,
-    y: any,
-    z: any,
-    face: any,
-    mask: any,
-    color: any,
-    concave: any,
-    forceLight = false,
-) {
-    if (mask === 0) return;
-    const borders = [
-        [1, face.uAxis, 0],
-        [2, face.uAxis, 1],
-        [4, face.vAxis, 0],
-        [8, face.vAxis, 1],
-    ];
-    const light = isLightFace(color);
-
-    for (const [bit, axis, value] of borders) {
-        if ((mask & bit) === 0) continue;
-        const corners = face.corners.filter((corner: any) => corner[axis] === value);
-        const p0 = [x + corners[0][0], y + corners[0][1], z + corners[0][2]];
-        const p1 = [x + corners[1][0], y + corners[1][1], z + corners[1][2]];
-        addEdgeFace(edgeMap, p0, p1, face.n, light, concave, forceLight);
     }
 }
 
@@ -2243,88 +1454,6 @@ function prepareEdgeObject(edges: any) {
     return edges;
 }
 
-/**
- * The twelve edges of an axis-aligned box, ready to parent to the mesh it
- * outlines. Used for the character, whose parts are animated boxes rather than
- * voxels — the same material, so its strokes obey exactly the same width,
- * hidden-line and pale/dark rules as the world's.
- *
- * Every edge of a box is convex and both its faces carry the same colour, so
- * eligibility is decided once for the whole box; the shader still withholds
- * the pale ink per frame unless both faces face the camera.
- */
-export function createBoxEdges(width: any, height: any, depth: any, color: any, material: any) {
-    const h = [width * 0.5, height * 0.5, depth * 0.5];
-    const positions = [];
-    const normalsA = [];
-    const normalsB = [];
-
-    // For each axis, the four edges running along it sit at the corners of the
-    // other two, and are shared by one face from each of those two axes.
-    for (let axis = 0; axis < 3; axis++) {
-        const u = (axis + 1) % 3,
-            v = (axis + 2) % 3;
-        for (const su of [-1, 1]) {
-            for (const sv of [-1, 1]) {
-                const p0 = [0, 0, 0],
-                    p1 = [0, 0, 0];
-                const nA = [0, 0, 0],
-                    nB = [0, 0, 0];
-                p0[axis] = -h[axis];
-                p1[axis] = h[axis];
-                p0[u] = p1[u] = su * h[u];
-                p0[v] = p1[v] = sv * h[v];
-                nA[u] = su;
-                nB[v] = sv;
-                positions.push(...p0, ...p1);
-                normalsA.push(...nA);
-                normalsB.push(...nB);
-            }
-        }
-    }
-
-    const count = positions.length / 6;
-    const geometry = new LineSegmentsGeometry();
-    geometry.setPositions(new Float32Array(positions));
-    geometry.setAttribute(
-        'instanceNormalA',
-        new THREE.InstancedBufferAttribute(
-            Int8Array.from(normalsA, (n) => n * 127),
-            3,
-            true,
-        ),
-    );
-    geometry.setAttribute(
-        'instanceNormalB',
-        new THREE.InstancedBufferAttribute(
-            Int8Array.from(normalsB, (n) => n * 127),
-            3,
-            true,
-        ),
-    );
-    geometry.setAttribute(
-        'instanceLightEligible',
-        new THREE.InstancedBufferAttribute(new Uint8Array(count).fill(isLightFace(color) ? 255 : 0), 1, true),
-    );
-    // No mixed-colour joints on a single box, so every end keeps its round cap.
-    geometry.setAttribute(
-        'instanceRoundCaps',
-        new THREE.InstancedBufferAttribute(new Uint8Array(count * 2).fill(255), 2, true),
-    );
-
-    const edges = new LineSegments2(geometry, material);
-    edges.name = 'box-edges';
-    // The parts are small and always near the camera, and their bounds move
-    // every frame with the animation; culling them per-part is not worth the
-    // matrix work.
-    edges.frustumCulled = false;
-    return prepareEdgeObject(edges);
-}
-
-/* ================================================================== *
- * Shader
- * ================================================================== */
-
 const COMMON_GLSL = /* glsl */ `
   float vxHash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -2513,6 +1642,42 @@ const FRAG_DECL = /* glsl */ `
     return mix(col, max(base * 3.6, vec3(0.16, 0.10, 0.06)) * 0.6, rim);
   }
 
+  /**
+   * Surface detail for plain terrain blocks (grass, soil, sand, stone), so a
+   * block face is not one flat colour. uv is in block units (continuous across
+   * neighbours); fract(uv) is the position inside this block's face.
+   *   - per-block tone: each voxel a touch lighter/darker/warmer than its neighbour
+   *   - bevel: faces darken softly toward their edges, so every cube reads as a form
+   *   - tops: mottled patches plus fine speckle (turf, sand grain, gravel)
+   *   - sides: horizontal strata along the layer axis, with grain inside each band
+   */
+  vec3 patTerrain(vec2 uv, vec3 base, vec3 tint, bool top, bool bottom) {
+    vec2 cell = floor(uv);
+    vec2 f = fract(uv);
+    float id = vxHash(cell + 0.37);
+    vec3 col = base * (0.95 + 0.1 * id);
+    col = mix(col, tint, 0.18 * vxHash(cell + 7.1));
+    if (top) {
+      float mott = vxNoise(uv * 1.7) * 0.6 + vxNoise(uv * 4.1 + 3.0) * 0.4;
+      col = mix(col * 0.93, col * 1.03, smoothstep(0.3, 0.75, mott));
+      col *= 0.95 + 0.1 * vxNoise(uv * 13.0);
+    } else if (!bottom) {
+      // Side faces: uv.y runs along the layer axis on every side face.
+      float band = floor(uv.y * 2.0);
+      float strata = vxHash(vec2(band, cell.x * 0.13 + 1.9));
+      col *= 0.9 + 0.14 * strata;
+      col *= 0.94 + 0.12 * vxNoise(vec2(uv.x * 6.0, uv.y * 14.0));
+      // Thin dark seam between strata, broken by noise so it isn't a ruled line.
+      float seam = 1.0 - smoothstep(0.0, 0.05, abs(fract(uv.y * 2.0) - 0.5) - 0.45);
+      col *= 1.0 - 0.12 * seam * step(0.45, vxNoise(uv * vec2(2.0, 0.5)));
+    }
+    // Soft bevel toward the face edges.
+    vec2 e = min(f, 1.0 - f);
+    float edge = 1.0 - smoothstep(0.0, 0.12, min(e.x, e.y));
+    col *= 1.0 - 0.1 * edge;
+    return col;
+  }
+
   vec3 patGrassTop(vec2 uv, vec3 base, vec3 tint) {
     float n = vxNoise(uv * 5.5) * 0.55 + vxNoise(uv * 14.0) * 0.45;
     vec3 col = mix(base, tint, smoothstep(0.40, 0.80, n));
@@ -2585,6 +1750,8 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 4.5 && pat < 5.5) col = patGrassTop(vUvW, col, vTintV);
     else if (pat > 5.5 && pat < 6.5) col = patTile(vUvW, col, vTintV);
     #ifdef FOLIAGE_DETAIL
+    // Plain terrain blocks (no pattern, not foliage): surface detail.
+    if (pat < 0.5 && vDataV.y < 7.5) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
     // Trunks (the only bark-pattern blocks): furrowed bark on the sides, rings on the ends.
     if (pat > 3.5 && pat < 4.5) {
       if (isSide) {
@@ -2600,7 +1767,9 @@ const FRAG_BODY = /* glsl */ `
       float faceLight = isTopFace ? 1.0 : isSide ? 0.6 : 0.0;
       // Undersides: a finer scale reads as leaves seen from beneath rather than smears.
       col = patFoliage(isTopFace || isSide ? vUvW : vUvW * 1.8, col, vTintV, faceLight);
-      if (!isTopFace && !isSide) col *= 0.8;
+      // Leaves transmit and scatter light, so a canopy's shaded faces stay far
+      // brighter than rock in the same shade; lift them so the palette hue reads.
+      col *= isTopFace ? 1.05 : isSide ? 1.28 : 1.15;
     }
     #endif
 
@@ -2620,8 +1789,11 @@ const FRAG_BODY = /* glsl */ `
     // Two-octave noise over the XZ plane breaks up uniform regions into
     // natural-looking patches — lighter dry spots, darker damp patches.
     // Scale 1: ~80 m patch (0.0125 × 80 ≈ 1 period); Scale 2: ~26 m detail.
-    float macro = vxNoise(vPosW.xz * 0.0125) * 0.65
-                + vxNoise(vPosW.xz * 0.038)  * 0.35;
+    // Sampled on two planes and blended so it stays continuous over the sphere —
+    // XZ alone smeared into stripes on the planet's flanks.
+    vec3 mp = vPosW;
+    float macro = (vxNoise(mp.xz * 0.0125) + vxNoise(mp.xy * 0.0125 + 31.0) + vxNoise(mp.yz * 0.0125 - 17.0)) * (0.65 / 3.0)
+                + (vxNoise(mp.xz * 0.038) + vxNoise(mp.xy * 0.038 + 9.0) + vxNoise(mp.yz * 0.038 - 5.0)) * (0.35 / 3.0);
     col *= 0.95 + macro * 0.10;   // ±5 % luminance variation
 
     // --- face-direction shading -------------------------------------
@@ -2631,12 +1803,16 @@ const FRAG_BODY = /* glsl */ `
     float faceShade = 1.0;
     if (_radial > 0.5)                       faceShade = 1.0;   // radially outward = top
     else if (_radial < -0.5)                 faceShade = 0.78;  // radially inward = bottom
-    else if (abs(vNrmW.x) > abs(vNrmW.z))   faceShade = 0.96;
-    else                                     faceShade = 0.92;
+    // Side faces: world X vs Z means nothing on a sphere, so split by whether the
+    // face looks toward or away from the sun's bearing in the local tangent plane.
+    else {
+      vec3 sunT = uSunDir - normalize(vPosW) * dot(uSunDir, normalize(vPosW));
+      faceShade = dot(vNrmW, normalize(sunT + 1e-5)) > 0.0 ? 0.96 : 0.9;
+    }
     // Hemisphere sky-ground blend: adds a small sky-tinted lift to faces that
     // point upward and a ground-bounce lift to those that point down, matching
     // the scene HemisphereLight behaviour and lifting the darkest side faces.
-    float skyFacing = clamp(dot(vNrmW, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5, 0.0, 1.0);
+    float skyFacing = clamp(_radial * 0.5 + 0.5, 0.0, 1.0);   // local up on the sphere
     faceShade += skyFacing * 0.08;
     // Directional sun contribution: faces angled toward the sun receive a
     // diffuse boost, faces away get a smaller fill (no face is fully unlit).
@@ -2698,18 +1874,6 @@ const FRAG_BODY = /* glsl */ `
   }
 `;
 
-/**
- * Hand the terrain the water's depth field, so the banks can draw the
- * waterline. Called once the world and the water both exist.
- */
-export function setVoxelWaterline(material: any, depthMap: any, worldSize: any, range: any) {
-    const u = material.userData.uniforms;
-    if (!u) return;
-    u.uWaterMap.value = depthMap;
-    u.uWorldSize.value = worldSize;
-    u.uWaterRange.value = range;
-}
-
 export function makeVoxelMaterial() {
     const mat = new THREE.MeshLambertMaterial({
         vertexColors: true,
@@ -2770,8 +1934,11 @@ export function makeVoxelMaterial() {
             petalShadow.shadowRadius, vDirectionalShadowCoord[0]);
           float petalShade = (1.0 - petalVisibility) * uShadowTintStrength;
           float petalLum = dot(outgoingLight, vec3(0.2126, 0.7152, 0.0722));
-          vec3 petalCool = vec3(petalLum) * uShadowHue;
-          outgoingLight = mix(outgoingLight, petalCool, petalShade);
+          // Shadows keep most of the surface's own hue and only lean cool. Replacing
+          // the colour with a violet grey (as this did at 82%) drained every shaded
+          // canopy and cliff to the same lilac, so all palettes looked alike in shade.
+          vec3 petalCool = mix(vec3(petalLum), outgoingLight, 0.7) * uShadowHue;
+          outgoingLight = mix(outgoingLight, petalCool, petalShade * 0.6);
         #endif`,
             );
         mat.userData.shader = shader;

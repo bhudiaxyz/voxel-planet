@@ -59,35 +59,37 @@ const CSS = `
 #pause .binding kbd { flex-shrink:0; }
 `;
 
+// Mirrors planet-explorer; voxel-planet extras use keys it leaves free.
 const KEYBOARD_BINDINGS = [
     ['WASD', 'Move'],
     ['Mouse', 'Look'],
+    ['Shift', 'Sprint'],
     ['Space', 'Jump / Ascend'],
     ['C', 'Descend'],
-    ['Shift', 'Sprint'],
-    ['F', 'Toggle fly mode'],
-    ['V', 'Toggle drone'],
+    ['F', 'Cycle walk → drone → fly'],
     ['L', 'Land'],
-    ['E', 'Edge toggle'],
-    ['[ ]', 'Time of day'],
-    ['Y', 'Dog sit / stand'],
     ['M', 'Map'],
-    ['Esc', 'Pause'],
+    ['G', 'Toggle panels'],
+    ['X', 'Dog sit / stand'],
+    ['B', 'Block outlines'],
+    ['[ ]', 'Time of day'],
+    ['Esc', 'Pause / release mouse'],
 ];
 
 const TOUCH_BINDINGS = [
     ['Left stick', 'Move'],
-    ['Swipe right', 'Look'],
+    ['Right drag', 'Look'],
     ['↑', 'Jump / Ascend'],
     ['↓', 'Descend'],
     ['⚡', 'Sprint'],
-    ['✈', 'Toggle fly mode'],
-    ['🚁', 'Enter drone'],
-    ['🛬', 'Land (drone)'],
-    ['⬡', 'Edges'],
-    ['◀ ▶', 'Time of day'],
+    ['✈', 'Cycle walk → drone → fly'],
+    ['🛬', 'Land'],
+    ['🗺️', 'Map'],
+    ['☰', 'Toggle panels'],
     ['🐕', 'Dog sit / stand'],
-    ['🗺', 'Map'],
+    ['⬡', 'Block outlines'],
+    ['◀ ▶', 'Time of day'],
+    ['⏸', 'Pause'],
     ['⚙', 'Settings'],
 ];
 

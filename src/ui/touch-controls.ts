@@ -43,8 +43,10 @@ const STYLE = `
 `;
 
 export interface TouchControls {
-    onFly: (fn: () => void) => void;
-    onDrone: (fn: () => void) => void;
+    /** ✈ — cycle walk → drone → fly (F). */
+    onCycle: (fn: () => void) => void;
+    /** ☰ — show/hide the HUD panels (G). */
+    onPanels: (fn: () => void) => void;
     onLand: (fn: () => void) => void;
     onEdgeToggle: (fn: () => void) => void;
     onTimeBack: (fn: () => void) => void;
@@ -66,19 +68,19 @@ export interface TouchControls {
  *   Space        → ↑ button  (jump on foot / ascend in drone)
  *   C            → ↓ button  (descend in drone)
  *   Shift        → ⚡ button  (sprint)
- *   F            → ✈ button  (fly toggle)
- *   V            → 🚁 button  (enter drone)
+ *   F            → ✈ button  (cycle walk → drone → fly, as in planet-explorer)
  *   L            → 🛬 button  (land — visible only while airborne)
- *   E            → ⬡ button  (edge toggle)
+ *   M            → 🗺️ button  (map)
+ *   G            → ☰ button  (toggle panels)
+ *   B            → ⬡ button  (block outlines)
  *   [ ]          → ◀ ▶ buttons (time of day)
- *   Y            → 🐕 button  (dog sit/stand)
- *   M            → 🗺 button  (map)
+ *   X            → 🐕 button  (dog sit/stand)
  *   Esc          → ⏸ button  (pause)
  */
 export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchControls {
     const stub: TouchControls = {
-        onFly: () => {},
-        onDrone: () => {},
+        onCycle: () => {},
+        onPanels: () => {},
         onLand: () => {},
         onEdgeToggle: () => {},
         onTimeBack: () => {},
@@ -104,15 +106,15 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
     const btns = document.createElement('div');
     btns.id = 'touch-btns';
     btns.innerHTML = `
-    <button id="btn-pause"        aria-label="Pause">⏸</button>
-    <button id="btn-map"          aria-label="Toggle map">🗺</button>
+    <button id="btn-pause"   aria-label="Pause">⏸</button>
+    <button id="btn-map"     aria-label="Map">🗺️</button>
     <button id="btn-jump"    aria-label="Jump / Ascend">↑</button>
     <button id="btn-descend" aria-label="Descend">↓</button>
     <button id="btn-sprint"  aria-label="Sprint">⚡</button>
-    <button id="btn-fly"     aria-label="Fly mode">✈</button>
-    <button id="btn-drone"   aria-label="Enter drone">🚁</button>
+    <button id="btn-cycle"   aria-label="Cycle walk, drone, fly">🚁</button>
     <button id="btn-land"    aria-label="Land">🛬</button>
-    <button id="btn-edges"   aria-label="Toggle edges">⬡</button>
+    <button id="btn-panels"  aria-label="Toggle panels">☰</button>
+    <button id="btn-edges"   aria-label="Toggle block outlines">⬡</button>
     <button id="btn-time-back"    aria-label="Step time back">◀</button>
     <button id="btn-time-forward" aria-label="Step time forward">▶</button>
     <button id="btn-dog"          aria-label="Dog sit/stand">🐕</button>
@@ -250,10 +252,12 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
             { passive: true },
         );
     const edges = document.getElementById('btn-edges')!;
+    const landBtn = document.getElementById('btn-land') as HTMLElement;
+    const cycleBtn = document.getElementById('btn-cycle') as HTMLElement;
 
     const controls: TouchControls = {
-        onFly: tap('btn-fly'),
-        onDrone: tap('btn-drone'),
+        onCycle: tap('btn-cycle'),
+        onPanels: tap('btn-panels'),
         onLand: tap('btn-land'),
         onEdgeToggle: (fn) =>
             tap('btn-edges')(() => {
@@ -266,18 +270,12 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
         onDog: tap('btn-dog'),
         onPause: tap('btn-pause'),
         update(droneActive: boolean, landing: boolean, flyActive: boolean) {
-            const airborne = droneActive || flyActive;
-            const land = document.getElementById('btn-land')! as HTMLElement;
-            const fly = document.getElementById('btn-fly')! as HTMLElement;
-            const drone = document.getElementById('btn-drone')! as HTMLElement;
-            // Land: only shown while drone is airborne (fly exits via ✈ toggle)
-            land.style.display = droneActive && !landing ? 'block' : 'none';
-            // Fly: hidden while drone active; shows "exit fly" label when fly active
-            fly.style.display = droneActive ? 'none' : '';
-            fly.textContent = flyActive ? '🛫' : '✈';
-            fly.setAttribute('aria-label', flyActive ? 'Exit fly mode' : 'Fly mode');
-            // Drone: hidden when any air mode active
-            drone.style.display = airborne ? 'none' : '';
+            // Land: shown while airborne in either mode, as in planet-explorer.
+            landBtn.style.display = (droneActive && !landing) || flyActive ? 'block' : 'none';
+            // The cycle button shows the mode it switches TO next.
+            const next = flyActive ? 'walk' : droneActive ? 'fly' : 'drone';
+            cycleBtn.textContent = next === 'walk' ? '🚶' : next === 'fly' ? '✈' : '🚁';
+            cycleBtn.setAttribute('aria-label', 'Switch to ' + next);
         },
         destroy() {
             manager.destroy();

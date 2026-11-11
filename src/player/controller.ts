@@ -1,6 +1,6 @@
-// src/player/sphere-controller.ts
+// src/player/controller.ts
 import * as THREE from 'three';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/sphere-voxel';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 
 const GRAVITY = 28;

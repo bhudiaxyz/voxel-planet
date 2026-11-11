@@ -92,7 +92,7 @@ export function createHud({ dayNight, drone }: HudDeps) {
     <div class="place show" id="hud-place">VoxelWorld</div>
     <button class="settings-btn" id="hud-settings" type="button" aria-label="Settings">⚙</button>
     <div class="shortcuts" id="hud-shortcuts">
-      <span class="shortcut"><kbd>Y</kbd>Sit</span>
+      <span class="shortcut"><kbd>X</kbd>Sit</span>
       <span class="shortcut"><kbd>M</kbd>Map</span>
       <span class="shortcut"><kbd>Esc</kbd>Menu</span>
     </div>
@@ -115,6 +115,10 @@ export function createHud({ dayNight, drone }: HudDeps) {
     return {
         onSettingsClick(cb: () => void) {
             settingsBtn.addEventListener('click', cb);
+        },
+        /** G / ☰ — hide or show every HUD panel (toggle panels, as in planet-explorer). */
+        toggle() {
+            root.style.display = root.style.display === 'none' ? '' : 'none';
         },
         showSettingsBtn() {
             settingsBtn.classList.add('visible');

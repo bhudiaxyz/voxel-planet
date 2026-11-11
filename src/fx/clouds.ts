@@ -83,7 +83,7 @@ function cloudShape(rnd: () => number) {
 export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
     if (count <= 0) return { update() {}, setColors() {}, dispose() {} };
     let s = seed >>> 0 || 1;
-    const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+    const rnd = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
 
     // Three shapes, instanced: enough variety that repeats don't read.
     const shapes = [cloudShape(rnd), cloudShape(rnd), cloudShape(rnd)];

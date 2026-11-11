@@ -1,8 +1,8 @@
-// src/player/sphere-dog.ts
+// src/player/dog.ts
 import * as THREE from 'three';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/sphere-voxel';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV, columnDir } from '../core/geoutil';
-import { createSpherePathfinder, type Col } from './sphere-path';
+import { createSpherePathfinder, type Col } from './path';
 
 /**
  * Deepest walkable layer. The sea surface sits at layer 11.5, so layer-11
@@ -56,7 +56,16 @@ function buildDogModel() {
     const nose = new THREE.MeshLambertMaterial({ color: 0x2a1d18 });
     const root = new THREE.Group();
     const parts: THREE.Mesh[] = [];
-    const add = (w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material, parent: THREE.Object3D = root) => {
+    const add = (
+        w: number,
+        h: number,
+        d: number,
+        x: number,
+        y: number,
+        z: number,
+        m: THREE.Material,
+        parent: THREE.Object3D = root,
+    ) => {
         const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
         mesh.position.set(x, y, z);
         mesh.castShadow = true;
@@ -75,7 +84,12 @@ function buildDogModel() {
     add(0.1, 0.22, 0.08, -0.16, 0.24, -0.06, patch, head); // ears
     add(0.1, 0.22, 0.08, 0.16, 0.24, -0.06, patch, head);
     const legs: THREE.Mesh[] = [];
-    for (const [x, z] of [[-0.16, 0.36], [0.16, 0.36], [-0.16, -0.36], [0.16, -0.36]]) {
+    for (const [x, z] of [
+        [-0.16, 0.36],
+        [0.16, 0.36],
+        [-0.16, -0.36],
+        [0.16, -0.36],
+    ]) {
         const leg = add(0.14, 0.44, 0.14, x, 0.22, z, coat);
         legs.push(leg);
     }
@@ -128,7 +142,8 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
 
     const colOf = (d: THREE.Vector3): Col => dirToFaceUV(d, FACE_RES);
     const sameCol = (a: Col, b: Col) => a.face === b.face && a.u === b.u && a.v === b.v;
-    const colDist = (a: Col, b: Col) => (a.face === b.face ? Math.max(Math.abs(a.u - b.u), Math.abs(a.v - b.v)) : Infinity);
+    const colDist = (a: Col, b: Col) =>
+        a.face === b.face ? Math.max(Math.abs(a.u - b.u), Math.abs(a.v - b.v)) : Infinity;
     /** Radius of the walkable ground at a column (feet height), or -1 for sea / trunk. */
     const groundR = (c: Col) => {
         const l = router.groundOf(c.face, c.u, c.v);
@@ -153,7 +168,10 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
 
     /** The column `ahead` units forward and `side` units right of the player (frameAt first). */
     function spotNear(playerDir: THREE.Vector3, ahead: number, side: number): Col {
-        _p.copy(playerDir).multiplyScalar(surfaceAt(playerDir)).addScaledVector(_fwd, ahead).addScaledVector(_side, side);
+        _p.copy(playerDir)
+            .multiplyScalar(surfaceAt(playerDir))
+            .addScaledVector(_fwd, ahead)
+            .addScaledVector(_side, side);
         return colOf(_p.normalize());
     }
 

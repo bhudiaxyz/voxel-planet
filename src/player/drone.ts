@@ -1,6 +1,6 @@
-// src/player/sphere-drone.ts
+// src/player/drone.ts
 import * as THREE from 'three';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/sphere-voxel';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 
 const DRONE_SPEED = 18; // m/s horizontal cruise

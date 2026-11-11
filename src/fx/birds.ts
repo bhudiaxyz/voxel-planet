@@ -78,7 +78,7 @@ export function createBirds(scene: THREE.Scene, maxBirds: number, seed = 1) {
     if (maxBirds <= 0) return { update() {}, dispose() {} };
 
     let s = seed >>> 0 || 1;
-    const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+    const rnd = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
     const range = (a: number, b: number) => a + (b - a) * rnd();
 
     const geo = birdGeometry();

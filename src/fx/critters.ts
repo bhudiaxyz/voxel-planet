@@ -156,17 +156,62 @@ function butterflyGeometry() {
         }
         idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
     };
-    const U: Array<[number, number]> = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    const U: Array<[number, number]> = [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 1],
+    ];
     for (const s of [-1, 1]) {
         // Forewing: rooted near the front of the body, sweeping forward and out.
-        quad([[0, 0, -0.02], [0.8, 0, 0.12], [0.8, 0, 0.58], [0, 0, 0.18]], U, 1, s);
+        quad(
+            [
+                [0, 0, -0.02],
+                [0.8, 0, 0.12],
+                [0.8, 0, 0.58],
+                [0, 0, 0.18],
+            ],
+            U,
+            1,
+            s,
+        );
         // Hindwing: rooted behind, smaller and rounder, trailing back.
-        quad([[0, 0, -0.32], [0.58, 0, -0.42], [0.58, 0, 0.04], [0, 0, -0.04]], U, 2, s);
+        quad(
+            [
+                [0, 0, -0.32],
+                [0.58, 0, -0.42],
+                [0.58, 0, 0.04],
+                [0, 0, -0.04],
+            ],
+            U,
+            2,
+            s,
+        );
     }
     // Body: a thin vertical slab along the heading (two crossed quads so it has width from any side).
     // Spans the wing roots only (-0.3..0.2), so it never pokes out as a stick.
-    quad([[-0.03, 0, -0.3], [0.03, 0, -0.3], [0.03, 0, 0.2], [-0.03, 0, 0.2]], U, 0, 0);
-    quad([[0, -0.03, -0.3], [0, 0.03, -0.3], [0, 0.03, 0.2], [0, -0.03, 0.2]], U, 0, 0);
+    quad(
+        [
+            [-0.03, 0, -0.3],
+            [0.03, 0, -0.3],
+            [0.03, 0, 0.2],
+            [-0.03, 0, 0.2],
+        ],
+        U,
+        0,
+        0,
+    );
+    quad(
+        [
+            [0, -0.03, -0.3],
+            [0, 0.03, -0.3],
+            [0, 0.03, 0.2],
+            [0, -0.03, 0.2],
+        ],
+        U,
+        0,
+        0,
+    );
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
@@ -218,16 +263,20 @@ export interface GroundSampler {
 export function createCritters(scene: THREE.Scene, count: number, sampler: GroundSampler, seed = 3) {
     if (count <= 0) return { update() {}, dispose() {} };
     let s = seed >>> 0 || 1;
-    const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
+    const rnd = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
 
     // ---- butterflies --------------------------------------------------------
     const bGeo = butterflyGeometry();
     const bAnchor = new Float32Array(count * 3);
     const bSeed = new Float32Array(count * 3);
     const bCol = new Float32Array(count * 3);
-    const flowerCols = [BLOCKS.LEAF_PINK, BLOCKS.LEAF_LILAC, BLOCKS.LEAF_CREAM, BLOCKS.LEAF_ROSE, BLOCKS.LEAF_BLUSH].map(
-        (b: any) => b.top as THREE.Color,
-    );
+    const flowerCols = [
+        BLOCKS.LEAF_PINK,
+        BLOCKS.LEAF_LILAC,
+        BLOCKS.LEAF_CREAM,
+        BLOCKS.LEAF_ROSE,
+        BLOCKS.LEAF_BLUSH,
+    ].map((b: any) => b.top as THREE.Color);
     for (let i = 0; i < count; i++) {
         bSeed[i * 3] = rnd();
         bSeed[i * 3 + 1] = 0.6 + rnd() * 0.8;
@@ -311,7 +360,11 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
         for (let tries = 0; tries < 4; tries++) {
             const a = rnd() * Math.PI * 2,
                 r = 3 + Math.sqrt(rnd()) * SPREAD;
-            _d.copy(_up).multiplyScalar(R).addScaledVector(_t1, Math.cos(a) * r).addScaledVector(_t2, Math.sin(a) * r).normalize();
+            _d.copy(_up)
+                .multiplyScalar(R)
+                .addScaledVector(_t1, Math.cos(a) * r)
+                .addScaledVector(_t2, Math.sin(a) * r)
+                .normalize();
             const g = sampler.groundAt(_d);
             if (g < 0) continue;
             const arr = i < count ? bAnchor : fAnchor;

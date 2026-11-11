@@ -259,8 +259,16 @@ export class Atmosphere {
             this.sky.material.uniforms.uTime.value = this.time;
             // Sphere world: orient the sky to the viewer's local up (radial).
             this.sky.material.uniforms.uSkyUp.value.copy(camera.position).normalize();
-            this.sky.updateMatrixWorld();
         }
+        if (this.hemi) {
+            // HemisphereLight takes its sky axis from its position (it looks at the
+            // origin). Left at the default +Y it lit the planet by WORLD up, so on the
+            // planet's flanks every face got the full blue sky term — the whole scene
+            // read cold. Point it along the viewer's local up instead.
+            this.hemi.position.copy(camera.position).normalize();
+            this.hemi.updateMatrixWorld();
+        }
+        this.sky?.updateMatrixWorld();
     }
 }
 

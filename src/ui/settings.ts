@@ -6,7 +6,7 @@
  */
 
 import { DEFAULT_SHADOW_RESOLUTION } from '../render/lighting';
-import { PLANET_RADIUS_DEFAULT } from '../render/planet.glsl';
+import { PLANET_RADIUS_DEFAULT } from '../render/planet';
 import type { DayNight } from '../render/day-night';
 import { VOXEL_PALETTES, activePaletteName } from '../core/palette';
 

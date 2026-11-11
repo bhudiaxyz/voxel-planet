@@ -84,7 +84,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 1,
         birdFlock: 14,
         clouds: 26,
-        critters: 40,
+        critters: 28,
         groundDetail: 1,
         shoreFoam: true,
         foliageDetail: true,
@@ -109,7 +109,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 0.7,
         birdFlock: 10,
         clouds: 18,
-        critters: 24,
+        critters: 18,
         groundDetail: 0.7,
         shoreFoam: true,
         foliageDetail: true,
@@ -134,7 +134,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 0.8,
         birdFlock: 9,
         clouds: 18,
-        critters: 24,
+        critters: 18,
         groundDetail: 0.8,
         shoreFoam: true,
         foliageDetail: true,
@@ -274,7 +274,10 @@ export function classifyGpu(p: GpuProbe): GpuTier {
 
     if (weakMem || p.cores <= 2) return 'low';
     // Discrete GPUs and Apple Silicon.
-    if (/nvidia|geforce|quadro|rtx|radeon (rx|pro)|\brx ?\d{3,4}|apple m\d|apple gpu/.test(r) && !/radeon\(tm\) graphics|vega \d+ graphics/.test(r))
+    if (
+        /nvidia|geforce|quadro|rtx|radeon (rx|pro)|\brx ?\d{3,4}|apple m\d|apple gpu/.test(r) &&
+        !/radeon\(tm\) graphics|vega \d+ graphics/.test(r)
+    )
         return p.cores >= 4 ? 'high' : 'mid';
     // Intel Arc discrete (A-series) vs Arc integrated (Core Ultra "Arc(TM) Graphics" / "Arc Pro 1xxT").
     if (/arc\(tm\) a\d{3}/.test(r)) return 'high';

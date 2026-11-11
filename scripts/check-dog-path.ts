@@ -9,9 +9,9 @@
  *   - a 6-layer cliff at u >= 120 — not climbable from below
  */
 import assert from 'node:assert/strict';
-import { SphereVoxelGrid } from '../src/core/sphere-voxel.ts';
+import { SphereVoxelGrid } from '../src/core/voxel.ts';
 import { BLOCKS } from '../src/core/palette.ts';
-import { createSpherePathfinder, type Col } from '../src/player/sphere-path.ts';
+import { createSpherePathfinder, type Col } from '../src/player/path.ts';
 
 const grid = new SphereVoxelGrid();
 const F = 0;

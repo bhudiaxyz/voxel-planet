@@ -1,8 +1,8 @@
-// src/player/sphere-fly.ts
+// src/player/fly.ts
 // Free-flight mode on the sphere: player controls movement and direction.
 // Terrain floor prevents clipping; auto-climb pushes over obstacles ahead.
 import * as THREE from 'three';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/sphere-voxel';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 
 const FLY_SPEED = 24; // m/s

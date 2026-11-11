@@ -1,8 +1,8 @@
-// src/world/sphere-landmarks.ts
+// src/world/landmarks.ts
 // Sphere-native landmark structures — ported geometry from voxel-world/stamps.ts,
 // rewritten to use SphereVoxelGrid face-local (face, u, v, layer) coordinates.
 import * as THREE from 'three';
-import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/sphere-voxel';
+import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/voxel';
 import { BLOCKS } from '../core/palette';
 import { makeRng } from '../core/rng';
 import { columnDir } from '../core/geoutil';

@@ -11,7 +11,7 @@
  * which is invisible under the haze at that range.
  */
 import * as THREE from 'three';
-import { SphereVoxelGrid, FACE_RES } from '../core/sphere-voxel';
+import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 
 const MAX = 8; // columns; foam lives within the first few
 

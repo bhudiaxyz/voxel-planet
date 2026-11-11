@@ -6,7 +6,7 @@ import { FPCamera } from './render/fp-camera';
 import { createPostFX } from './render/postfx';
 import { buildSphereWorld } from './world/world';
 import { DayNight } from './render/day-night';
-import { SphereController } from './player/sphere-controller';
+import { SphereController } from './player/controller';
 import { createPause } from './ui/pause';
 import { createSettings, DEFAULTS as SETTINGS_DEFAULTS } from './ui/settings';
 import { createHud } from './ui/hud';
@@ -18,11 +18,11 @@ import { createBirds } from './fx/birds';
 import { createClouds } from './fx/clouds';
 import { createCritters } from './fx/critters';
 import { dirToFaceUV } from './core/geoutil';
-import { createSphereMap } from './render/sphere-map';
-import { createSphereDroneMode } from './player/sphere-drone';
-import { createSphereFlyMode } from './player/sphere-fly';
-import { createSphereDog } from './player/sphere-dog';
-import { PLANET_RADIUS, FACE_RES } from './core/sphere-voxel';
+import { createSphereMap } from './render/map';
+import { createSphereDroneMode } from './player/drone';
+import { createSphereFlyMode } from './player/fly';
+import { createSphereDog } from './player/dog';
+import { PLANET_RADIUS, FACE_RES } from './core/voxel';
 
 export let currentSeedWord = 'LusaliBenoruLezagi';
 const urlWord = new URLSearchParams(location.search).get('seed');
@@ -171,12 +171,6 @@ async function start(): Promise<void> {
         drone.enter(controller.dir, controller.groundRadius);
         fpCam.droneActive = true;
     };
-    const exitDrone = () => {
-        controller.snapToDir(drone.dir, world.grid);
-        drone.exit();
-        fpCam.droneActive = false;
-        if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
-    };
     const enterFly = () => {
         if (drone.active) {
             // Preserve drone's in-air position rather than snapping to surface first
@@ -198,9 +192,16 @@ async function start(): Promise<void> {
     };
 
     // Actions shared by keyboard and touch buttons.
-    const toggleFly = () => {
+    /** F / ✈ — cycle walk → drone → fly → walk, as in planet-explorer. */
+    const cycleMode = () => {
         if (fly.active) exitFly();
-        else enterFly();
+        else if (drone.active) enterFly(); // hands over at the drone's current position
+        else enterDrone();
+    };
+    /** L / 🛬 — land from either air mode. */
+    const land = () => {
+        if (drone.active) drone.beginLanding();
+        else if (fly.active) exitFly();
     };
     const toggleEdges = () => {
         const g = post.grade.uniforms;
@@ -214,35 +215,28 @@ async function start(): Promise<void> {
 
     document.addEventListener('keydown', (e: KeyboardEvent) => {
         if (e.repeat) return;
-        // Drone/fly exit — works even without pointer lock
-        if (e.code === 'KeyL' && drone.active) {
-            drone.beginLanding();
-            return;
-        }
-        if (e.code === 'KeyL' && fly.active) {
-            exitFly();
-            return;
-        }
-        if (e.code === 'KeyV') {
-            if (drone.active) exitDrone();
-            else enterDrone();
-            return;
-        }
-        if (e.code === 'KeyF') {
-            toggleFly();
-            return;
-        }
-        // Map toggle — direct, no pause-menu required
-        if (e.code === 'KeyM') {
-            sphereMapToggle.toggle();
-            return;
-        }
-        if (e.code === 'KeyY') {
-            dog.toggleSit();
-            return;
+        // Keys shared with planet-explorer: F cycle mode, L land, M map, G panels.
+        // These work even without pointer lock.
+        switch (e.code) {
+            case 'KeyF':
+                cycleMode();
+                return;
+            case 'KeyL':
+                land();
+                return;
+            case 'KeyM':
+                sphereMapToggle.toggle();
+                return;
+            case 'KeyG':
+                hud.toggle();
+                return;
+            // voxel-planet extras, on keys planet-explorer leaves free:
+            case 'KeyX': // dog sit / stand
+                dog.toggleSit();
+                return;
         }
         if (!canAct()) return;
-        if (e.code === 'KeyE') toggleEdges();
+        if (e.code === 'KeyB') toggleEdges(); // B for block outlines (E is roll in planet-explorer)
         if (e.code === 'BracketLeft') stepTime(-1);
         if (e.code === 'BracketRight') stepTime(1);
     });
@@ -310,19 +304,17 @@ async function start(): Promise<void> {
             post.bloom.threshold = GRADE.bloom.threshold;
         }
         sphereMap.rebake();
+        // Terrain and vegetation colours are baked into their meshes: rebuild them so
+        // the new palette applies to the ground and trees, not just sky and light.
+        world.streaming.rebuildAll(fly.active ? fly.dir : drone.active ? drone.dir : controller.dir);
     });
 
     touch.onEdgeToggle(toggleEdges);
     touch.onTimeBack(() => stepTime(-1));
     touch.onTimeForward(() => stepTime(1));
-    touch.onDrone(() => {
-        if (!drone.active) enterDrone();
-    });
-    touch.onLand(() => {
-        if (drone.active) drone.beginLanding();
-        else if (fly.active) exitFly();
-    });
-    touch.onFly(toggleFly);
+    touch.onCycle(cycleMode);
+    touch.onPanels(() => hud.toggle());
+    touch.onLand(land);
     touch.onMap(sphereMapToggle.toggle);
     touch.onDog(() => dog.toggleSit());
     touch.onPause(pause.toggle);
@@ -430,8 +422,15 @@ async function start(): Promise<void> {
             clouds.update(dt, at, windDir);
             // Sunlit tops brighter than the sky (so they read against pale haze as well
             // as blue), cool shaded undersides; both dim and cool at night.
-            _cloudLit.copy(_white).multiplyScalar(1.35).lerp(SKY.horizon, 0.15).multiplyScalar(1 - night * 0.75);
-            _cloudShade.copy(SKY.zenith).lerp(_white, 0.35).multiplyScalar(0.78 * (1 - night * 0.6));
+            _cloudLit
+                .copy(_white)
+                .multiplyScalar(1.35)
+                .lerp(SKY.horizon, 0.15)
+                .multiplyScalar(1 - night * 0.75);
+            _cloudShade
+                .copy(SKY.zenith)
+                .lerp(_white, 0.35)
+                .multiplyScalar(0.78 * (1 - night * 0.6));
             clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.4);
             critters.update(dt, at, night, renderer.getPixelRatio());
         }
@@ -471,8 +470,8 @@ async function start(): Promise<void> {
         if (!started) {
             started = true;
             ctrlEl.textContent = isTouchDevice
-                ? 'Left stick · move   Swipe right · look   ↑ · jump   ⏸ · controls'
-                : 'WASD · move   Mouse · look   Space · jump   E · edges';
+                ? 'Left thumb · move   Right drag · look   ↑ · jump   ✈ · walk / drone / fly   ⏸ · controls'
+                : 'WASD · move   Mouse · look   Space · jump   F · walk / drone / fly   L · land   M · map';
             bootEl.classList.add('ready');
             bootEl.addEventListener(
                 'click',
