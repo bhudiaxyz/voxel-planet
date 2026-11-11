@@ -433,7 +433,7 @@ export interface VoxelPalette {
 }
 
 /** The active palette name — read by map.ts and any future palette-aware systems. */
-export let activePaletteName = 'Autumn';
+export let activePaletteName = 'Spring';
 
 export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
     Autumn: {
@@ -697,4 +697,4 @@ export function setVoxelPalette(name: string): void {
 }
 
 // Initialise all palette-driven exports with the default palette.
-setVoxelPalette('Autumn');
+setVoxelPalette('Spring');
