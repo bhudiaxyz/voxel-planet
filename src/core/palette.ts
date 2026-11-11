@@ -902,11 +902,12 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
  */
 const NATURAL = {
     /** 0 = untouched, 1 = grey. */
-    desat: 0.18,
+    desat: 0.1,
     /** Warm lean added to red, taken from blue (linear). */
     warm: 0.012,
-    maxGradeSat: 1.02,
-    maxContrast: 1.05,
+    maxGradeSat: 1.04,
+    /** Natural keeps its depth: calm colour, but not flat. */
+    maxContrast: 1.12,
 };
 const _nat = new THREE.Color();
 function naturalise(c: THREE.Color): THREE.Color {
@@ -996,7 +997,7 @@ export function setVoxelPalette(name: string): void {
     GRADE.gain.set(...p.grade.gain);
     // Natural look: the grade may calm a theme but never push it toward neon.
     GRADE.saturation = Math.min(p.grade.saturation, NATURAL.maxGradeSat);
-    GRADE.contrast = Math.min(p.grade.contrast, NATURAL.maxContrast);
+    GRADE.contrast = Math.min(Math.max(p.grade.contrast, 1.08), NATURAL.maxContrast);
     GRADE.vignette = p.grade.vignette;
     GRADE.bloom.strength = p.grade.bloom.strength;
     GRADE.bloom.radius = p.grade.bloom.radius;
