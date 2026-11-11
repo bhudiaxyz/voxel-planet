@@ -89,6 +89,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
     mesh.name = 'dog';
     scene.add(mesh);
 
+    (globalThis as any).__dogDbg = { far: 0, fail: 0, last: null };
     const router = createSpherePathfinder(grid, { maxUp: 2, maxDown: 4, seaLayer: SEA_LAYER });
     const dir = new THREE.Vector3();
     const _axis = new THREE.Vector3();
@@ -200,7 +201,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
         let travelled = 0;
 
         if (!sitting) {
-            if (dir.angleTo(playerDir) > TELEPORT_DIST) appear(playerDir, viewFwd, RUN_IN_AHEAD);
+            if (dir.angleTo(playerDir) > TELEPORT_DIST) { (globalThis as any).__dogDbg.far++; appear(playerDir, viewFwd, RUN_IN_AHEAD); }
 
             // Heel spot: the player's right, a step ahead while they walk so the dog stays in view.
             const playerMoving = playerDir.angleTo(_lastPlayer) > (0.5 * dt) / PLANET_RADIUS;
@@ -237,6 +238,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
                         plan(me, colOf(playerDir));
                     } else {
                         fallback = false;
+                        (globalThis as any).__dogDbg.fail++; (globalThis as any).__dogDbg.last = { me, goal, gMe: groundR(me), gGoal: goal && groundR(goal) };
                         appear(playerDir, viewFwd, RUN_IN_AHEAD);
                     }
                 }
