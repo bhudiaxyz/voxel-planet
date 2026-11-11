@@ -1907,8 +1907,10 @@ export function makeVoxelMaterial() {
         uFadeNear: { value: 1e9 },
         uFadeFar: { value: 2e9 },
         uAoStrength: { value: 0.25 },
-        uAoTint: { value: new THREE.Color(0.64, 0.59, 0.74) },
-        uShadowHue: { value: new THREE.Vector3(1.05, 0.9, 1.18) },
+        // Warm, earthy occlusion and shadow — natural light leaves a brown-grey in
+        // crevices, not lilac. (The lilac/violet pair made every theme look dyed.)
+        uAoTint: { value: new THREE.Color(0.6, 0.55, 0.5) },
+        uShadowHue: { value: new THREE.Vector3(0.98, 0.97, 1.03) },
         uShadowTintStrength: { value: 0.82 },
         uSunDir: { value: LIGHT.sunDir.clone() },
         uSunAmbient: { value: 0.14 }, // diffuse lift on sun-facing sides

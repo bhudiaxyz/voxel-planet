@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { columnDir } from '../core/geoutil';
-import { BLOCK_BY_ID, BLOCKS, PATTERN } from '../core/palette';
+import { BLOCK_BY_ID, BLOCKS, PATTERN, PETAL_COLORS } from '../core/palette';
 import { makeRng, makeNoise3D } from '../core/rng';
 import { PLANT } from './terrain';
 
@@ -321,13 +321,13 @@ interface DetailColours {
     moss: THREE.Color;
 }
 const readColours = (): DetailColours => ({
-    flowers: [BLOCKS.LEAF_PINK, BLOCKS.LEAF_BLUSH, BLOCKS.LEAF_LILAC, BLOCKS.LEAF_CREAM, BLOCKS.LEAF_ROSE].map(
-        (b: any) => b.top,
-    ),
+    // Flowers use the theme's petal colours, not its leaves: canopies are mostly
+    // green now, and a meadow of green flowers would vanish into the grass.
+    flowers: PETAL_COLORS as THREE.Color[],
     pebbles: [BLOCKS.STONE, BLOCKS.STONE_PALE, BLOCKS.STONE_WARM].map((b: any) => b.top),
     bark: [BLOCKS.TRUNK, BLOCKS.TRUNK_PALE].map((b: any) => b.side),
     // Same caps as the flat world's damp-grove mushrooms.
-    caps: [BLOCKS.LEAF_ROSE.top, BLOCKS.LEAF_BLUSH.top, BLOCKS.LEAF_CREAM.top, BLOCKS.LEAF_LILAC.top] as THREE.Color[],
+    caps: [PETAL_COLORS[0], PETAL_COLORS[2], PETAL_COLORS[3], BLOCKS.STONE_WARM.top] as THREE.Color[],
     stem: BLOCKS.STONE_PALE.top as THREE.Color,
     moss: BLOCKS.GRASS_DEEP.top as THREE.Color,
 });

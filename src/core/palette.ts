@@ -490,17 +490,17 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
     Spring: {
         // Fresh spring morning: new-leaf greens, pink/white/lilac blossom, soft clean light.
         label: 'Spring Blossom',
-        grass: 0x80ab52,
-        grassLight: 0x98bf66,
-        grassDeep: 0x68903f,
-        soil: 0x8a6a48,
+        grass: 0x6e9a48,
+        grassLight: 0x86ac58,
+        grassDeep: 0x58803a,
+        soil: 0x7a5a3c,
         sand: 0xe0d0a4,
         stone: 0xa6a098,
         stonePale: 0xbcb6ac,
         stoneWarm: 0xb0a294,
         // slots: blossom, pale, accent, cream, LEAF GREEN, deep accent
-        foliage: [0xf4a6c0, 0xfbdde6, 0xd4b4e8, 0xf6f0dc, 0x7cbc52, 0xec8cae],
-        water: { shoal: 0x7cc0bc, shallow: 0x3e88aa, deep: 0x1c4a6c },
+        foliage: [0x3e6e34, 0x7aa850, 0xc87a8e, 0xb4c878, 0x4e8a3c, 0x2a5228],
+        water: { shoal: 0x8cc4b0, shallow: 0x2e7a8c, deep: 0x123a5a },
         sky: { zenith: 0x5c90d0, horizon: 0xc4dcea, ground: 0x86a868, haze: 0xd2e2ee, sunTint: 0xfff4e4 },
         light: {
             sunColor: 0xfff0d6,
@@ -512,7 +512,7 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
             fillColor: 0xe8eef6,
             fillIntensity: 0.55,
         },
-        petals: [0xf8b8cc, 0xffe2ec, 0xf29cbc, 0xfff0f6, 0xf6cede, 0xea8cb4],
+        petals: [0xd8a8b4, 0xe6d6c8, 0xc89aa8, 0xeee4d6, 0xdcc0b8, 0xb88894],
         grade: {
             exposure: 1.1,
             lift: [0.008, 0.008, 0.006],
@@ -895,6 +895,28 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
     },
 };
 
+/**
+ * One shared "natural" filter every theme passes through, so none looks dyed:
+ * a little saturation comes out of every block colour and it leans slightly
+ * warm, while each theme keeps its own hue. Tune here, not per theme.
+ */
+const NATURAL = {
+    /** 0 = untouched, 1 = grey. */
+    desat: 0.18,
+    /** Warm lean added to red, taken from blue (linear). */
+    warm: 0.012,
+    maxGradeSat: 1.02,
+    maxContrast: 1.05,
+};
+const _nat = new THREE.Color();
+function naturalise(c: THREE.Color): THREE.Color {
+    const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
+    c.r = c.r + (l - c.r) * NATURAL.desat + NATURAL.warm * l;
+    c.g = c.g + (l - c.g) * NATURAL.desat;
+    c.b = Math.max(0, c.b + (l - c.b) * NATURAL.desat - NATURAL.warm * l);
+    return c;
+}
+
 /** Darken a Three.js Color by a factor (0..1 = darker) in linear space. */
 function darken(src: THREE.Color, factor: number): THREE.Color {
     return new THREE.Color(src.r * factor, src.g * factor, src.b * factor);
@@ -910,7 +932,7 @@ export function setVoxelPalette(name: string): void {
     const applyBlock = (id: number, topHex: number, sideFactor = 0.88, bottomFactor = 0.78) => {
         const blk = BLOCK_BY_ID[id];
         if (!blk) return;
-        blk.top.set(topHex);
+        blk.top.copy(naturalise(_nat.set(topHex)));
         blk.side.copy(darken(blk.top, sideFactor));
         blk.bottom.copy(darken(blk.top, bottomFactor));
         if (blk.tint) blk.tint.copy(darken(blk.top, sideFactor));
@@ -955,7 +977,9 @@ export function setVoxelPalette(name: string): void {
     // Light
     LIGHT.sunColor.set(p.light.sunColor);
     LIGHT.sunIntensity = p.light.sunIntensity;
-    LIGHT.skyColor.set(p.light.skyColor);
+    // The hemisphere sky term is the single biggest cool cast on the scene;
+    // pull it a third of the way to a warm neutral so shade reads natural.
+    LIGHT.skyColor.set(p.light.skyColor).lerp(_nat.setRGB(0.72, 0.7, 0.66), 0.35);
     LIGHT.groundColor.set(p.light.groundColor);
     LIGHT.hemiIntensity = p.light.hemiIntensity;
     LIGHT.ambient = p.light.ambient;
@@ -970,8 +994,9 @@ export function setVoxelPalette(name: string): void {
     GRADE.lift.set(...p.grade.lift);
     GRADE.gamma.set(...p.grade.gamma);
     GRADE.gain.set(...p.grade.gain);
-    GRADE.saturation = p.grade.saturation;
-    GRADE.contrast = p.grade.contrast;
+    // Natural look: the grade may calm a theme but never push it toward neon.
+    GRADE.saturation = Math.min(p.grade.saturation, NATURAL.maxGradeSat);
+    GRADE.contrast = Math.min(p.grade.contrast, NATURAL.maxContrast);
     GRADE.vignette = p.grade.vignette;
     GRADE.bloom.strength = p.grade.bloom.strength;
     GRADE.bloom.radius = p.grade.bloom.radius;

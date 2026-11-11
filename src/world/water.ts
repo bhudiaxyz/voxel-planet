@@ -104,7 +104,7 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
                 uFoamColor: { value: new THREE.Color(0xf4f1ea) },
             },
         ]),
-        defines: foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {},
+        defines: { ...(shoreMap ? { USE_SHORE_MAP: 1 } : {}), ...(foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {}) },
         vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
@@ -140,9 +140,11 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
       varying vec3 vNrm;
 
       ${WAVE_GLSL}
+      #ifdef USE_SHORE_MAP
+        ${SHORE_GLSL}
+      #endif
       #ifdef USE_SHORE_FOAM
         uniform vec3 uFoamColor;
-        ${SHORE_GLSL}
       #endif
 
       float causticWeb(vec2 p, float t) {
@@ -160,26 +162,42 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
         vec3 V = normalize(cameraPosition - vWorld);
         float NdotV = max(dot(N, V), 0.0);
 
-        // ponytail: constant depth approximation; upgrade to per-column depth map if needed
-        float depth = uSeaDepth * (1.0 - NdotV * 0.5);
+        vec3 up = normalize(vWorld);
+        // Depth from the shore-distance map: 0 at the waterline, rising offshore.
+        // Grazing views see through more water, so the path lengthens toward the horizon.
+        #ifdef USE_SHORE_MAP
+          float shore = shoreDist(up);                    // 0 at the coast .. 1 far out
+          float depth = uSeaDepth * mix(0.12, 1.6, smoothstep(0.0, 0.9, shore));
+        #else
+          float shore = 1.0;
+          float depth = uSeaDepth;
+        #endif
+        depth *= 1.0 + (1.0 - NdotV) * 0.8;
         vec3 ext = exp(-uExtinction * depth);
 
-        float dt = clamp(depth / (uSeaDepth * 2.0), 0.0, 1.0);
-        vec3 waterCol = mix(uShoal, mix(uShallow, uDeep, dt), dt);
-        waterCol *= ext;
+        // Shoal (sandy, clear) -> shallow (teal) -> deep (ocean blue), by real depth.
+        float dt = clamp(depth / (uSeaDepth * 1.6), 0.0, 1.0);
+        vec3 waterCol = mix(uShoal, uShallow, smoothstep(0.0, 0.35, dt));
+        waterCol = mix(waterCol, uDeep, smoothstep(0.3, 1.0, dt));
+        waterCol *= mix(vec3(1.0), ext, 0.6);
 
-        float caustic = causticWeb(vWorld.xz * 0.5, uTime) * uCaustic;
-        waterCol += caustic * ext * 0.4;
+        // Caustics on a sphere-safe plane (the tangent frame), strongest in the shallows.
+        vec3 cT = normalize(cross(up, abs(up.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec2 cUV = vec2(dot(vWorld, cT), dot(vWorld, cross(up, cT)));
+        float caustic = causticWeb(cUV * 0.5, uTime) * uCaustic * (1.0 - smoothstep(0.05, 0.6, shore));
+        waterCol += caustic * 0.35;
 
+        // Sky reflection keyed on the LOCAL up, not world Y.
         float fresnel = pow(1.0 - NdotV, 5.0);
-        vec3 skyRef = mix(uHorizon, uSky, max(dot(N, vec3(0,1,0)), 0.0));
-        waterCol = mix(waterCol, skyRef * uReflect, fresnel * 0.7);
+        vec3 skyRef = mix(uHorizon, uSky, max(dot(N, up), 0.0));
+        waterCol = mix(waterCol, skyRef * uReflect, fresnel * 0.6);
 
         vec3 H = normalize(V + uSunDir);
         float spec = pow(max(dot(N, H), 0.0), 80.0) * 2.0;
         waterCol += uSunColor * spec;
 
-        float alpha = uOpacity + fresnel * 0.3;
+        // Clear in the shallows (the seabed shows through), opaque out at sea.
+        float alpha = mix(uOpacity * 0.55, uOpacity, smoothstep(0.0, 0.5, shore)) + fresnel * 0.3;
 
         #ifdef USE_SHORE_FOAM
         {

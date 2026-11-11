@@ -9,7 +9,7 @@
  * them. One instanced draw each; both fade with the night factor.
  */
 import * as THREE from 'three';
-import { BLOCKS } from '../core/palette';
+import { PETAL_COLORS } from '../core/palette';
 
 const SPREAD = 14; // anchors are scattered within this of the player — close enough to read
 const RESAMPLE = 1.1; // seconds between anchor refreshes (a few per frame)
@@ -270,13 +270,8 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
     const bAnchor = new Float32Array(count * 3);
     const bSeed = new Float32Array(count * 3);
     const bCol = new Float32Array(count * 3);
-    const flowerCols = [
-        BLOCKS.LEAF_PINK,
-        BLOCKS.LEAF_LILAC,
-        BLOCKS.LEAF_CREAM,
-        BLOCKS.LEAF_ROSE,
-        BLOCKS.LEAF_BLUSH,
-    ].map((b: any) => b.top as THREE.Color);
+    // Butterflies take the theme's petal (flower) colours, not leaf colours.
+    const flowerCols = PETAL_COLORS as THREE.Color[];
     for (let i = 0; i < count; i++) {
         bSeed[i * 3] = rnd();
         bSeed[i * 3 + 1] = 0.6 + rnd() * 0.8;

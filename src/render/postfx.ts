@@ -124,8 +124,9 @@ const GradeShader = {
       // Highlights toward warm cream, shadows toward lavender. The shadow leg
       // matters more than it looks: it is what makes cast shadows read as
       // coloured air rather than as absence of light.
-      col = mix(col, col * vec3(1.020, 1.000, 0.978), smoothstep(0.55, 1.0, l));
-      col = mix(col, col * vec3(0.968, 0.976, 1.045), 1.0 - smoothstep(0.0, 0.50, l));
+      // Natural look: warm highlights, near-neutral shadows (a faint cool, no lavender).
+      col = mix(col, col * vec3(1.022, 1.004, 0.972), smoothstep(0.55, 1.0, l));
+      col = mix(col, col * vec3(0.995, 0.995, 1.012), 1.0 - smoothstep(0.0, 0.50, l));
 
       // --- milk ----------------------------------------------------------
       // Weighted toward the dark end so the deepest values (trunks, shadowed
@@ -341,16 +342,16 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             /** Must match the near plane patched into three's fog chunk. */
             uFogNear: { value: FOG_NEAR },
             /** how much residual chroma distance eats, on top of the fog mix */
-            uDesat: { value: 0.58 },
+            uDesat: { value: 0.32 }, // distance desaturation: depth, not bleach
             /** how far a fogged pixel is pulled toward its true directional sky colour */
-            uSkyBlend: { value: 0.62 },
+            uSkyBlend: { value: 0.5 },
 
             /* ---- valley mist ---- */
             uMistColor: { value: new THREE.Color(0.8, 0.79, 0.9) },
             uMistBase: { value: 8.0 }, // waterline-ish
             uMistH: { value: 9.0 }, // e-folding height
             uMistDens: { value: 0.012 },
-            uMistMax: { value: 0.34 },
+            uMistMax: { value: 0.2 }, // valley mist: a veil, not a whiteout
 
             /* ---- large-scale AO ---- */
             uAOStrength: { value: 0.24 },

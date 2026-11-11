@@ -79,8 +79,9 @@ export async function buildSphereWorld(
 
     onProgress(0.9, 'adding ocean');
     await yieldFrame();
-    // Shore distances only matter for foam; skip the bake entirely when it's off.
-    const shoreMap = shoreFoam ? bakeShoreMap(grid, SEA_LAYER) : null;
+    // Shore distances give the sea real depth (clear shallows → deep blue) and the foam
+    // line. Skipped only on very-low, which keeps the flat single-colour sea.
+    const shoreMap = tier !== 'very-low' ? bakeShoreMap(grid, SEA_LAYER) : null;
     const sphereWater = createSphereWater(tier, shoreMap, shoreFoam);
     scene.add(sphereWater.mesh);
 
