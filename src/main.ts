@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRenderer } from './render/renderer';
-import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName } from './core/palette';
+import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName, BLOCKS } from './core/palette';
 import { Atmosphere } from './render/lighting';
 import { FPCamera } from './render/fp-camera';
 import { createPostFX } from './render/postfx';
@@ -201,7 +201,8 @@ async function start(): Promise<void> {
     /** F / ✈ — cycle walk → drone → fly → walk, as in planet-explorer. */
     const cycleMode = () => {
         if (fly.active) exitFly();
-        else if (drone.active) enterFly(); // hands over at the drone's current position
+        else if (drone.active)
+            enterFly(); // hands over at the drone's current position
         else enterDrone();
     };
     /** L / 🛬 — land from either air mode. */
@@ -495,7 +496,19 @@ async function start(): Promise<void> {
     frame();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__game = { scene, renderer, fpCam, world, controller, post, atmo, dayNight, tier, dog };
+    (window as any).__game = {
+        scene,
+        renderer,
+        fpCam,
+        world,
+        controller,
+        post,
+        atmo,
+        dayNight,
+        tier,
+        dog,
+        blocks: BLOCKS,
+    };
 }
 
 start().catch((err: unknown) => {

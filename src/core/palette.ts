@@ -65,6 +65,7 @@ export const PATTERN = {
     BARK: 4,
     GRASS: 5,
     TILE: 6,
+    CACTUS: 7,
 };
 
 /* ------------------------------------------------------------------ *
@@ -645,7 +646,7 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
         stonePale: 0x9c9890,
         stoneWarm: 0x8a8078,
         // slots: blossom, pale, accent, cream, LEAF GREEN (the plant base), deep accent
-        foliage: [0xb8b4ac, 0xd8d4cc, 0x9a8e80, 0xe8e4dc, 0x868a7c, 0x6e6a64],
+        foliage: [0xc8c2b8, 0xe2ded6, 0xa8988a, 0xf0ece4, 0x9a9c90, 0x8a8680],
         water: { shoal: 0x7a8a90, shallow: 0x485860, deep: 0x283438 },
         sky: { zenith: 0x3e4048, horizon: 0x9a9690, ground: 0x6e6a64, haze: 0xa8a49c, sunTint: 0xfffaf0 },
         light: {
@@ -673,18 +674,18 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
     Venus: {
         // Under the cloud deck: sulphur-yellow haze, ochre rock, amber and burnt-orange growth.
         label: 'Venus',
-        grass: 0xb89a4c,
-        grassLight: 0xcab060,
-        grassDeep: 0x9c8040,
+        grass: 0xccb054,
+        grassLight: 0xdcc46c,
+        grassDeep: 0xb09440,
         soil: 0x8c5e30,
         sand: 0xd8ba78,
         stone: 0xa8805a,
         stonePale: 0xc09a70,
         stoneWarm: 0x9a6a44,
         // slots: blossom, pale, accent, cream, LEAF GREEN (the plant base), deep accent
-        foliage: [0xe0922e, 0xf0c460, 0xc4602a, 0xf2dc96, 0xa89040, 0x9a4a22],
+        foliage: [0xe8b23c, 0xf6dc78, 0xd08a30, 0xf8ecb0, 0xb8a044, 0xb06a24],
         water: { shoal: 0x9a8a50, shallow: 0x6a5a30, deep: 0x40361c },
-        sky: { zenith: 0xc8a050, horizon: 0xe8c878, ground: 0xa08048, haze: 0xe2c27a, sunTint: 0xffd890 },
+        sky: { zenith: 0xd2b462, horizon: 0xeed890, ground: 0xb09050, haze: 0xeedc98, sunTint: 0xffe6a0 },
         light: {
             sunColor: 0xffd486,
             sunIntensity: 1.8,
@@ -747,18 +748,18 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
     Jupiter: {
         // Banded cream, tan and rust like the cloud belts; the Great Red Spot red as the accent.
         label: 'Jupiter',
-        grass: 0xc8a87a,
-        grassLight: 0xdcc296,
-        grassDeep: 0xae8c62,
+        grass: 0xd8c4a0,
+        grassLight: 0xeadcbc,
+        grassDeep: 0xc0a27c,
         soil: 0x9a6a46,
-        sand: 0xe6d2aa,
+        sand: 0xf0e2c4,
         stone: 0xb08a6a,
         stonePale: 0xcaa888,
         stoneWarm: 0xa0705a,
         // slots: blossom, pale, accent, cream, LEAF GREEN (the plant base), deep accent
-        foliage: [0xd88a5a, 0xf0d2a8, 0xb84a34, 0xf6ead0, 0xa89060, 0x8e3e2c],
+        foliage: [0xe49a6e, 0xf6e2c4, 0xc4503a, 0xfaf0dc, 0xb8a078, 0xa8644a],
         water: { shoal: 0x9aa08a, shallow: 0x6a7058, deep: 0x3e4234 },
-        sky: { zenith: 0xb89070, horizon: 0xead2b0, ground: 0xa07c5c, haze: 0xe4caa4, sunTint: 0xffe8cc },
+        sky: { zenith: 0xa8946e, horizon: 0xf0dcbc, ground: 0xb09070, haze: 0xeedcc0, sunTint: 0xffeedc },
         light: {
             sunColor: 0xffe6c6,
             sunIntensity: 2.0,

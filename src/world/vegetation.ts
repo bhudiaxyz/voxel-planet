@@ -10,7 +10,7 @@
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { columnDir } from '../core/geoutil';
-import { BLOCK_BY_ID, BLOCKS } from '../core/palette';
+import { BLOCK_BY_ID, BLOCKS, PATTERN } from '../core/palette';
 import { makeRng, makeNoise3D } from '../core/rng';
 import { PLANT } from './terrain';
 
@@ -578,7 +578,9 @@ export function createSphereVegetation(
         const nearTrunk = (u: number, v: number, layer: number) => {
             for (const [du, dv] of NEIGHBOURS4) {
                 const b = BLOCK_BY_ID[grid.get(face, u + du, v + dv, layer + 1)] as any;
-                if (b?.isTrunk) return true;
+                // Living or dead wood only — cacti are solid "trunks" too, but no
+                // mushrooms or fallen logs at a cactus foot.
+                if (b?.isTrunk && b.pattern === PATTERN.BARK) return true;
             }
             return false;
         };

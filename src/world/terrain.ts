@@ -113,10 +113,57 @@ const REED_BLOCK = registerBlock('REED', {
     rough: 0.5,
 });
 
+/**
+ * Cactus: solid like a trunk (isTrunk), so the player and the dog's pathfinder
+ * treat it as an obstacle. Its own pattern gives ribbed green sides.
+ */
+const CACTUS = registerBlock('CACTUS', {
+    top: c(0x9cc064),
+    side: c(0x84ae52),
+    bottom: c(0x6a9040),
+    tint: c(0x5e8a3c),
+    pattern: PATTERN.CACTUS,
+    rough: 0.5,
+    isTrunk: true,
+});
+/** Dry desert scrub, drawn by the vegetation layer (see plantSingle). */
+const SCRUB_DRY = registerBlock('SCRUB_DRY', {
+    top: c(0xb8a070),
+    side: c(0x9c8458),
+    bottom: c(0x7e6a44),
+    tint: c(0x8a7650),
+    topTint: c(0xc8b484),
+    pattern: PATTERN.GRASS,
+    rough: 0.6,
+});
+/**
+ * Dead, weathered wood: bleached grey-brown. The bark pattern gives it furrows,
+ * and isTrunk makes it solid and lets the vegetation layer read it as a trunk.
+ */
+const DEADWOOD = registerBlock('DEADWOOD', {
+    top: c(0x9a8c78),
+    side: c(0x857866),
+    bottom: c(0x6e6252),
+    tint: c(0x6a5e4e),
+    pattern: PATTERN.BARK,
+    rough: 0.7,
+    isTrunk: true,
+});
+/** Per grass/stone column above the lowlands: a dead trunk, rarer than living trees. */
+const DEAD_TRUNK_P = 0.0012;
+/** Dead trunks only from the grassland/forest band upward (layers above sea). */
+const DEAD_TRUNK_MIN_RISE = 3;
+
+/** Desert band: the hottest land (see isDesert's temp), within this many layers of the sea. */
+const DESERT_TEMP = 0.8;
+const DESERT_MAX_RISE = 6;
+/** Chance per desert sand column of a cactus — sparse, so each one stands alone. */
+const CACTUS_P = 0.006;
+
 const BUSH_PALETTE = [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, BUSH_ROSE, BUSH_MAUVE];
 
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
-export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK };
+export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK, SCRUB_DRY };
 
 export function generateSphereTerrain(
     seed: number,
@@ -144,15 +191,16 @@ export function generateSphereTerrain(
                 const terraced = TERRACE_STEP * Math.round((e * AMPLITUDE) / TERRACE_STEP);
                 const surfaceLayer = Math.max(1, Math.min(SHELL_DEPTH - 10, SEA_LAYER + terraced));
                 const isLand = surfaceLayer > SEA_LAYER;
+                const desert = isLand && isDesert(noise, _dir, e, surfaceLayer);
 
                 for (let layer = 0; layer <= surfaceLayer; layer++) {
                     let id: number;
                     if (!isLand) {
                         id = layer === surfaceLayer ? SAND.id : STONE.id;
                     } else if (layer === surfaceLayer) {
-                        id = selectSurface(noise, _dir, e, GRASS, GRASS_LIGHT, STONE_PALE);
+                        id = desert ? SAND.id : selectSurface(noise, _dir, e, GRASS, GRASS_LIGHT, STONE_PALE);
                     } else if (layer >= surfaceLayer - 2) {
-                        id = SOIL.id;
+                        id = desert ? SAND.id : SOIL.id; // dunes are sand all the way down to rock
                     } else {
                         id = selectRock(noise, _dir, layer, STONE, STONE_PALE);
                     }
@@ -187,15 +235,23 @@ export function generateSphereTerrain(
                 const roll = treeRng();
                 if (sl > SEA_LAYER + 1 && GRASS_IDS.has(topId)) {
                     if (roll < 0.012) plantSphereTree(grid, face, u, v, sl, treeRng, LEAVES);
+                    else if (roll < 0.012 + DEAD_TRUNK_P && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
+                        plantDeadTrunk(grid, face, u, v, sl, treeRng);
                     else if (roll < 0.042) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(BUSH_PALETTE));
                     else if (roll < 0.065) plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
                     else if (roll < 0.08)
                         plantSingle(grid, face, u, v, sl, sl < SEA_LAYER + 4 ? GRASS_TALL : SHRUB_TALL);
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
-                    if (roll < 0.018)
+                    // High, cold rock: wind-killed snags stand alone on the slopes.
+                    if (roll < DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
+                    else if (roll < 0.018)
                         plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.chance(0.7) ? SCRUB_BLOCK : BUSH_MAUVE);
                     else if (roll < 0.055)
                         plantSingle(grid, face, u, v, sl, treeRng.chance(0.5) ? MOSS_THICK : LICHEN_PALE);
+                } else if (sl > SEA_LAYER + 1 && topId === BLOCKS.SAND.id) {
+                    // Desert dunes: sparse cacti, each one its own height and shape.
+                    if (roll < CACTUS_P) plantCactus(grid, face, u, v, sl, treeRng);
+                    else if (roll < CACTUS_P + 0.012) plantSingle(grid, face, u, v, sl, SCRUB_DRY);
                 } else if (sl >= SEA_LAYER - 1 && sl <= SEA_LAYER + 2) {
                     // Waterline: reeds and waterside ferns
                     if (roll < 0.08) plantSingle(grid, face, u, v, sl, REED_BLOCK);
@@ -229,6 +285,15 @@ const smoothstep = (a: number, b: number, x: number) => {
     const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
     return t * t * (3 - 2 * t);
 };
+
+/** Hot, dry, low land: the warmest band near the equator, close to sea level. */
+function isDesert(noise: Noise3, dir: THREE.Vector3, e: number, surfaceLayer: number): boolean {
+    const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
+    if (surfaceLayer > SEA_LAYER + DESERT_MAX_RISE) return false;
+    // Ragged edge: noise pushes the boundary in and out so dunes meet grass in tongues.
+    const edge = noise.get(dir.x * 9 + 40, dir.y * 9, dir.z * 9) * 0.08;
+    return temp + edge > DESERT_TEMP;
+}
 
 function selectSurface(
     noise: Noise3,
@@ -458,6 +523,172 @@ function plantSphereTree(
 }
 
 /** Small mound bush — 1-2 layers high, 1-3 wide */
+/**
+ * A dead trunk (snag): a bare column of weathered wood, broken off at the top,
+ * with a few short dead branch stubs. Varied height (3–9) and stub count/heights;
+ * one in four leans a step partway up, and one in five is just a low stump.
+ */
+function plantDeadTrunk(
+    grid: SphereVoxelGrid,
+    face: number,
+    u: number,
+    v: number,
+    surfaceLayer: number,
+    rng: ReturnType<typeof makeRng>,
+) {
+    const set = (du: number, dl: number, dv: number) => {
+        const nu = u + du,
+            nv = v + dv,
+            nl = surfaceLayer + 1 + dl;
+        if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
+        if (grid.get(face, nu, nv, nl) !== 0) return false;
+        grid.set(face, nu, nv, nl, DEADWOOD.id);
+        return true;
+    };
+    if (rng.chance(0.2)) {
+        // Stump: 1–2 high, sometimes with a fallen section lying beside it.
+        const h = rng.int(1, 2);
+        for (let l = 0; l < h; l++) set(0, l, 0);
+        if (rng.chance(0.5)) {
+            const [du, dv] = rng.pick([
+                [1, 0],
+                [-1, 0],
+                [0, 1],
+                [0, -1],
+            ] as Array<[number, number]>);
+            const len = rng.int(2, 3);
+            for (let r = 2; r < 2 + len; r++)
+                if (grid.columnTop(face, u + du * r, v + dv * r) === surfaceLayer) set(du * r, 0, dv * r);
+        }
+        return;
+    }
+    const height = rng.int(3, 9);
+    // Lean: the upper part steps one block sideways.
+    const leanAt = rng.chance(0.25) ? rng.int(2, height - 1) : height + 1;
+    const [lu, lv] = rng.pick([
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ] as Array<[number, number]>);
+    let ou = 0,
+        ov = 0;
+    for (let l = 0; l < height; l++) {
+        if (l === leanAt) {
+            // Joint block at the bend, so the lean reads as one trunk, not two stacked cubes.
+            set(ou + lu, l - 1, ov + lv);
+            ou += lu;
+            ov += lv;
+        }
+        if (!set(ou, l, ov)) return;
+    }
+    // Dead branch stubs: short, one or two blocks, sticking straight out.
+    const stubs = height >= 5 ? rng.int(1, 3) : rng.int(0, 1);
+    const dirs: Array<[number, number]> = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ];
+    for (let s = 0; s < stubs; s++) {
+        const [du, dv] = dirs[Math.floor(rng() * 4)];
+        const at = rng.int(Math.max(2, Math.floor(height / 3)), height - 1);
+        const base = at >= leanAt ? [ou, ov] : [0, 0];
+        const len = rng.chance(0.35) ? 2 : 1;
+        for (let r = 1; r <= len; r++) set(base[0] + du * r, at, base[1] + dv * r);
+    }
+}
+
+/**
+ * A voxel cactus, varied in kind, height and size:
+ *   saguaro  — tall column (4–9) with 0–3 arms that step out then turn upward,
+ *              each arm at its own height and length
+ *   barrel   — squat 1–2 high, 1 or 2 wide
+ *   columns  — a clump of 2–4 slim columns of mixed heights
+ * Only placed where the column above is clear, like every other plant.
+ */
+function plantCactus(
+    grid: SphereVoxelGrid,
+    face: number,
+    u: number,
+    v: number,
+    surfaceLayer: number,
+    rng: ReturnType<typeof makeRng>,
+) {
+    const set = (du: number, dl: number, dv: number) => {
+        const nu = u + du,
+            nv = v + dv,
+            nl = surfaceLayer + 1 + dl;
+        if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
+        if (grid.get(face, nu, nv, nl) !== 0) return false;
+        grid.set(face, nu, nv, nl, CACTUS.id);
+        return true;
+    };
+    // Only on level ground: a cactus straddling a dune step would float on one side.
+    const ground = (du: number, dv: number) => grid.columnTop(face, u + du, v + dv);
+    const kind = rng.pick(['saguaro', 'saguaro', 'saguaro', 'barrel', 'columns'] as const);
+
+    if (kind === 'barrel') {
+        const wide = rng.chance(0.4);
+        const h = rng.int(1, 2);
+        const cells: Array<[number, number]> = wide
+            ? [
+                  [0, 0],
+                  [1, 0],
+                  [0, 1],
+                  [1, 1],
+              ]
+            : [[0, 0]];
+        if (cells.some(([du, dv]) => ground(du, dv) !== surfaceLayer)) return;
+        for (const [du, dv] of cells) for (let l = 0; l < h; l++) set(du, l, dv);
+        return;
+    }
+
+    if (kind === 'columns') {
+        const n = rng.int(2, 4);
+        const spots: Array<[number, number]> = [
+            [0, 0],
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+            [1, 1],
+        ];
+        for (let k = 0; k < n; k++) {
+            const [du, dv] = spots[k];
+            if (ground(du, dv) !== surfaceLayer) continue;
+            const h = rng.int(2, k === 0 ? 5 : 4);
+            for (let l = 0; l < h; l++) set(du, l, dv);
+        }
+        return;
+    }
+
+    // Saguaro
+    const height = rng.int(4, 9);
+    for (let l = 0; l < height; l++) if (!set(0, l, 0)) return;
+    const dirs: Array<[number, number]> = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ];
+    // Shuffle so arms point different ways on different cacti.
+    for (let i = dirs.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
+    }
+    const arms = height >= 5 ? rng.int(0, Math.min(3, height - 3)) : 0;
+    for (let a = 0; a < arms; a++) {
+        const [du, dv] = dirs[a];
+        const at = rng.int(2, height - 2); // arm height on the trunk
+        const reach = rng.chance(0.3) ? 2 : 1; // how far it steps out
+        const rise = rng.int(1, Math.max(1, height - at - 1)); // how far it climbs after turning up
+        let ok = true;
+        for (let r = 1; r <= reach && ok; r++) ok = set(du * r, at, dv * r);
+        for (let l = 1; l <= rise && ok; l++) ok = set(du * reach, at + l, dv * reach);
+    }
+}
+
 function plantSphereBush(
     grid: SphereVoxelGrid,
     face: number,

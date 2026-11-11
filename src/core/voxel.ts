@@ -1678,6 +1678,27 @@ const FRAG_DECL = /* glsl */ `
     return col;
   }
 
+  /**
+   * Cactus: vertical ribs (light crests, dark grooves) running up the stem,
+   * with tiny pale spine dots along the crests. uv.y runs up side faces.
+   */
+  vec3 patCactus(vec2 uv, vec3 base, vec3 tint, bool side) {
+    if (!side) {
+      // Top: a pale crown of radiating ribs.
+      vec2 c = fract(uv) - 0.5;
+      float a = atan(c.y, c.x) * 4.0;
+      float rib = 0.5 + 0.5 * cos(a * 2.0);
+      return mix(base * 0.9, base * 1.12, rib) * (0.92 + 0.16 * (1.0 - length(c) * 2.0));
+    }
+    float x = uv.x * 5.0;                              // 5 ribs per block
+    float rib = 0.5 + 0.5 * cos(fract(x) * 6.28318);    // 1 on a crest, 0 in a groove
+    vec3 col = mix(tint * 0.78, base * 1.1, rib);
+    float spineY = fract(uv.y * 6.0 + floor(x) * 0.5);
+    float spine = (1.0 - smoothstep(0.0, 0.12, abs(fract(x) - 0.5) * 2.0 - 0.0)) * (1.0 - smoothstep(0.0, 0.1, abs(spineY - 0.5)));
+    col = mix(col, vec3(0.92, 0.9, 0.78), spine * 0.7);
+    return col;
+  }
+
   vec3 patGrassTop(vec2 uv, vec3 base, vec3 tint) {
     float n = vxNoise(uv * 5.5) * 0.55 + vxNoise(uv * 14.0) * 0.45;
     vec3 col = mix(base, tint, smoothstep(0.40, 0.80, n));
@@ -1749,6 +1770,7 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 3.5 && pat < 4.5) col = patBark(vUvW, col, vTintV);
     else if (pat > 4.5 && pat < 5.5) col = patGrassTop(vUvW, col, vTintV);
     else if (pat > 5.5 && pat < 6.5) col = patTile(vUvW, col, vTintV);
+    else if (pat > 6.5 && pat < 7.5) col = patCactus(vUvW, col, vTintV, isSide);
     #ifdef FOLIAGE_DETAIL
     // Plain terrain blocks (no pattern, not foliage): surface detail.
     if (pat < 0.5 && vDataV.y < 7.5) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
