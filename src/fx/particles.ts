@@ -179,10 +179,11 @@ export function createParticles(worldSize: any, rng: any, maxCount = 1110) {
     const B = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
 
     // Counts are deliberately low. Petals are punctuation, not weather — the
-    // first pass used ~3700 particles and read as confetti in a snowstorm.
+    // first pass used ~3700 particles and read as confetti in a snowstorm, and
+    // even 260 + 420 read as floating debris. Now about a third of that.
     // hero petals — sparse, large, slow
     mk(
-        260,
+        90,
         B(worldSize * 0.8, 44, worldSize * 0.8),
         PETAL_COLORS,
         [0.5, 1.05],
@@ -191,9 +192,9 @@ export function createParticles(worldSize: any, rng: any, maxCount = 1110) {
         THREE.NormalBlending,
         true,
     );
-    // mid-field petals, smaller and denser
+    // mid-field petals, smaller
     mk(
-        420,
+        140,
         B(worldSize * 1.0, 50, worldSize * 1.0),
         PETAL_COLORS,
         [0.24, 0.5],

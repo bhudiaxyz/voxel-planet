@@ -277,11 +277,95 @@ function root(centre: THREE.Vector3, a: number, b: number) {
 interface DetailColours {
     flowers: THREE.Color[];
     pebbles: THREE.Color[];
+    bark: THREE.Color[];
+    caps: THREE.Color[];
+    stem: THREE.Color;
+    moss: THREE.Color;
 }
 const readColours = (): DetailColours => ({
     flowers: [BLOCKS.LEAF_PINK, BLOCKS.LEAF_BLUSH, BLOCKS.LEAF_LILAC, BLOCKS.LEAF_CREAM, BLOCKS.LEAF_ROSE].map((b: any) => b.top),
     pebbles: [BLOCKS.STONE, BLOCKS.STONE_PALE, BLOCKS.STONE_WARM].map((b: any) => b.top),
+    bark: [BLOCKS.TRUNK, BLOCKS.TRUNK_PALE].map((b: any) => b.side),
+    // Same caps as the flat world's damp-grove mushrooms.
+    caps: [BLOCKS.LEAF_ROSE.top, BLOCKS.LEAF_BLUSH.top, BLOCKS.LEAF_CREAM.top, BLOCKS.LEAF_LILAC.top] as THREE.Color[],
+    stem: BLOCKS.STONE_PALE.top as THREE.Color,
+    moss: BLOCKS.GRASS_DEEP.top as THREE.Color,
 });
+
+/* ---- ground details: boulders, fallen logs, mushrooms -------------------
+ * Drawn from their own RNG stream so turning them on or off (tier setting)
+ * never shifts where the grass and flowers land. */
+const BOULDER_P = 0.0045; // per grass column; ×3 on bare stone
+const LOG_P = 0.006; // per column next to a tree trunk
+const MUSHROOM_P = 0.05; // per column next to a tree trunk; ×0.25 in open lush meadow
+
+const _rot = new THREE.Vector3();
+const _saveA = new THREE.Vector3();
+const _saveB = new THREE.Vector3();
+const NEIGHBOURS4: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id, BLOCKS.STONE_WARM.id]);
+/** A box rotated by `yaw` in the tangent plane. Temporarily swaps the shared frame. */
+function boxYawed(buf: QuadBuffer, base: THREE.Vector3, up: THREE.Vector3, w: number, h: number, len: number, color: THREE.Color, yaw: number) {
+    const sa = _saveA.copy(_ta),
+        sb = _saveB.copy(_tb);
+    const c = Math.cos(yaw),
+        s = Math.sin(yaw);
+    _rot.copy(sa).multiplyScalar(c).addScaledVector(sb, s);
+    _tb.copy(sb).multiplyScalar(c).addScaledVector(sa, -s);
+    _ta.copy(_rot);
+    // box() is square in plan; stretch along _tb by scaling it for the log.
+    _tb.multiplyScalar(len / w);
+    box(buf, base, up, w, h, color, 0, 0);
+    _ta.copy(sa);
+    _tb.copy(sb);
+}
+
+function scatterGroundDetail(
+    buf: QuadBuffer,
+    centre: THREE.Vector3,
+    rng: Rng,
+    detail: number,
+    onStone: boolean,
+    nearTrunk: boolean,
+    lush: number,
+    cols: DetailColours,
+) {
+    if (detail <= 0) return;
+    // Boulders: two or three stacked, rotated blocks, half sunk into the ground.
+    if (rng() < BOULDER_P * detail * (onStone ? 3 : 1)) {
+        const n = rng.int(1, 3);
+        const s0 = rng.range(0.55, 0.95);
+        for (let k = 0; k < n; k++) {
+            const sz = s0 * (1 - k * 0.3);
+            const r = root(centre, rng.range(-0.25, 0.25), rng.range(-0.25, 0.25)).addScaledVector(_up, -0.15 + k * s0 * 0.45);
+            boxYawed(buf, r, _up, sz, sz * rng.range(0.55, 0.8), sz, cols.pebbles[(rng() * cols.pebbles.length) | 0], rng() * 6.28);
+        }
+    }
+    if (nearTrunk) {
+        // Fallen log: a long bark box with a moss strip along its top.
+        if (rng() < LOG_P * detail) {
+            const yaw = rng() * 6.28,
+                len = rng.range(1.6, 2.6),
+                th = rng.range(0.32, 0.42);
+            const r = root(centre, rng.range(-0.2, 0.2), rng.range(-0.2, 0.2)).addScaledVector(_up, -0.06);
+            boxYawed(buf, r, _up, th, th, len, cols.bark[(rng() * cols.bark.length) | 0], yaw);
+            const top = _base2.copy(r).addScaledVector(_up, th);
+            boxYawed(buf, top, _up, th * 0.7, 0.05, len * 0.8, cols.moss, yaw);
+        }
+    }
+    // Mushrooms: damp ground at a tree's foot, occasionally out in lush meadow.
+    if (rng() < MUSHROOM_P * detail * (nearTrunk ? 1 : lush > 0.7 ? 0.25 : 0)) {
+        const cap = cols.caps[(rng() * cols.caps.length) | 0];
+        const n = rng.int(2, 4);
+        for (let k = 0; k < n; k++) {
+            const r = root(centre, rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
+            const h = rng.range(0.14, 0.3),
+                w = rng.range(0.22, 0.4);
+            tuft(buf, r, _up, 0.06, h, cols.stem, cols.stem, rng() * 6.28, 0, 0, 0);
+            box(buf, _base2.copy(r).addScaledVector(_up, h - 0.03), _up, w, w * 0.32, cap, 0.25, rng() * 6.28);
+        }
+    }
+}
 
 /**
  * @param lush   0..1 meadow field: lush shelves vs close-cropped ones
@@ -347,7 +431,15 @@ function scatterColumn(
  * @param density 0..1+ scales grass coverage (tier setting). Trees are kept at
  *        every tier — they are landmarks, grass is texture.
  */
-export function createSphereVegetation(grid: SphereVoxelGrid, seed: number, scene: THREE.Scene, density = 1, windAmp = 0.1) {
+export function createSphereVegetation(
+    grid: SphereVoxelGrid,
+    seed: number,
+    scene: THREE.Scene,
+    density = 1,
+    windAmp = 0.1,
+    /** Ground clutter multiplier (boulders, logs, mushrooms), 0 = none. */
+    groundDetail = 1,
+) {
     const { mat, uniforms } = makeVegMaterial(windAmp);
     const meadowNoise = makeNoise3D(seed ^ 0x51ed);
     const flowerNoise = makeNoise3D(seed ^ 0xf10e);
@@ -370,6 +462,15 @@ export function createSphereVegetation(grid: SphereVoxelGrid, seed: number, scen
         buf.reset();
         const cols = readColours();
         const rng = makeRng((seed ^ Math.imul(keyOf(face, pu, pv) + 1, 0x9e3779b1)) >>> 0);
+        const drng = makeRng((seed ^ 0x6d2b79f5 ^ Math.imul(keyOf(face, pu, pv) + 1, 0x85ebca6b)) >>> 0);
+        /** A trunk stands on a neighbouring column (logs and mushrooms gather at tree feet). */
+        const nearTrunk = (u: number, v: number, layer: number) => {
+            for (const [du, dv] of NEIGHBOURS4) {
+                const b = BLOCK_BY_ID[grid.get(face, u + du, v + dv, layer + 1)] as any;
+                if (b?.isTrunk) return true;
+            }
+            return false;
+        };
         const u1 = Math.min((pu + 1) * VEG_PATCH, FACE_RES),
             v1 = Math.min((pv + 1) * VEG_PATCH, FACE_RES);
         for (let v = pv * VEG_PATCH; v < v1; v++) {
@@ -378,7 +479,8 @@ export function createSphereVegetation(grid: SphereVoxelGrid, seed: number, scen
                 const plant = grid.plantAt(face, u, v);
                 if (layer < 0 || (!plant && layer <= SEA_LAYER)) continue;
                 const block = BLOCK_BY_ID[grid.get(face, u, v, layer)] as any;
-                if (!plant && !block?.grassCap) continue;
+                const onStone = !!block && STONE_IDS.has(block.id);
+                if (!plant && !block?.grassCap && !onStone) continue;
                 columnDir(face, u, v, FACE_RES, _up);
                 _ta.crossVectors(_up, Math.abs(_up.y) < 0.95 ? THREE.Object3D.DEFAULT_UP : _tb.set(1, 0, 0)).normalize();
                 _tb.crossVectors(_up, _ta);
@@ -389,6 +491,9 @@ export function createSphereVegetation(grid: SphereVoxelGrid, seed: number, scen
                     continue;
                 }
                 const lush = field(meadowNoise, centre, MEADOW_FREQ);
+                if (groundDetail > 0)
+                    scatterGroundDetail(buf, centre, drng, groundDetail, onStone, nearTrunk(u, v, layer), lush, cols);
+                if (onStone) continue; // bare rock: boulders only, no grass
                 const bloom = field(flowerNoise, centre, FLOWER_FREQ);
                 scatterColumn(buf, centre, rng, block, density, lush, bloom, cols);
             }

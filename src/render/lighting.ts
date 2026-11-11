@@ -257,6 +257,8 @@ export class Atmosphere {
         if (this.sky) {
             this.sky.position.copy(camera.position);
             this.sky.material.uniforms.uTime.value = this.time;
+            // Sphere world: orient the sky to the viewer's local up (radial).
+            this.sky.material.uniforms.uSkyUp.value.copy(camera.position).normalize();
             this.sky.updateMatrixWorld();
         }
     }

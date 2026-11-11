@@ -17,6 +17,10 @@ import { generateSphereTerrain } from './sphere-terrain';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
 import { createSphereVegetation } from './sphere-vegetation';
+import { bakeShoreMap } from './shore-map';
+
+/** Sea surface layer on the sphere (matches sphere-terrain / sphere-landmarks). */
+const SEA_LAYER = 11;
 import { buildSphereLandmarks, LandmarkRecord } from './sphere-landmarks';
 
 /** The assembled world returned by buildWorld. */
@@ -159,9 +163,19 @@ export async function buildSphereWorld(
     seed: number,
     scene: THREE.Scene,
     onProgress: (p: number, s?: string) => void = () => {},
-    streamRadius = 10,
-    grassDensity = 1,
+    opts: {
+        /** Terrain stream radius in chunks. */
+        streamRadius?: number;
+        /** Grass coverage 0..1. */
+        grassDensity?: number;
+        /** Boulders/logs/mushrooms multiplier, 0 = none. */
+        groundDetail?: number;
+        /** Animated foam along coasts. */
+        shoreFoam?: boolean;
+        tier?: string;
+    } = {},
 ): Promise<SphereWorld> {
+    const { streamRadius = 10, grassDensity = 1, groundDetail = 1, shoreFoam = false, tier = 'high' } = opts;
     const yieldFrame = () => new Promise((r) => setTimeout(r, 0));
 
     onProgress(0.01, 'sculpting the planet');
@@ -189,14 +203,16 @@ export async function buildSphereWorld(
 
     // Vegetation follows the streamer: a patch builds when terrain under it loads.
     // Hooked up before the first fill so the opening view has grass.
-    const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity);
+    const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity, 0.1, groundDetail);
     streaming.setListener(veg);
     // Fill the whole view before the first frame; streaming after this is budgeted per frame.
     streaming.update(spawnDir, Infinity);
 
     onProgress(0.9, 'adding ocean');
     await yieldFrame();
-    const sphereWater = createSphereWater();
+    // Shore distances only matter for foam; skip the bake entirely when it's off.
+    const shoreMap = shoreFoam ? bakeShoreMap(grid, SEA_LAYER) : null;
+    const sphereWater = createSphereWater(tier, shoreMap, shoreFoam);
     scene.add(sphereWater.mesh);
 
     const group = new THREE.Group();

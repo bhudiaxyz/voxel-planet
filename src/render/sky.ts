@@ -19,7 +19,7 @@ export const SKY_UNIFORMS_GLSL = /* glsl */ `
   uniform vec3 uSkyHorizon;
   uniform vec3 uSkyNadir;
   uniform vec3 uSunGlow;
-  uniform vec3 uSunDirW;
+  uniform vec3 uSunDirWorld;
   uniform float uNight;
   uniform vec3  uMoonDir;
   uniform float uStarAngle;
@@ -32,6 +32,8 @@ export const SKY_UNIFORMS_GLSL = /* glsl */ `
   uniform float uAurora;
   uniform float uAuroraTime;
   uniform float uNightSkyFull;
+  /** The viewer's local up (planet radial). The sky model is authored with +Y up. */
+  uniform vec3  uSkyUp;
 `;
 
 export const SKY_FN_GLSL = /* glsl */ `
@@ -125,12 +127,12 @@ export const SKY_FN_GLSL = /* glsl */ `
    * Returns additive linear radiance; caller adds it to the day-sky colour.
    * Returns black during daytime (uNight == 0) at no cost.
    */
-  vec3 nightSkyAddons(vec3 dir) {
+  vec3 nightSkyAddons(vec3 dir, vec3 dirW) {
     float h = clamp(dir.y, -1.0, 1.0);
     vec3 add = vec3(0.0);
 
     // Moon disc + glow
-    float moonDot  = clamp(dot(dir, uMoonDir), 0.0, 1.0);
+    float moonDot  = clamp(dot(dirW, uMoonDir), 0.0, 1.0);
     float moonDisc = smoothstep(0.99995, 0.999985, moonDot);
     float moonGlow = pow(moonDot, 280.0) * 0.1;
     add += vec3(0.82, 0.88, 1.0) * (moonDisc * 1.15 + moonGlow) * uNight;
@@ -138,7 +140,7 @@ export const SKY_FN_GLSL = /* glsl */ `
     float clearNight = uNight * (1.0 - uCloudCover * 0.88);
     if (clearNight > 0.01 && h > -0.08 && uNightSkyFull > 0.5) {
       vec3 axis = normalize(vec3(0.2, 0.78, 0.35));
-      vec3 celestial = _rotateAroundAxis(dir, axis, -uStarAngle);
+      vec3 celestial = _rotateAroundAxis(dirW, axis, -uStarAngle);
 
       // Milky Way band
       vec3 galaxyNormal    = normalize(vec3(0.42, 0.32, 0.85));
@@ -206,7 +208,25 @@ export const SKY_FN_GLSL = /* glsl */ `
    * Returns linear radiance. The band structure is deliberately shallow: the
    * whole sky lives inside about 12% of value range so it stays milky.
    */
-  vec3 skyRadiance(vec3 dir) {
+  /**
+   * Rotate a world direction into the viewer's sky frame, where uSkyUp is +Y.
+   * Shortest-arc rotation (Rodrigues); identity at the planet's top. Without it
+   * the whole sky — gradient, sun height, sunset, stars — was keyed on world Y,
+   * so anywhere but the top of the planet the horizon and zenith were sideways.
+   */
+  vec3 _toSky(vec3 v) {
+    vec3 up = normalize(uSkyUp);
+    float c = up.y;
+    if (c > 0.99999) return v;
+    if (c < -0.99999) return vec3(v.x, -v.y, -v.z);   // antipode: 180° about X
+    vec3 axis = normalize(vec3(-up.z, 0.0, up.x));     // up × Y — rotates up onto +Y
+    float s = sqrt(1.0 - c * c);
+    return v * c + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - c);
+  }
+
+  vec3 skyRadiance(vec3 dirW) {
+    vec3 dir = _toSky(dirW);
+    vec3 uSunDirW = _toSky(uSunDirWorld);
     float y = dir.y;
 
     // Periwinkle overhead relaxing into a warmer lilac at eye level. The
@@ -241,9 +261,11 @@ export const SKY_FN_GLSL = /* glsl */ `
     col += limbColor * limbWash;
     col += uSunColor * (halo + disc * 5.0) * sunVis;
 
-    // Night sky: darken the day sky and add stars/moon
+    // Night sky: darken the day sky and add stars/moon (stars stay fixed to the
+    // world, so they're looked up with the world direction; the horizon fade
+    // inside uses the local height via the moon/aurora terms).
     col = mix(col, col * 0.04, uNight * 0.96);
-    col += nightSkyAddons(dir);
+    col += nightSkyAddons(dir, dirW);
 
     return col;
   }
@@ -270,7 +292,8 @@ export function skyUniformValues(
         uSkyHorizon: { value: SKY.horizon.clone().lerp(SKY.haze, 0.22) },
         uSkyNadir: { value: SKY.ground.clone().lerp(SKY.haze, 0.45).multiplyScalar(0.94) },
         uSunGlow: { value: SKY.sunTint.clone().multiplyScalar(0.16) },
-        uSunDirW: { value: sunDir.clone() },
+        uSunDirWorld: { value: sunDir.clone() },
+        uSkyUp: { value: new THREE_.Vector3(0, 1, 0) },
         uNight: { value: 0.0 },
         uMoonDir: { value: new THREE_.Vector3(0, -1, 0) },
         uStarAngle: { value: 0.0 },

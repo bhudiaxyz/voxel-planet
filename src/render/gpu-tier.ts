@@ -48,6 +48,16 @@ export interface TierSettings {
     particleCount: number;
     /** Grass tuft coverage, 0..1. Trees are kept at every tier. */
     grassDensity: number;
+    /** Max birds per flock (0 = no flocks). Flocks cross the sky every 20-60 s. */
+    birdFlock: number;
+    /** Voxel cloud count in the local sky (0 = none). */
+    clouds: number;
+    /** Butterflies by day / fireflies at night, near the player (0 = none). */
+    critters: number;
+    /** Ground clutter (boulders, logs, mushrooms) density multiplier, 0..1. */
+    groundDetail: number;
+    /** Animated foam line where the sea meets land. */
+    shoreFoam: boolean;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -70,6 +80,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         waterSubdivision: 64,
         particleCount: 1200,
         grassDensity: 1,
+        birdFlock: 14,
+        clouds: 26,
+        critters: 40,
+        groundDetail: 1,
+        shoreFoam: true,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -89,6 +104,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         waterSubdivision: 32,
         particleCount: 700,
         grassDensity: 0.7,
+        birdFlock: 10,
+        clouds: 18,
+        critters: 24,
+        groundDetail: 0.7,
+        shoreFoam: true,
     },
     mid: {
         dprCap: 1.25,
@@ -108,6 +128,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         waterSubdivision: 32,
         particleCount: 600,
         grassDensity: 0.8,
+        birdFlock: 9,
+        clouds: 18,
+        critters: 24,
+        groundDetail: 0.8,
+        shoreFoam: true,
     },
     low: {
         dprCap: 1,
@@ -127,6 +152,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         waterSubdivision: 16,
         particleCount: 200,
         grassDensity: 0.45,
+        birdFlock: 0,
+        clouds: 10,
+        critters: 0,
+        groundDetail: 0.45,
+        shoreFoam: false,
     },
     'very-low': {
         dprCap: 1,
@@ -146,6 +176,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         waterSubdivision: 4,
         particleCount: 0,
         grassDensity: 0.25,
+        birdFlock: 0,
+        clouds: 0,
+        critters: 0,
+        groundDetail: 0.25,
+        shoreFoam: false,
     },
 };
 

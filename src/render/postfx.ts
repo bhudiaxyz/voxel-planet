@@ -504,7 +504,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         col = mix(col, uMistColor, mist * (1.0 - fog * 0.5));
 
         // ---- forward scatter -------------------------------------------------
-        float s = max(dot(wdir, uSunDirW), 0.0);
+        float s = max(dot(wdir, uSunDirWorld), 0.0);
         col += uSunGlow * uInscatter * (fog + mist * 0.5) * (pow(s, 4.0) * 0.8 + pow(s, 1.2) * 0.35);
 
         gl_FragColor = vec4(col, src.a);
@@ -698,6 +698,8 @@ export function createPostFX(
             u.uInvProj.value.copy(camera.projectionMatrixInverse);
             u.uInvView.value.copy(camera.matrixWorld);
             u.uCamPos.value.copy(camera.position);
+            // Sphere world: the sky's up is the viewer's radial direction.
+            u.uSkyUp.value.copy(camera.position).normalize();
             type ExtFog = THREE.FogExp2 & { enabled?: boolean; aerialD?: number };
             const extFog = scene.fog as ExtFog | null;
             const fogEnabled = extFog?.enabled !== false;

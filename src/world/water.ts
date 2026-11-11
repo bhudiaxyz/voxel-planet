@@ -21,6 +21,7 @@
  */
 
 import * as THREE from 'three';
+import { SHORE_GLSL } from './shore-map';
 import { WATER, SKY, LIGHT } from '../core/palette';
 import { PLANET_RADIUS } from '../core/sphere-voxel';
 import { PLANET_UNIFORMS_GLSL, PLANET_BEND_GLSL, planetUniformValues } from '../render/planet.glsl';
@@ -384,7 +385,11 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
     };
 }
 
-export function createSphereWater(tier: string = 'high') {
+/**
+ * @param shoreMap distance-to-land atlas from bakeShoreMap(); with `foam`, draws
+ *                 an animated foam line along every coast.
+ */
+export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture | null = null, foam = false) {
     const sub = tier === 'high' ? 128 : 64;
     const geo = new THREE.SphereGeometry(SPHERE_WATER_RADIUS, sub * 2, sub);
 
@@ -419,8 +424,11 @@ export function createSphereWater(tier: string = 'high') {
                 uCaustic: { value: WATER.caustic },
                 uReflect: { value: WATER.reflect },
                 uSeaDepth: { value: SEA_LAYER_SPHERE },
+                uShoreMap: { value: shoreMap },
+                uFoamColor: { value: new THREE.Color(0xf4f1ea) },
             },
         ]),
+        defines: foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {},
         vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
@@ -456,6 +464,10 @@ export function createSphereWater(tier: string = 'high') {
       varying vec3 vNrm;
 
       ${WAVE_GLSL}
+      #ifdef USE_SHORE_FOAM
+        uniform vec3 uFoamColor;
+        ${SHORE_GLSL}
+      #endif
 
       float causticWeb(vec2 p, float t) {
         vec2 a1 = p * 0.42        + vec2( t * 0.055, -t * 0.041);
@@ -491,7 +503,33 @@ export function createSphereWater(tier: string = 'high') {
         float spec = pow(max(dot(N, H), 0.0), 80.0) * 2.0;
         waterCol += uSunColor * spec;
 
-        gl_FragColor = vec4(waterCol, uOpacity + fresnel * 0.3);
+        float alpha = uOpacity + fresnel * 0.3;
+
+        #ifdef USE_SHORE_FOAM
+        {
+          // sd: 0 at the waterline, 1 at MAX columns out. Two bands roll in toward
+          // the shore and fade as they arrive; noise breaks them into patches.
+          float sd = shoreDist(normalize(vWorld));
+          float near = 1.0 - smoothstep(0.0, 0.42, sd);
+          float t = uTime * 0.22;
+          float bands = 0.0;
+          for (int i = 0; i < 2; i++) {
+            float ph = fract(t + float(i) * 0.5);       // 0 → 1 as a band travels in
+            float at = 0.42 * (1.0 - ph);               // band position in sd units
+            float w = 0.035 + 0.03 * ph;
+            bands += (1.0 - smoothstep(0.0, w, abs(sd - at))) * (1.0 - ph * 0.6);
+          }
+          float lip = 1.0 - smoothstep(0.0, 0.06, sd);   // steady froth right at the edge
+          float mask = n2(vWorld.xz * 0.9 + vec2(uTime * 0.3, 0.0)) * 0.6 + n2(vWorld.yz * 2.3 - uTime * 0.2) * 0.4;
+          float foamAmt = clamp(max(lip, bands * near) * smoothstep(0.25, 0.65, mask + lip * 0.4), 0.0, 1.0);
+          // Fade with distance from the camera — at range it would only shimmer.
+          foamAmt *= 1.0 - smoothstep(60.0, 140.0, length(cameraPosition - vWorld));
+          waterCol = mix(waterCol, uFoamColor, foamAmt * 0.85);
+          alpha = mix(alpha, 1.0, foamAmt * 0.7);
+        }
+        #endif
+
+        gl_FragColor = vec4(waterCol, alpha);
         #include <fog_fragment>
       }
     `,

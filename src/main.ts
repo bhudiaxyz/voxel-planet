@@ -14,11 +14,15 @@ import { makeRng, genSeedWord, hashSeedWord } from './core/rng';
 import { detectGpuTier, TIER_SETTINGS } from './render/gpu-tier';
 import { createTouchControls, isTouchDevice } from './ui/touch-controls';
 import { createParticles } from './fx/particles';
+import { createBirds } from './fx/birds';
+import { createClouds } from './fx/clouds';
+import { createCritters } from './fx/critters';
+import { dirToFaceUV } from './core/geoutil';
 import { createSphereMap } from './render/sphere-map';
 import { createSphereDroneMode } from './player/sphere-drone';
 import { createSphereFlyMode } from './player/sphere-fly';
 import { createSphereDog } from './player/sphere-dog';
-import { PLANET_RADIUS } from './core/sphere-voxel';
+import { PLANET_RADIUS, FACE_RES } from './core/sphere-voxel';
 
 export let currentSeedWord = 'LusaliBenoruLezagi';
 const urlWord = new URLSearchParams(location.search).get('seed');
@@ -34,6 +38,11 @@ pushSeedUrl(currentSeedWord);
 const _sunWorld = new THREE.Vector3();
 const _sunNDC = new THREE.Vector3();
 const _dogFwd = new THREE.Vector3();
+const _cloudLit = new THREE.Color();
+const _cloudShade = new THREE.Color();
+const _white = new THREE.Color(1, 1, 1);
+/** Sea surface layer on the sphere (matches sphere-terrain). */
+const SEA_LAYER = 11;
 
 const container = document.getElementById('app')!;
 const bootEl = document.getElementById('boot')!;
@@ -94,7 +103,13 @@ async function start(): Promise<void> {
     const scene = new THREE.Scene();
 
     const ts = TIER_SETTINGS[tier];
-    const world = await buildSphereWorld(SEED, scene, setProgress, ts.streamRadius, ts.grassDensity);
+    const world = await buildSphereWorld(SEED, scene, setProgress, {
+        streamRadius: ts.streamRadius,
+        grassDensity: ts.grassDensity,
+        groundDetail: ts.groundDetail,
+        shoreFoam: ts.shoreFoam,
+        tier,
+    });
 
     const fpCam = new FPCamera(container.clientWidth / container.clientHeight, renderer.domElement, ts.cameraFar);
     const atmo = new Atmosphere(scene, 800, tier);
@@ -118,8 +133,24 @@ async function start(): Promise<void> {
     }
 
     const rng = makeRng(SEED);
-    const particles = createParticles(80, rng, 300);
+    // Petals/motes/pollen. 300 is the authored look (more reads as confetti — see
+    // particles.ts); the tier budget only ever lowers it on weaker devices.
+    const particles = createParticles(80, rng, Math.min(300, ts.particleCount));
     scene.add(particles.group);
+    const birds = createBirds(scene, ts.birdFlock, SEED ^ 0xb1d5);
+    const clouds = createClouds(scene, ts.clouds, SEED ^ 0xc10d);
+    const critters = createCritters(
+        scene,
+        ts.critters,
+        {
+            groundAt: (d) => {
+                const { face, u, v } = dirToFaceUV(d, FACE_RES);
+                const top = world.grid.columnTop(face, u, v);
+                return top <= SEA_LAYER ? -1 : world.grid.surfaceRadius(face, u, v);
+            },
+        },
+        SEED ^ 0xb077,
+    );
 
     const sphereMap = createSphereMap(world.grid);
     const drone = createSphereDroneMode();
@@ -385,7 +416,20 @@ async function start(): Promise<void> {
 
         atmo.update(dt, fpCam.camera);
         particles.update(dt, fpCam.camera);
-        dog.update(dt, controller.dir, fpCam.camera.getWorldDirection(_dogFwd));
+        fpCam.camera.getWorldDirection(_dogFwd);
+        dog.update(dt, controller.dir, _dogFwd);
+        {
+            const night = dayNight.getNightFactor();
+            const at = fpCam.camera.position;
+            birds.update(dt, at, _dogFwd, night);
+            clouds.update(dt, at, windDir);
+            // Sunlit tops brighter than the sky (so they read against pale haze as well
+            // as blue), cool shaded undersides; both dim and cool at night.
+            _cloudLit.copy(_white).multiplyScalar(1.35).lerp(SKY.horizon, 0.15).multiplyScalar(1 - night * 0.75);
+            _cloudShade.copy(SKY.zenith).lerp(_white, 0.35).multiplyScalar(0.78 * (1 - night * 0.6));
+            clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.4);
+            critters.update(dt, at, night, renderer.getPixelRatio());
+        }
         const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
         const mapFwd = drone.active
             ? drone.heading

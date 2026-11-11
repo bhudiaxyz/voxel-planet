@@ -174,7 +174,7 @@ export class DayNight {
         lerpColor(PALETTE.horizon, ia, skyMat.uniforms['uSkyHorizon'].value as THREE.Color);
         lerpColor(PALETTE.haze, ia, skyMat.uniforms['uSkyNadir'].value as THREE.Color);
         // Keep the sun glow direction in sync with the animated sun
-        (skyMat.uniforms['uSunDirW'].value as THREE.Vector3).copy(this._sunDir);
+        (skyMat.uniforms['uSunDirWorld'].value as THREE.Vector3).copy(this._sunDir);
         // uSunGlow: scale by current intensity so the halo fades at night
         const glowScale = Math.max(0, this._sunDir.y) * atmo.sun.intensity * 0.087;
         lerpColor(PALETTE.sunColor, ia, this._col);
