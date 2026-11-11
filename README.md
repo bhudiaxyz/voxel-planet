@@ -39,6 +39,7 @@ Open [http://localhost:5180/voxel-planet](http://localhost:5180/voxel-planet). F
 ```bash
 npm run build     # production bundle → dist/
 npm run preview   # serve that bundle locally
+npm run check     # controls sanity check (needs Node 23.6+ for .ts)
 ```
 
 ## Controls
@@ -78,11 +79,14 @@ Click in the viewport to capture the pointer. Press Esc to release it.
 | 🛬 | Land drone |
 | ⬡ | Toggle edge outlines |
 | ◀ / ▶ | Step time of day back / forward |
-| ⬡ M | Toggle map |
+| 🐕 | Tell the dog to sit or stand |
+| 🗺 | Toggle map (tap the map to close it) |
+| ⏸ | Pause / show controls |
+| ⚙ | Settings |
 
 ## Settings
 
-The settings panel (Esc → Settings) exposes day speed, shadow resolution, bloom, wind strength, and the world seed. The pause menu (Esc) also has a **Generate new world** button.
+The settings panel (⚙, top right) exposes day speed, shadow resolution, bloom, wind strength, and the world seed, plus a **New world** button.
 
 ## Dependencies
 

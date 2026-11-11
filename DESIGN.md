@@ -41,28 +41,20 @@ src/
 │   ├── postfx.ts                ← createPostFX(): SceneDepth → EdgeMask → Atmosphere → Bloom → Crepuscular → Grade → SMAA
 │   ├── sphere-map.ts            ← createSphereMap(): equirectangular terrain bake, player arrow, landmark icons + tooltips
 │   ├── planet.glsl.ts           ← PLANET_BEND_GLSL vertex snippet (flat world bend), updatePlanetUniforms()
-│   ├── fp-camera.ts             ← FPCamera: pointer lock, key/mouse state, drainDroneAltDelta(), flyActive/droneActive flags
+│   ├── fp-camera.ts             ← FPCamera: pointer lock, key/mouse/joystick state, tangentBasis(), paused gate, drainDroneAltDelta()
 │   └── gpu-tier.ts              ← detectGpuTier(), TIER_SETTINGS table (high/mobile-high/mid/low/very-low)
 │
 ├── player/
 │   ├── sphere-controller.ts     ← SphereController: sphere-surface physics, snapToDir(), forwardInPlane()
 │   ├── sphere-drone.ts          ← createSphereDroneMode(): P-controller terrain-follow on sphere, landing state machine
 │   ├── sphere-fly.ts            ← createSphereFlyMode(): sphere free-flight, columnTop-based terrain floor
-│   ├── sphere-dog.ts            ← createSphereDog(): dog follows player on sphere surface
-│   ├── controller.ts            ← (flat world) AABB physics controller
-│   ├── drone.ts                 ← (flat world) drone mode
-│   ├── fly.ts                   ← (flat world) fly mode
-│   ├── character.ts             ← third-person character mesh + animation
-│   ├── dog.ts                   ← (flat world) dog AI with A* pathfinding
-│   └── pathfinding.ts           ← A* grid pathfinder
+│   └── sphere-dog.ts            ← createSphereDog(): dog heels to the player along the surface, reappears if left far behind
 │
 ├── ui/
 │   ├── touch-controls.ts        ← createTouchControls(): nippleJS joystick, swipe-to-look, button wiring
 │   ├── hud.ts                   ← heads-up display overlays
-│   ├── pause.ts                 ← pause menu, generate-new-world button
-│   ├── settings.ts              ← settings panel
-│   ├── map.ts                   ← (flat world) minimap with river overlay
-│   └── bubbles.ts               ← speech bubble system
+│   ├── pause.ts                 ← pause menu + controls list
+│   └── settings.ts              ← settings panel
 │
 └── fx/
     └── particles.ts             ← billboarded particle system (leaves, dust)
@@ -545,17 +537,9 @@ export const RIVER_WATER = registerBlock('RIVER_WATER', {
 });
 ```
 
-`isWater: true` is checked by `VoxelGrid.isSolid()` (returns false, keeping the block passable) and by `Controller` when probing for water surface level.
+`isWater: true` is checked by `VoxelGrid.isSolid()` (returns false, keeping the block passable).
 
 Below sea level the water plane already covers the carved channel — no voxels needed.
-
-### Physics integration
-
-`Controller` scans up to 4 blocks above/below the player for any `isWater` block each physics tick. If found, `waterSurface = wy + 1` replaces `WATER.level` for all swimming calculations: `standDepth`, submersion, buoyancy rest, and step-reach. Walking into a river above sea level correctly triggers swimming physics.
-
-### Map rendering (`map.ts`)
-
-Rivers are drawn on the minimap in `bakeTerrain()` after the terrain image is written. Two-pass render per channel (glow then solid), sorted trunk→tributary→stream. Ocean clip: any point where `heights[hz*S+hx] <= SEA` lifts the pen. Styles: trunk 7 px glow / 3.2 px solid blue; tributary 4.5 / 2.0; stream 3 / 1.2.
 
 ---
 
@@ -631,36 +615,15 @@ if (Math.abs(bendOrigin.x - _lastPlanetX) + Math.abs(bendOrigin.z - _lastPlanetZ
 
 ## Player systems
 
-### Character controller
+Walk, drone and fly on the sphere are documented under *Sphere world architecture* above.
 
-`Controller` in `src/player/controller.ts`. AABB physics: sub-steps at 1/60 s fixed tick, WASD wish vector projected onto the ground plane, jump impulse + gravity, step-up for 1-block ledges, swimming in water volume. `speed01` and `heading` are passed to the character mesh for animation.
+### Movement basis
 
-### Drone mode
+`tangentBasis(up, yaw)` in `fp-camera.ts` is the single source of forward/right for both the view (`updateSphere`) and movement (`getWishSphere`). Right is `forward × up` — the three.js camera's +X. `npm run check` asserts this against a real camera at random positions and headings; it is what caught A/D being swapped when the two were computed separately.
 
-`createDroneMode(grid)` in `src/player/drone.ts`.
+### Pausing
 
-State machine: `idle → rising → cruising`. On `enter()`, state becomes `rising` and the drone lifts to `hoverAltitude` (default 12 blocks above ground, or current height if already higher).
-
-**Terrain-follow (cruising):**
-
-```ts
-smoothedTargetY += (rawTargetY - smoothedTargetY) * Math.min(1, dt * heightSmoothRate);
-const error = smoothedTargetY - camera.position.y;
-const vertV = clamp(error * heightPGain, -vertVelMax, vertVelMax);
-camera.position.y += vertV * dt;
-```
-
-- `heightSmoothRate = 3.5` — lerp rate for the ground-height target. Lower values cause the drone to lag behind steep terrain.
-- `heightPGain = 4.0` — proportional gain.
-- `vertVelMax = 14.0 m/s` — enough for steep slopes at cruise speed.
-
-`altitudeDelta` from `drainDroneAltDelta(dt)` adjusts `hoverAltitude` each frame. Landing: `hoverAltitude` decreases at `landingDescentRate = 45 m/s` until the camera is within `landingCompleteHeight = 2.5` blocks of the ground.
-
-Touch joystick Y: negative values brake `speedMult = max(0, 1 + joyY)`; positive or zero = full cruise speed.
-
-### Fly mode
-
-`createFlyMode(grid)` in `src/player/fly.ts`. Free movement in any direction; terrain acts as a floor. `drainDroneAltDelta(dt)` returns a **rate in m/s** — caller applies `* dt` once. (A previous bug had fly mode apply `altDelta` without `* dt`, causing ~720 m/s altitude change per second.)
+`fpCam.paused` (set by the pause menu and settings panel) clears held keys and makes `getWishSphere`, `getJumpEdge`, `isKeyDown` and touch-look return nothing. All gameplay input reads through `FPCamera`, so this one flag covers keyboard, mouse and touch.
 
 ---
 
@@ -670,13 +633,13 @@ Touch joystick Y: negative values brake `speedMult = max(0, 1 + joyY)`; positive
 
 **Detection:** `('ontouchstart' in window || navigator.maxTouchPoints > 0) && window.matchMedia('(pointer: coarse)').matches`. The `pointer: coarse` media query is the reliable discriminator — Windows laptops report `maxTouchPoints > 0` even without a touchscreen, but they use a fine (mouse) pointer.
 
-**Joystick:** nippleJS dynamic joystick in a `#joy-zone` div covering the left half. On `move`, calls `fpCam.setTouchMove(v.x, v.y)` which sets `_joyX`, `_joyY` and converts to a `_touchWish` world-space vector. On `end`, zeros both.
+**Joystick:** nippleJS dynamic joystick in a `#joy-zone` div covering the left half. On `move`, calls `fpCam.setTouchMove(v.x, v.y)` which stores the raw axes `_joyX`, `_joyY` (nipplejs: up = +y). `getWishSphere` maps them through `tangentBasis` exactly like WASD, keeping analogue magnitude; the drone reads them as steer/throttle. On `end`, zeros both.
 
 **Swipe-to-look:** raw `touchstart`/`touchmove` on the right half (clientX ≥ innerWidth/2). Calls `fpCam.applyTouchLook(dyaw, dpitch)`.
 
-**Button events** use the `held()` helper for Space/C (altitude) and Shift (sprint), and `touchend` listeners for tap-only actions (fly, drone, land, edges, time step).
+**Button events** use the `held()` helper for Space/C (altitude) and Shift (sprint), and a `tap()` helper (`touchend`) for tap-only actions (pause, map, fly, drone, land, edges, time step, dog). Actions are shared functions in `main.ts`, so keyboard and touch can't drift. The button column wraps into two columns on short (landscape phone) screens and sits above the map so 🗺 can always close it; tapping the map also closes it.
 
-**`touchActive = true`** bypasses the `isLocked` check in `canAct()` and `getWish()`, so touch devices never need pointer lock.
+**`touchActive = true`** bypasses the `isLocked` check in `canAct()` and `getWishSphere()`, so touch devices never need pointer lock.
 
 ### `drainDroneAltDelta(dt)` design
 
@@ -690,26 +653,6 @@ drainDroneAltDelta(dt = 0): number {
 ```
 
 Returns **m/s rate** (not a delta). The drone/fly caller does `hoverAltitude += result * dt`. Scroll wheel accumulates a raw position delta (`_droneAltDelta -= e.deltaY * 0.02`); dividing by `dt` converts it back to a rate so `rate * dt` restores the original per-frame offset. Mouse Y movement is intentionally **not** wired to altitude — any upward mouse drift would cause continuous climb.
-
----
-
-## Minimap
-
-`src/ui/map.ts`
-
-`bakeTerrain()` iterates every column, reads `BLOCK_BY_ID[id].top` for the highest solid block, and writes an RGBA pixel. Water columns use the water palette colours. The canvas is redrawn on player move; `invalidateTerrain()` forces a full rebake (called after palette switches).
-
-### Player arrow
-
-The heading arrow always reflects where the camera is facing — `fpCam.camera.rotation.y + Math.PI` converts Three.js camera convention (forward = -Z) to map-north-up heading regardless of walk, fly, or drone mode. Previously the arrow switched source between `fpCam` and `controller.heading`, causing it to snap when entering drone mode; it now reads camera yaw unconditionally.
-
-### Compass labels
-
-N/E/S/W labels are drawn at fixed canvas-edge positions each frame, rotated opposite to the player heading so the correct compass point always faces up.
-
-### Touch
-
-On touch devices the map button wires to the same `map.toggle()` as the M key. Touch tap-outside-panel closes the map.
 
 ---
 

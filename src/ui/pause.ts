@@ -60,51 +60,51 @@ const CSS = `
 `;
 
 const KEYBOARD_BINDINGS = [
-  ['WASD', 'Move'],
-  ['Mouse', 'Look'],
-  ['Space', 'Jump / Ascend'],
-  ['C', 'Descend'],
-  ['Shift', 'Sprint'],
-  ['F', 'Toggle fly mode'],
-  ['V', 'Toggle drone'],
-  ['L', 'Land'],
-  ['E', 'Edge toggle'],
-  ['[ ]', 'Time of day'],
-  ['Y', 'Dog sit / stand'],
-  ['M', 'Map'],
-  ['Esc', 'Pause'],
+    ['WASD', 'Move'],
+    ['Mouse', 'Look'],
+    ['Space', 'Jump / Ascend'],
+    ['C', 'Descend'],
+    ['Shift', 'Sprint'],
+    ['F', 'Toggle fly mode'],
+    ['V', 'Toggle drone'],
+    ['L', 'Land'],
+    ['E', 'Edge toggle'],
+    ['[ ]', 'Time of day'],
+    ['Y', 'Dog sit / stand'],
+    ['M', 'Map'],
+    ['Esc', 'Pause'],
 ];
 
 const TOUCH_BINDINGS = [
-  ['Left stick', 'Move'],
-  ['Swipe right', 'Look'],
-  ['↑', 'Jump / Ascend'],
-  ['↓', 'Descend'],
-  ['⚡', 'Sprint'],
-  ['✈', 'Toggle fly mode'],
-  ['🚁', 'Enter drone'],
-  ['🛬', 'Land (drone)'],
-  ['⬡', 'Edges'],
-  ['◀ ▶', 'Time of day'],
-  ['🐕', 'Dog sit / stand'],
-  ['🗺', 'Map'],
-  ['⚙', 'Settings'],
+    ['Left stick', 'Move'],
+    ['Swipe right', 'Look'],
+    ['↑', 'Jump / Ascend'],
+    ['↓', 'Descend'],
+    ['⚡', 'Sprint'],
+    ['✈', 'Toggle fly mode'],
+    ['🚁', 'Enter drone'],
+    ['🛬', 'Land (drone)'],
+    ['⬡', 'Edges'],
+    ['◀ ▶', 'Time of day'],
+    ['🐕', 'Dog sit / stand'],
+    ['🗺', 'Map'],
+    ['⚙', 'Settings'],
 ];
 
 function buildBindings(rows: string[][]): string {
-  return rows.map(([key, label]) => `<div class="binding"><kbd>${key}</kbd><span>${label}</span></div>`).join('');
+    return rows.map(([key, label]) => `<div class="binding"><kbd>${key}</kbd><span>${label}</span></div>`).join('');
 }
 
 export function createPause({ input, map }: { input: { paused: boolean }; map: { toggle(): void } }) {
-  const style = document.createElement('style');
-  style.textContent = CSS;
-  document.head.appendChild(style);
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    document.head.appendChild(style);
 
-  const bindings = isTouchDevice ? TOUCH_BINDINGS : KEYBOARD_BINDINGS;
+    const bindings = isTouchDevice ? TOUCH_BINDINGS : KEYBOARD_BINDINGS;
 
-  const root = document.createElement('div');
-  root.id = 'pause';
-  root.innerHTML = `
+    const root = document.createElement('div');
+    root.id = 'pause';
+    root.innerHTML = `
     <div class="panel" role="dialog" aria-label="Pause menu" aria-modal="true">
       <h2>Paused</h2>
       <nav>
@@ -117,51 +117,51 @@ export function createPause({ input, map }: { input: { paused: boolean }; map: {
       </div>
     </div>
   `;
-  document.body.appendChild(root);
+    document.body.appendChild(root);
 
-  const resume = root.querySelector('#pause-resume');
-  let open = false;
-  let wasPaused = false;
+    const resume = root.querySelector('#pause-resume');
+    let open = false;
+    let wasPaused = false;
 
-  const setOpen = (next: any) => {
-    if (next === open) return;
-    open = next;
-    root.classList.toggle('open', open);
-    if (open) {
-      wasPaused = input.paused;
-      input.paused = true;
-      (resume as any).focus({ preventScroll: true });
-    } else {
-      input.paused = wasPaused;
-    }
-  };
+    const setOpen = (next: any) => {
+        if (next === open) return;
+        open = next;
+        root.classList.toggle('open', open);
+        if (open) {
+            wasPaused = input.paused;
+            input.paused = true;
+            (resume as any).focus({ preventScroll: true });
+        } else {
+            input.paused = wasPaused;
+        }
+    };
 
-  resume!.addEventListener('click', () => setOpen(false));
-  root.querySelector('#pause-map')!.addEventListener('click', () => {
-    setOpen(false);
-    map.toggle();
-  });
-  root.addEventListener('click', (e) => {
-    if (e.target === root) setOpen(false);
-  });
+    resume!.addEventListener('click', () => setOpen(false));
+    root.querySelector('#pause-map')!.addEventListener('click', () => {
+        setOpen(false);
+        map.toggle();
+    });
+    root.addEventListener('click', (e) => {
+        if (e.target === root) setOpen(false);
+    });
 
-  addEventListener('keydown', (e) => {
-    if (e.repeat) return;
-    if (e.code === 'Escape') {
-      e.preventDefault();
-      setOpen(!open);
-    } else if (e.code === 'KeyM' && open) {
-      e.preventDefault();
-      setOpen(false);
-      map.toggle();
-    }
-  });
+    addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+        if (e.code === 'Escape') {
+            e.preventDefault();
+            setOpen(!open);
+        } else if (e.code === 'KeyM' && open) {
+            e.preventDefault();
+            setOpen(false);
+            map.toggle();
+        }
+    });
 
-  return {
-    el: root,
-    get open() {
-      return open;
-    },
-    toggle: () => setOpen(!open),
-  };
+    return {
+        el: root,
+        get open() {
+            return open;
+        },
+        toggle: () => setOpen(!open),
+    };
 }

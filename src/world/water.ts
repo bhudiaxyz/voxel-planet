@@ -55,26 +55,26 @@ export const DEPTH_RANGE = 34.0;
  * bottoms out at the shore has no zero crossing to draw.
  */
 export function makeDepthMap(world: any) {
-  const S = world.size;
-  // RG: R = signed water depth (same as before), G = river proximity 0–255
-  const data = new Uint8Array(S * S * 2);
-  const rivFlow: Uint8Array | null = world.rivFlow ?? null;
-  for (let z = 0; z < S; z++) {
-    for (let x = 0; x < S; x++) {
-      const i = z * S + x;
-      const top = world.heights[i];
-      const d = WATER.level - (top + 1);
-      const t = (d + DEPTH_RANGE) / (2 * DEPTH_RANGE);
-      data[i * 2 + 0] = Math.max(0, Math.min(1, t)) * 255;
-      data[i * 2 + 1] = rivFlow ? rivFlow[i] : 0;
+    const S = world.size;
+    // RG: R = signed water depth (same as before), G = river proximity 0–255
+    const data = new Uint8Array(S * S * 2);
+    const rivFlow: Uint8Array | null = world.rivFlow ?? null;
+    for (let z = 0; z < S; z++) {
+        for (let x = 0; x < S; x++) {
+            const i = z * S + x;
+            const top = world.heights[i];
+            const d = WATER.level - (top + 1);
+            const t = (d + DEPTH_RANGE) / (2 * DEPTH_RANGE);
+            data[i * 2 + 0] = Math.max(0, Math.min(1, t)) * 255;
+            data[i * 2 + 1] = rivFlow ? rivFlow[i] : 0;
+        }
     }
-  }
-  const tex = new THREE.DataTexture(data, S, S, THREE.RGFormat, THREE.UnsignedByteType);
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.needsUpdate = true;
-  return tex;
+    const tex = new THREE.DataTexture(data, S, S, THREE.RGFormat, THREE.UnsignedByteType);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.needsUpdate = true;
+    return tex;
 }
 
 // Shared noise + analytic wave field — injected into both vertex and fragment
@@ -109,42 +109,42 @@ const WAVE_GLSL = /* glsl */ `
 `;
 
 export function createWater(size: any, depthMap: any, tier: string = 'high', waterSubdivision?: number) {
-  const sub = waterSubdivision ?? (tier === 'high' ? 64 : 32);
-  const geo = new THREE.PlaneGeometry(size * 1.9, size * 1.9, sub, sub);
-  geo.rotateX(-Math.PI / 2);
+    const sub = waterSubdivision ?? (tier === 'high' ? 64 : 32);
+    const geo = new THREE.PlaneGeometry(size * 1.9, size * 1.9, sub, sub);
+    geo.rotateX(-Math.PI / 2);
 
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    fog: true,
-    uniforms: THREE.UniformsUtils.merge([
-      THREE.UniformsLib.fog,
-      {
-        uTime: { value: 0 },
-        uShoal: { value: WATER.shoal.clone() },
-        uShallow: { value: WATER.shallow.clone() },
-        uDeep: { value: WATER.deep.clone() },
-        uWarm: { value: WATER.warm.clone() },
-        uSheen: { value: WATER.sheen.clone() },
-        uHorizon: { value: SKY.horizon.clone() },
-        uSky: { value: SKY.zenith.clone() },
-        uSunDir: { value: LIGHT.sunDir.clone().normalize() },
-        uSunColor: { value: LIGHT.sunColor.clone() },
-        uExtinction: { value: new THREE.Vector3(...WATER.extinction) },
-        uDepthMap: { value: depthMap },
-        uWorldSize: { value: size },
-        uRange: { value: DEPTH_RANGE },
-        uOpacity: { value: WATER.opacity },
-        uDensity: { value: WATER.density },
-        uSaturation: { value: WATER.saturation },
-        uCellTone: { value: WATER.cellTone },
-        uCaustic: { value: WATER.caustic },
-        uReflect: { value: WATER.reflect },
-        uLevel: { value: WATER.level },
-        ...planetUniformValues(new THREE.Vector3()),
-      },
-    ]),
-    vertexShader: /* glsl */ `
+    const mat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        fog: true,
+        uniforms: THREE.UniformsUtils.merge([
+            THREE.UniformsLib.fog,
+            {
+                uTime: { value: 0 },
+                uShoal: { value: WATER.shoal.clone() },
+                uShallow: { value: WATER.shallow.clone() },
+                uDeep: { value: WATER.deep.clone() },
+                uWarm: { value: WATER.warm.clone() },
+                uSheen: { value: WATER.sheen.clone() },
+                uHorizon: { value: SKY.horizon.clone() },
+                uSky: { value: SKY.zenith.clone() },
+                uSunDir: { value: LIGHT.sunDir.clone().normalize() },
+                uSunColor: { value: LIGHT.sunColor.clone() },
+                uExtinction: { value: new THREE.Vector3(...WATER.extinction) },
+                uDepthMap: { value: depthMap },
+                uWorldSize: { value: size },
+                uRange: { value: DEPTH_RANGE },
+                uOpacity: { value: WATER.opacity },
+                uDensity: { value: WATER.density },
+                uSaturation: { value: WATER.saturation },
+                uCellTone: { value: WATER.cellTone },
+                uCaustic: { value: WATER.caustic },
+                uReflect: { value: WATER.reflect },
+                uLevel: { value: WATER.level },
+                ...planetUniformValues(new THREE.Vector3()),
+            },
+        ]),
+        vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
       ${PLANET_UNIFORMS_GLSL}
@@ -167,7 +167,7 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         #include <fog_vertex>
       }
     `,
-    fragmentShader: /* glsl */ `
+        fragmentShader: /* glsl */ `
       #include <common>
       #include <packing>
       #include <fog_pars_fragment>
@@ -366,62 +366,62 @@ export function createWater(size: any, depthMap: any, tier: string = 'high', wat
         #include <colorspace_fragment>
       }
     `,
-  });
+    });
 
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(size / 2, WATER.level, size / 2);
-  mesh.renderOrder = 10;
-  mesh.frustumCulled = false;
-  mesh.name = 'water';
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(size / 2, WATER.level, size / 2);
+    mesh.renderOrder = 10;
+    mesh.frustumCulled = false;
+    mesh.name = 'water';
 
-  return {
-    mesh,
-    material: mat,
-    planetUnis: mat.uniforms,
-    update(dt: number) {
-      mat.uniforms.uTime.value += dt;
-    },
-  };
+    return {
+        mesh,
+        material: mat,
+        planetUnis: mat.uniforms,
+        update(dt: number) {
+            mat.uniforms.uTime.value += dt;
+        },
+    };
 }
 
 export function createSphereWater(tier: string = 'high') {
-  const sub = tier === 'high' ? 128 : 64;
-  const geo = new THREE.SphereGeometry(SPHERE_WATER_RADIUS, sub * 2, sub);
+    const sub = tier === 'high' ? 128 : 64;
+    const geo = new THREE.SphereGeometry(SPHERE_WATER_RADIUS, sub * 2, sub);
 
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    fog: true,
-    side: THREE.FrontSide,
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
-    uniforms: THREE.UniformsUtils.merge([
-      THREE.UniformsLib.fog,
-      {
-        uTime:       { value: 0 },
-        uShoal:      { value: WATER.shoal.clone() },
-        uShallow:    { value: WATER.shallow.clone() },
-        uDeep:       { value: WATER.deep.clone() },
-        uWarm:       { value: WATER.warm.clone() },
-        uSheen:      { value: WATER.sheen.clone() },
-        uHorizon:    { value: SKY.horizon.clone() },
-        uSky:        { value: SKY.zenith.clone() },
-        uSunDir:     { value: LIGHT.sunDir.clone().normalize() },
-        uSunColor:   { value: LIGHT.sunColor.clone() },
-        // Extinction tuned for sphere sea depth = 9 layers (not flat-world ~30).
-        // WATER.extinction [0.95, 0.72, 0.42] kills all colour at 9 units.
-        uExtinction: { value: new THREE.Vector3(0.28, 0.06, 0.02) },
-        uOpacity:    { value: WATER.opacity },
-        uDensity:    { value: WATER.density },
-        uSaturation: { value: WATER.saturation },
-        uCellTone:   { value: WATER.cellTone },
-        uCaustic:    { value: WATER.caustic },
-        uReflect:    { value: WATER.reflect },
-        uSeaDepth:   { value: SEA_LAYER_SPHERE },
-      },
-    ]),
-    vertexShader: /* glsl */ `
+    const mat = new THREE.ShaderMaterial({
+        transparent: true,
+        depthWrite: false,
+        fog: true,
+        side: THREE.FrontSide,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+        uniforms: THREE.UniformsUtils.merge([
+            THREE.UniformsLib.fog,
+            {
+                uTime: { value: 0 },
+                uShoal: { value: WATER.shoal.clone() },
+                uShallow: { value: WATER.shallow.clone() },
+                uDeep: { value: WATER.deep.clone() },
+                uWarm: { value: WATER.warm.clone() },
+                uSheen: { value: WATER.sheen.clone() },
+                uHorizon: { value: SKY.horizon.clone() },
+                uSky: { value: SKY.zenith.clone() },
+                uSunDir: { value: LIGHT.sunDir.clone().normalize() },
+                uSunColor: { value: LIGHT.sunColor.clone() },
+                // Extinction tuned for sphere sea depth = 9 layers (not flat-world ~30).
+                // WATER.extinction [0.95, 0.72, 0.42] kills all colour at 9 units.
+                uExtinction: { value: new THREE.Vector3(0.28, 0.06, 0.02) },
+                uOpacity: { value: WATER.opacity },
+                uDensity: { value: WATER.density },
+                uSaturation: { value: WATER.saturation },
+                uCellTone: { value: WATER.cellTone },
+                uCaustic: { value: WATER.caustic },
+                uReflect: { value: WATER.reflect },
+                uSeaDepth: { value: SEA_LAYER_SPHERE },
+            },
+        ]),
+        vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
       ${WAVE_GLSL}
@@ -445,7 +445,7 @@ export function createSphereWater(tier: string = 'high') {
         #include <fog_vertex>
       }
     `,
-    fragmentShader: /* glsl */ `
+        fragmentShader: /* glsl */ `
       #include <common>
       #include <packing>
       #include <fog_pars_fragment>
@@ -495,24 +495,24 @@ export function createSphereWater(tier: string = 'high') {
         #include <fog_fragment>
       }
     `,
-  });
+    });
 
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.renderOrder = 1;
-  const planetUnis: any[] = [mat.uniforms];
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.renderOrder = 1;
+    const planetUnis: any[] = [mat.uniforms];
 
-  return {
-    mesh,
-    material: mat,
-    planetUnis,
-    update(_dt: number) {
-      mat.uniforms.uTime.value += _dt;
-      mat.uniforms.uShoal.value.copy(WATER.shoal);
-      mat.uniforms.uShallow.value.copy(WATER.shallow);
-      mat.uniforms.uDeep.value.copy(WATER.deep);
-      mat.uniforms.uSunDir.value.copy(LIGHT.sunDir).normalize();
-      mat.uniforms.uHorizon.value.copy(SKY.horizon);
-      mat.uniforms.uSky.value.copy(SKY.zenith);
-    },
-  };
+    return {
+        mesh,
+        material: mat,
+        planetUnis,
+        update(_dt: number) {
+            mat.uniforms.uTime.value += _dt;
+            mat.uniforms.uShoal.value.copy(WATER.shoal);
+            mat.uniforms.uShallow.value.copy(WATER.shallow);
+            mat.uniforms.uDeep.value.copy(WATER.deep);
+            mat.uniforms.uSunDir.value.copy(LIGHT.sunDir).normalize();
+            mat.uniforms.uHorizon.value.copy(SKY.horizon);
+            mat.uniforms.uSky.value.copy(SKY.zenith);
+        },
+    };
 }

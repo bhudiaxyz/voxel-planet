@@ -1,106 +1,94 @@
 // src/player/sphere-dog.ts
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/sphere-voxel';
-import { dirToFaceUV, columnDir } from '../core/geoutil';
-import { createSpherePathNavigator, SpherePathNavigator } from './sphere-pathfinding';
+import { dirToFaceUV } from '../core/geoutil';
 
-const DOG_SPEED = 8; // m/s
-const FOLLOW_DIST = 0.05; // radians (~3 degrees, ~17 units) before dog starts following
+const HEEL_DIST = 3.5 / PLANET_RADIUS; // radians — stops this close to the player
+const RUN_DIST = 10 / PLANET_RADIUS; // beyond this it runs rather than trots
+const TELEPORT_DIST = 45 / PLANET_RADIUS; // beyond this (after fly/drone, or outrun) it reappears at heel
+const TROT_SPEED = 8; // m/s
+const RUN_SPEED = 22; // m/s — faster than the player's sprint (20) so it can catch up
+const HALF_HEIGHT = 0.4; // half the box height, so the feet sit on the ground
 
 export interface SphereDog {
-  mesh: THREE.Object3D;
-  sitting: boolean;
-  toggleSit(): void;
-  update(dt: number, playerDir: THREE.Vector3): void;
-  dispose(): void;
+    mesh: THREE.Object3D;
+    sitting: boolean;
+    toggleSit(): void;
+    update(dt: number, playerDir: THREE.Vector3): void;
+    dispose(): void;
 }
 
+/**
+ * The dog walks the great circle straight to the player. The planet is a
+ * heightmap shell where every column is passable, so pathfinding added nothing
+ * but a search that never finished in time.
+ */
 export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawnDir?: THREE.Vector3): SphereDog {
-  // ponytail: placeholder box mesh; swap for GLTF when art is ready
-  const geo = new THREE.BoxGeometry(0.6, 0.8, 1.0);
-  const mat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  scene.add(mesh);
+    // ponytail: placeholder box mesh; swap for GLTF when art is ready
+    const geo = new THREE.BoxGeometry(0.6, 0.8, 1.0);
+    const mat = new THREE.MeshLambertMaterial({ color: 0x8b4513 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    scene.add(mesh);
 
-  const baseDir = spawnDir ? spawnDir.clone().normalize() : new THREE.Vector3(1, 0, 0);
-  const { face: sf, u: su, v: sv } = dirToFaceUV(baseDir, FACE_RES);
-  // Offset 4 columns sideways so dog is visible beside the player at spawn
-  let face = sf, u = Math.min(su + 4, FACE_RES - 1), v = sv;
-  const dir = new THREE.Vector3();
-  columnDir(face, u, v, FACE_RES, dir);
+    const dir = new THREE.Vector3();
+    const _axis = new THREE.Vector3();
+    const _look = new THREE.Vector3();
+    let sitting = false;
 
-  let pathNav: SpherePathNavigator = createSpherePathNavigator(grid, face, u, v);
-  const _scratch = new THREE.Vector3();
-  const _lookTarget = new THREE.Vector3();
-  let sitting = false;
+    const surfaceAt = (d: THREE.Vector3) => {
+        const { face, u, v } = dirToFaceUV(d, FACE_RES);
+        return grid.surfaceRadius(face, u, v);
+    };
 
-
-  /** Orient mesh upright on sphere surface, facing lookFwd (a world-space direction). */
-  function orientMesh(r: number, lookFwd: THREE.Vector3) {
-    mesh.up.copy(dir);
-    // Project lookFwd onto the tangent plane at dir
-    _scratch.copy(lookFwd).addScaledVector(dir, -lookFwd.dot(dir)).normalize();
-    if (_scratch.lengthSq() > 0.001) {
-      _lookTarget.copy(mesh.position).add(_scratch);
-      mesh.lookAt(_lookTarget);
-    }
-  }
-
-  function update(dt: number, playerDir: THREE.Vector3) {
-    // Use player surface as fallback if dog column is unloaded
-    const { face: pf, u: pu, v: pv } = dirToFaceUV(playerDir, FACE_RES);
-    const baseR = grid.surfaceRadius(face, u, v);
-    const playerR = grid.surfaceRadius(pf, pu, pv);
-    const r = (baseR > PLANET_RADIUS ? baseR : playerR) + 0.5;
-    mesh.position.copy(dir).multiplyScalar(r);
-
-    if (sitting) {
-      // Face the player while sitting
-      orientMesh(r, playerDir);
-      return;
+    /** Put the dog at heel: HEEL_DIST to one side of the player. */
+    function placeBeside(playerDir: THREE.Vector3) {
+        _axis.set(Math.abs(playerDir.y) > 0.9 ? 1 : 0, Math.abs(playerDir.y) > 0.9 ? 0 : 1, 0);
+        _axis.cross(playerDir).normalize();
+        dir.copy(playerDir).applyAxisAngle(_axis, HEEL_DIST).normalize();
     }
 
-    const angDist = Math.acos(Math.max(-1, Math.min(1, dir.dot(playerDir))));
-    if (angDist > FOLLOW_DIST) {
-      const { face: pf, u: pu, v: pv } = dirToFaceUV(playerDir, FACE_RES);
-      pathNav.setStart(face, u, v);
-      pathNav.setGoal(pf, pu, pv);
+    placeBeside(spawnDir ? spawnDir.clone().normalize() : new THREE.Vector3(1, 0, 0));
+
+    function update(dt: number, playerDir: THREE.Vector3) {
+        const ang = dir.angleTo(playerDir);
+
+        if (!sitting) {
+            if (ang > TELEPORT_DIST) placeBeside(playerDir);
+            else if (ang > HEEL_DIST) {
+                const speed = ang > RUN_DIST ? RUN_SPEED : TROT_SPEED;
+                _axis.crossVectors(dir, playerDir).normalize();
+                dir.applyAxisAngle(_axis, Math.min((speed * dt) / PLANET_RADIUS, ang - HEEL_DIST)).normalize();
+            }
+        }
+
+        // Unloaded/empty columns report the bare planet radius; borrow the player's ground then.
+        let r = surfaceAt(dir);
+        if (r <= PLANET_RADIUS) r = surfaceAt(playerDir);
+        mesh.position.copy(dir).multiplyScalar(r + HALF_HEIGHT);
+
+        // Stand upright on the sphere and face the player (both while following and sitting).
+        mesh.up.copy(dir);
+        _look.copy(playerDir).addScaledVector(dir, -playerDir.dot(dir));
+        if (_look.lengthSq() > 1e-10) mesh.lookAt(_look.normalize().add(mesh.position));
+
+        // main.ts turns off scene-wide matrix auto-update, so moving objects must refresh their own.
+        mesh.updateMatrixWorld();
     }
 
-    pathNav.step();
-
-    const path = pathNav.path;
-    if (path && path.length > 1) {
-      const next = path[1];
-      columnDir(next.face, next.u, next.v, FACE_RES, _scratch);
-      const stepAngle = (DOG_SPEED * dt) / PLANET_RADIUS;
-      const axis = new THREE.Vector3().crossVectors(dir, _scratch).normalize();
-      if (axis.lengthSq() > 0.0001) {
-        dir.applyAxisAngle(axis, Math.min(stepAngle, dir.angleTo(_scratch))).normalize();
-      }
-      if (dir.angleTo(_scratch) < 0.02) {
-        face = next.face; u = next.u; v = next.v;
-        pathNav.setStart(face, u, v);
-        if (path.length > 1) path.shift();
-      }
-      // Face movement direction
-      orientMesh(r, _scratch);
-    } else {
-      // Idle — face the player
-      orientMesh(r, playerDir);
-    }
-  }
-
-  return {
-    mesh,
-    get sitting() { return sitting; },
-    toggleSit() { sitting = !sitting; },
-    update,
-    dispose() {
-      scene.remove(mesh);
-      geo.dispose();
-      mat.dispose();
-    },
-  };
+    return {
+        mesh,
+        get sitting() {
+            return sitting;
+        },
+        toggleSit() {
+            sitting = !sitting;
+        },
+        update,
+        dispose() {
+            scene.remove(mesh);
+            geo.dispose();
+            mat.dispose();
+        },
+    };
 }
