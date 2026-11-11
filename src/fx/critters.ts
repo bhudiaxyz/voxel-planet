@@ -164,8 +164,9 @@ function butterflyGeometry() {
         quad([[0, 0, -0.32], [0.58, 0, -0.42], [0.58, 0, 0.04], [0, 0, -0.04]], U, 2, s);
     }
     // Body: a thin vertical slab along the heading (two crossed quads so it has width from any side).
-    quad([[-0.035, 0, -0.38], [0.035, 0, -0.38], [0.035, 0, 0.3], [-0.035, 0, 0.3]], U, 0, 0);
-    quad([[0, -0.035, -0.38], [0, 0.035, -0.38], [0, 0.035, 0.3], [0, -0.035, 0.3]], U, 0, 0);
+    // Spans the wing roots only (-0.3..0.2), so it never pokes out as a stick.
+    quad([[-0.03, 0, -0.3], [0.03, 0, -0.3], [0.03, 0, 0.2], [-0.03, 0, 0.2]], U, 0, 0);
+    quad([[0, -0.03, -0.3], [0, 0.03, -0.3], [0, 0.03, 0.2], [0, -0.03, 0.2]], U, 0, 0);
     const g = new THREE.InstancedBufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
