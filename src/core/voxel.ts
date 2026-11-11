@@ -2443,6 +2443,76 @@ const FRAG_DECL = /* glsl */ `
     return col;
   }
 
+  /**
+   * Canopy shading on leaf blocks. Soft, irregular light and shadow — clumps of
+   * leaves catching light over shadowed pockets — with a fine leaf texture on
+   * top. Built from layered smooth noise, never cells, so there are no outlines
+   * and nothing reads as paving. uv is in block units and continuous across
+   * neighbouring blocks, so the canopy shades as one mass, not per cube.
+   */
+  vec3 patFoliage(vec2 uv, vec3 base, vec3 tint, float faceLight) {
+    // Clump field: large soft blobs of varying size (two octaves, domain-warped
+    // so the blobs are lumpy rather than round).
+    vec2 w = uv + vec2(vxNoise(uv * 0.9 + 3.1), vxNoise(uv * 0.9 - 7.4)) * 0.55;
+    float clump = vxNoise(w * 1.3) * 0.62 + vxNoise(w * 2.9 + 11.0) * 0.38;
+    // Leaf texture: many small, slightly elongated leaves at an angle.
+    vec2 lp = mat2(0.86, -0.5, 0.5, 0.86) * uv * vec2(10.0, 6.0);
+    float leaves = vxNoise(lp) * 0.6 + vxNoise(lp * 2.1 + 4.0) * 0.4;
+    // Light: lit clump tops vs shadowed pockets, eased so the gradient is soft.
+    float lit = smoothstep(0.30, 0.78, clump);
+    vec3 col = mix(base * 0.62, base * 1.06, lit);
+    // Hue drift between clumps, toward the authored tint.
+    col = mix(col, tint * mix(0.7, 1.05, lit), vxNoise(w * 0.7 + 19.0) * 0.45);
+    // Leaf speckle, stronger where lit (individual leaves catch the light).
+    col *= 0.9 + 0.2 * leaves * (0.4 + 0.6 * lit);
+    // Sun-catching highlights on the brightest clumps, on lit faces only.
+    col += base * 0.18 * smoothstep(0.72, 0.92, clump) * smoothstep(0.55, 0.9, leaves) * faceLight;
+    return col;
+  }
+
+  /**
+   * Bark on trunk side faces: vertical furrows wandering a little as they
+   * climb, raised plates between them broken by short horizontal cracks, and a
+   * lighter worn edge on the plates. uv.x runs around the trunk, uv.y up it.
+   * 'heightT' 0..1 up the tree adds moss at the foot.
+   */
+  vec3 patBarkDetail(vec2 uv, vec3 base, vec3 tint, float heightT) {
+    float wob = vxNoise(vec2(uv.x * 2.0, uv.y * 0.6)) * 0.35;
+    float u = uv.x * 4.5 + wob;                       // ~4–5 furrows per block width
+    float f = abs(fract(u) - 0.5) * 2.0;              // 0 at a furrow, 1 mid-plate
+    float furrow = 1.0 - smoothstep(0.0, 0.32, f);
+    // Plates break into segments up the trunk.
+    float plateId = floor(u);
+    float crackY = fract(uv.y * 1.6 + vxHash(vec2(plateId, 3.0)));
+    float crack = 1.0 - smoothstep(0.0, 0.06, min(crackY, 1.0 - crackY));
+    float plateTone = 0.92 + 0.16 * vxHash(vec2(plateId, floor(uv.y * 1.6 + vxHash(vec2(plateId, 3.0)))));
+    float grain = vxNoise(vec2(uv.x * 14.0, uv.y * 2.5)) * 0.5 + vxNoise(vec2(uv.x * 30.0, uv.y * 5.0)) * 0.5;
+    // The authored bark is ~0.05 linear — pure black on screen once shaded and
+    // occluded. Lift it to a readable mid-brown so the relief can show, then carve.
+    vec3 bark = max(base * 3.6, vec3(0.16, 0.10, 0.06));
+    vec3 col = bark * plateTone * (0.9 + 0.18 * grain);
+    col += bark * 0.22 * smoothstep(0.7, 1.0, f);     // worn plate ridges catch light
+    col = mix(col, bark * 0.38, furrow * 0.85);        // deep furrows
+    col *= 1.0 - crack * 0.45 * (1.0 - furrow);
+    // Moss creeping up from the base, mostly in the furrows.
+    float moss = (1.0 - smoothstep(0.0, 0.35, heightT)) * (0.35 + 0.65 * furrow)
+               * smoothstep(0.35, 0.65, vxNoise(uv * 3.0 + 8.0));
+    col = mix(col, vec3(0.27, 0.36, 0.17), moss * 0.6);
+    return col;
+  }
+
+  /** End grain on trunk tops/bottoms: rings around the block centre. */
+  vec3 patBarkEnd(vec2 uv, vec3 base, vec3 tint) {
+    vec2 c = fract(uv) - 0.5;
+    float r = length(c) * 7.0 + vxNoise(uv * 3.0) * 0.8;
+    float ring = 0.5 + 0.5 * sin(r * 3.14159);
+    vec3 wood = max(base * 4.2, vec3(0.2, 0.13, 0.08));
+    vec3 col = mix(wood, wood * 0.72, ring * 0.6);
+    // Bark rim around the cut face.
+    float rim = smoothstep(0.38, 0.5, max(abs(c.x), abs(c.y)));
+    return mix(col, max(base * 3.6, vec3(0.16, 0.10, 0.06)) * 0.6, rim);
+  }
+
   vec3 patGrassTop(vec2 uv, vec3 base, vec3 tint) {
     float n = vxNoise(uv * 5.5) * 0.55 + vxNoise(uv * 14.0) * 0.45;
     vec3 col = mix(base, tint, smoothstep(0.40, 0.80, n));
@@ -2514,6 +2584,25 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 3.5 && pat < 4.5) col = patBark(vUvW, col, vTintV);
     else if (pat > 4.5 && pat < 5.5) col = patGrassTop(vUvW, col, vTintV);
     else if (pat > 5.5 && pat < 6.5) col = patTile(vUvW, col, vTintV);
+    #ifdef FOLIAGE_DETAIL
+    // Trunks (the only bark-pattern blocks): furrowed bark on the sides, rings on the ends.
+    if (pat > 3.5 && pat < 4.5) {
+      if (isSide) {
+        float heightT = clamp((length(vPosW) - uSeaLevelRadius) / 10.0, 0.0, 1.0);
+        col = patBarkDetail(vUvW, diffuseColor.rgb, vTintV, heightT);
+      } else {
+        col = patBarkEnd(vUvW, diffuseColor.rgb, vTintV);
+      }
+    }
+    // Leaf blocks (sway flag, bit 3) get canopy shading instead of a flat face.
+    if (vDataV.y >= 7.5) {
+      // Tops catch the most light, sides some, undersides sit in the canopy's shade.
+      float faceLight = isTopFace ? 1.0 : isSide ? 0.6 : 0.0;
+      // Undersides: a finer scale reads as leaves seen from beneath rather than smears.
+      col = patFoliage(isTopFace || isSide ? vUvW : vUvW * 1.8, col, vTintV, faceLight);
+      if (!isTopFace && !isSide) col *= 0.8;
+    }
+    #endif
 
     // --- grass spilling over the lip of the block --------------------
     // Keep the green cap at the authored fraction (25% for turf). A restrained
@@ -2687,7 +2776,7 @@ export function makeVoxelMaterial() {
             );
         mat.userData.shader = shader;
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v10';
+    mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v11' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '');
     return mat;
 }
 

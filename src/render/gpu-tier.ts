@@ -58,6 +58,8 @@ export interface TierSettings {
     groundDetail: number;
     /** Animated foam line where the sea meets land. */
     shoreFoam: boolean;
+    /** Leaf-cluster shading on tree canopy blocks (instead of flat-coloured cubes). */
+    foliageDetail: boolean;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -85,6 +87,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         critters: 40,
         groundDetail: 1,
         shoreFoam: true,
+        foliageDetail: true,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -109,6 +112,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         critters: 24,
         groundDetail: 0.7,
         shoreFoam: true,
+        foliageDetail: true,
     },
     mid: {
         dprCap: 1.25,
@@ -133,6 +137,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         critters: 24,
         groundDetail: 0.8,
         shoreFoam: true,
+        foliageDetail: true,
     },
     low: {
         dprCap: 1,
@@ -157,6 +162,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         critters: 0,
         groundDetail: 0.45,
         shoreFoam: false,
+        foliageDetail: true,
     },
     'very-low': {
         dprCap: 1,
@@ -181,6 +187,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         critters: 0,
         groundDetail: 0.25,
         shoreFoam: false,
+        foliageDetail: false,
     },
 };
 

@@ -117,6 +117,11 @@ async function start(): Promise<void> {
     dayNight.voxelUniforms = (world.streaming.meshes as any).material?.userData?.uniforms;
 
     const voxMat = (world.streaming.meshes as any).material;
+    if (ts.foliageDetail && voxMat) {
+        // Leaf-cluster shading on canopy blocks; a define, so tiers without it pay nothing.
+        voxMat.defines = { ...(voxMat.defines || {}), FOLIAGE_DETAIL: 1 };
+        voxMat.needsUpdate = true;
+    }
     if (voxMat?.userData?.uniforms) {
         let storedWind = SETTINGS_DEFAULTS.windStrength;
         try {
