@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRenderer } from './render/renderer';
-import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES } from './core/palette';
+import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName } from './core/palette';
 import { Atmosphere } from './render/lighting';
 import { FPCamera } from './render/fp-camera';
 import { createPostFX } from './render/postfx';
@@ -114,6 +114,12 @@ async function start(): Promise<void> {
     const fpCam = new FPCamera(container.clientWidth / container.clientHeight, renderer.domElement, ts.cameraFar);
     const atmo = new Atmosphere(scene, 800, tier);
     const dayNight = new DayNight(atmo, renderer);
+    {
+        // The day cycle has its own sky keyframes; theme them with the starting
+        // palette (?palette=…) too, not only when switched from the settings menu.
+        const pd = VOXEL_PALETTES[activePaletteName];
+        if (pd) dayNight.applyNoonSky(pd.sky, pd.light.sunColor);
+    }
     dayNight.voxelUniforms = (world.streaming.meshes as any).material?.userData?.uniforms;
 
     const voxMat = (world.streaming.meshes as any).material;

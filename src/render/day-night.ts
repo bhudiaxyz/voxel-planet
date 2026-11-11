@@ -63,6 +63,14 @@ const PALETTE = {
     fillIntensity: [0.01, 0.05, 0.12, 0.22, 0.12, 0.05, 0.01],
 };
 
+/** Untouched copies of the authored twilight keyframes, so re-theming never drifts. */
+const TWILIGHT = {
+    zenith: PALETTE.zenith.map((c) => c.clone()),
+    horizon: PALETTE.horizon.map((c) => c.clone()),
+    haze: PALETTE.haze.map((c) => c.clone()),
+};
+const _c = new THREE.Color();
+
 function keyframe(t: number): { i: number; a: number } {
     for (let i = 0; i < TIMES.length - 1; i++) {
         if (t <= TIMES[i + 1]) {
@@ -111,11 +119,26 @@ export class DayNight {
      * Update the noon (index 3) sky keyframes so the day cycle reflects the
      * active palette. Call from onPaletteChange after setVoxelPalette().
      */
+    /**
+     * Theme the sky cycle. Noon takes the palette's sky outright; sunrise and
+     * sunset keep their warm Earth glow but lean toward the theme, so a Neptune
+     * dawn is blue-tinged and a Mars dusk rust, rather than every planet sharing
+     * one Earth sunrise. Night is left alone — it is near-black on every world.
+     */
     applyNoonSky(sky: { zenith: number; horizon: number; haze: number }, sunColorHex: number): void {
         PALETTE.zenith[3].set(sky.zenith);
         PALETTE.horizon[3].set(sky.horizon);
         PALETTE.haze[3].set(sky.haze);
         PALETTE.sunColor[3].set(sunColorHex);
+        const lean = (arr: THREE.Color[], i: number, hex: number, k: number) =>
+            arr[i]
+                .copy(TWILIGHT[arr === PALETTE.zenith ? 'zenith' : arr === PALETTE.horizon ? 'horizon' : 'haze'][i])
+                .lerp(_c.set(hex), k);
+        for (const i of [2, 4]) {
+            lean(PALETTE.zenith, i, sky.zenith, 0.45);
+            lean(PALETTE.horizon, i, sky.horizon, 0.35);
+            lean(PALETTE.haze, i, sky.haze, 0.35);
+        }
     }
 
     /** Expose sun direction without allocating — callers must not mutate. */
