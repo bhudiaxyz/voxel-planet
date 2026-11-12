@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
-import { BLOCK_BY_ID, WATER } from '../core/palette';
+import { BLOCK_BY_ID, WATER, SKY } from '../core/palette';
 import { LandmarkRecord } from '../world/landmarks';
 
-const SEA_LAYER = 11; // must match sphere-terrain / sphere-landmarks
+const SEA_LAYER = 11; // must match world/terrain.ts and world/landmarks.ts
 
 const MAP_W = 1024; // render resolution — keep high for quality
 const MAP_H = 512;
@@ -155,7 +155,22 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
     const baked = ctx.createImageData(MAP_W, MAP_H);
     const _dir = new THREE.Vector3();
 
+    /**
+     * Bake the planet as the world looks:
+     *  - palette colours are linear; the canvas wants sRGB. Writing linear straight
+     *    out (as this did) made the map far darker and more saturated than the game.
+     *  - land shows its GROUND colour, with canopy only as a gentle tint, so a
+     *    forest reads as green land rather than per-tree speckle of six leaf colours;
+     *  - soft hill shade from the north-west (sampled a few pixels apart, so 2-layer
+     *    terraces read as relief, not noise) and a slight lift with altitude;
+     *  - the sea deepens offshore and carries a little sky haze, as it does in-game.
+     */
     function rebake() {
+        const heights = new Float32Array(MAP_W * MAP_H);
+        const cols = new Float32Array(MAP_W * MAP_H * 3);
+        const water = new Uint8Array(MAP_W * MAP_H);
+        const _c = new THREE.Color();
+        const _leaf = new THREE.Color();
         for (let py = 0; py < MAP_H; py++) {
             const lat = Math.PI / 2 - (py / MAP_H) * Math.PI;
             const cosLat = Math.cos(lat);
@@ -165,34 +180,49 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
                 _dir.set(cosLat * Math.cos(lon), sinLat, cosLat * Math.sin(lon));
                 const { face, u, v } = dirToFaceUV(_dir, FACE_RES);
                 const top = grid.columnTop(face, u, v);
-                let r: number, g: number, b: number;
+                const k = py * MAP_W + px;
                 if (top <= SEA_LAYER) {
-                    // Ocean — blend from shoal to deep based on distance below sea level
-                    const depth = SEA_LAYER - top; // 0 = at surface, larger = deeper
-                    const waterCol: THREE.Color = depth < 2 ? WATER.shoal : depth < 6 ? WATER.shallow : WATER.deep;
-                    r = Math.round(waterCol.r * 255);
-                    g = Math.round(waterCol.g * 255);
-                    b = Math.round(waterCol.b * 255);
+                    const depth = SEA_LAYER - top; // bed depth below the surface
+                    _c.copy(WATER.shoal).lerp(WATER.shallow, Math.min(1, depth / 3));
+                    if (depth > 3) _c.lerp(WATER.deep, Math.min(1, (depth - 3) / 8) * 0.7);
+                    _c.lerp(SKY.haze, 0.2);
+                    heights[k] = SEA_LAYER;
+                    water[k] = 1;
                 } else {
-                    // Land — use the top block's palette colour (includes foliage)
-                    const id = grid.get(face, u, v, top);
-                    const block = BLOCK_BY_ID[id] as any;
-                    r = 120;
-                    g = 120;
-                    b = 120;
-                    if (block) {
-                        const col: THREE.Color = block.mapColor ?? block.top ?? block.side;
-                        if (col) {
-                            r = Math.round(col.r * 255);
-                            g = Math.round(col.g * 255);
-                            b = Math.round(col.b * 255);
-                        }
+                    const ground = grid.groundColumnTop(face, u, v);
+                    const gBlock = BLOCK_BY_ID[grid.get(face, u, v, Math.max(0, ground))] as any;
+                    const gCol: THREE.Color | undefined = gBlock?.mapColor ?? gBlock?.top ?? gBlock?.side;
+                    if (gCol) _c.copy(gCol);
+                    else _c.setRGB(0.3, 0.3, 0.3);
+                    // Canopy over the ground: a tint toward the leaves, not a replacement.
+                    if (top > ground) {
+                        const leaf = BLOCK_BY_ID[grid.get(face, u, v, top)] as any;
+                        if (leaf?.top) _c.lerp(_leaf.copy(leaf.top).multiplyScalar(0.85), 0.45);
                     }
+                    heights[k] = Math.max(ground, SEA_LAYER);
                 }
-                const i = (py * MAP_W + px) * 4;
-                baked.data[i] = r;
-                baked.data[i + 1] = g;
-                baked.data[i + 2] = b;
+                cols[k * 3] = _c.r;
+                cols[k * 3 + 1] = _c.g;
+                cols[k * 3 + 2] = _c.b;
+            }
+        }
+        const S = 3; // hill-shade sample spacing, pixels
+        for (let py = 0; py < MAP_H; py++) {
+            for (let px = 0; px < MAP_W; px++) {
+                const k = py * MAP_W + px;
+                _c.setRGB(cols[k * 3], cols[k * 3 + 1], cols[k * 3 + 2]);
+                if (!water[k]) {
+                    const w = heights[py * MAP_W + ((px - S + MAP_W) % MAP_W)];
+                    const n = heights[Math.max(0, py - S) * MAP_W + px];
+                    const shade = Math.max(0.8, Math.min(1.18, 1 + (heights[k] - w + (heights[k] - n)) * 0.018));
+                    const lift = 0.94 + Math.min(0.12, (heights[k] - SEA_LAYER) * 0.006);
+                    _c.multiplyScalar(shade * lift);
+                }
+                _c.convertLinearToSRGB();
+                const i = k * 4;
+                baked.data[i] = Math.round(Math.min(1, _c.r) * 255);
+                baked.data[i + 1] = Math.round(Math.min(1, _c.g) * 255);
+                baked.data[i + 2] = Math.round(Math.min(1, _c.b) * 255);
                 baked.data[i + 3] = 255;
             }
         }
