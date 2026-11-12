@@ -1,100 +1,52 @@
 # Voxel Planet
 
-A first-person explorer on a procedurally generated spherical voxel planet (Three.js + TypeScript + Vite). Walk, drone, or fly across a genuine sphere — continents, oceans, forests, and ancient landmarks all mapped onto a cubemap grid. The horizon curves away naturally; physics and rendering agree because the world truly is a sphere.
+A first-person explorer on a procedurally generated **spherical** voxel planet, built with Three.js, TypeScript and Vite. Walk, fly a drone or soar across a real sphere — continents, deserts, forests, oceans and ancient landmarks — with a companion dog at your heel. The horizon curves away because the world truly is round.
 
-Inspired by **Verdant** [https://github.com/xikhar/verdant] and **Petalfell** [https://github.com/xikhar/voxel-game-original], along with aspects of **Beyond Fable** [https://github.com/xikhar/beyond-fable].
+Inspired by **Verdant** [https://github.com/xikhar/verdant] and **Petalfell** [https://github.com/xikhar/voxel-game-original], along with aspects of **Beyond Fable** [https://github.com/xikhar/beyond-fable]. Controls match its sibling project, **planet-explorer**.
 
 ## Highlights
 
-- **True sphere world** — `SphereVoxelGrid` maps the planet surface onto a 6-face cubemap (`FACE_RES = 400`, `PLANET_RADIUS = 350`). Physics, terrain, vegetation, and collision all work in sphere-native coordinates — no flat-world approximation.
-- **Procedural terrain** — sculpted with domain-warped FBM noise into terraced continents, beaches, and highlands. Each seed produces a distinct world; share the URL (`?seed=word`) to share an exact planet.
-- **Day/night cycle** — a 20-minute day with seven keyframed sky palettes. Watch the sun rise through orange haze, reach a pale noon, and set again.
-- **Night sky** — procedural stars, a Milky Way with Great Rift dust lane, emission nebulae, and a moon disc.
-- **Aurora** — animated curtain aurora at deep night: flickering vertical rays, sweeping pulse waves, and colour that shifts from green through cyan to magenta.
-- **Volumetric-style atmosphere** — sunrise/sunset limb glow, crepuscular rays, animated cloud cover, aerial perspective, and exponential ground mist.
-- **Fly and drone modes** — free-flight (F) or terrain-following drone (V) with P-controller altitude hold, auto-climb over obstacles, and smooth landing state machine. Both modes floor against the full voxel column height (including tree canopy).
-- **Ink edge rendering** — toon-style dark and light strokes at block boundaries, composited in display space after tone mapping. Toggle with E.
-- **Rich vegetation** — five tree forms (spire, palm, broad, weeping, round) with tall trunks and bushy canopies, plus ferns, red ferns, shrubs, reeds, tall grass, moss, and lichen. All placed in sphere-native face-local coordinates.
-- **Sphere landmarks** — seven ancient structure types seeded across the planet (2 per face, ~12 total): twisted spires, obelisks, monolith rings, tombstone fields, floating biospheres, ancient wells, and ruined arches. Each appears on the map with a distinct icon; hover for a label.
-- **Equirectangular map** — press M to open a full-planet map baked from terrain block colours. Your position is a directional arrow; landmarks show as colour-coded icons.
-- **Companion dog** — follows you across the sphere surface; `Y` to sit or stand.
-- **Touch controls** — full virtual joystick overlay with map button, auto-detected on load.
-- **Seasonal palettes** — five world colour palettes (Autumn, Spring, Alpine, Desert, Alien) selectable from the pause menu. Switching re-colours sky, fog, lights, water, grade, and meshes live — no reload.
-- **GPU tiering** — five quality tiers tuned at startup from device cores, memory, and texture unit size.
-- **Wind sway** — leaves and shrubs sway in the breeze; adjustable wind strength in settings.
+- **A real round world** — terraced continents, beaches and highlands, generated from a seed. Share a planet with `?seed=word`.
+- **Living landscapes by altitude** — palms on the coast, rainforest giants in the lowlands, birch and broadleaf in the midlands, tiered firs and spruces in the highlands, and wind-bent pines at the treeline. Every tree has its own height and size.
+- **Deserts** — dune bands near the equator with saguaro, barrel and clustered cacti; dead snags on higher ground.
+- **Meadows full of detail** — grass, flowers, ferns, reeds, mushrooms, boulders and fallen logs, all swaying in the wind.
+- **Life in the air** — flocks of birds crossing the sky, drifting voxel clouds, butterflies by day and fireflies at night.
+- **Water that reads as water** — clear sandy shallows deepening to ocean blue, with caustics and a foam line along the coast.
+- **Day and night** — a full day cycle with sunrises, sunsets, stars, the Milky Way and aurora.
+- **Twelve colour themes** — Spring, Autumn, Alpine, Desert and Alien, plus seven inspired by the Solar System: Mercury, Venus, Mars, Jupiter, Saturn, Uranus and Neptune. Switch live in Settings, or start with `?palette=Mars`.
+- **A companion dog** — finds its way to you around obstacles, and sits when told.
+- **Three ways to travel** — walk, drone or free flight.
+- **Ancient landmarks** — spires, obelisks, stone rings, tomb fields, biospheres, wells and arches, all marked on the planet map.
+- **Runs everywhere** — desktop, laptop, tablet and phone. Quality adapts automatically to the device, and touch controls appear on touch screens.
 
-For architecture and implementation details, see [DESIGN.md](DESIGN.md).
+For architecture and technical detail, see [DESIGN.md](DESIGN.md).
 
 ## Run
 
-Needs Node.js 18+.
+Needs Node.js 18+ (23.6+ for `npm run check`).
 
 ```bash
 npm install
-npm run dev
-```
-
-Open [http://localhost:5180/voxel-planet](http://localhost:5180/voxel-planet). First load generates the world — give it a few seconds.
-
-```bash
-npm run build     # production bundle → dist/
-npm run preview   # serve that bundle locally
-npm run check     # controls sanity check (needs Node 23.6+ for .ts)
+npm run dev        # http://localhost:5161/voxel-planet
+npm run build      # production bundle → dist/
+npm run check      # sanity checks
 ```
 
 ## Controls
 
-### Keyboard & mouse
-
-| Input | Action |
-| --- | --- |
-| WASD | Move |
-| Mouse | Look |
-| Space | Jump |
-| Shift | Sprint |
-| F | Toggle fly mode (free flight, terrain floor) |
-| V | Toggle drone mode (terrain-following, A/D steer) |
-| L | Land drone |
-| Space / C | Ascend / descend (fly or drone) |
-| Scroll | Ascend / descend (drone) |
-| E | Toggle edge outlines |
-| Y | Tell the dog to sit or stand |
-| M | Toggle map |
-| [ / ] | Step time of day back / forward by 3 hours |
-| Esc | Pause / release pointer |
-
-Click in the viewport to capture the pointer. Press Esc to release it.
-
-### Touch (phone / tablet)
-
-| Control | Action |
-| --- | --- |
-| Left joystick | Move / steer |
-| Swipe right half | Look |
-| ↑ | Jump / ascend |
-| ↓ | Descend (drone or fly) |
-| ⚡ | Sprint |
-| ✈ | Toggle fly mode |
-| 🚁 | Enter drone mode |
-| 🛬 | Land drone |
-| ⬡ | Toggle edge outlines |
-| ◀ / ▶ | Step time of day back / forward |
-| 🐕 | Tell the dog to sit or stand |
-| 🗺 | Toggle map (tap the map to close it) |
-| ⏸ | Pause / show controls |
-| ⚙ | Settings |
-
-## Settings
-
-The settings panel (⚙, top right) exposes day speed, shadow resolution, bloom, wind strength, and the world seed, plus a **New world** button.
-
-## Dependencies
-
-`three`, `nipplejs`, and `vite` are the only runtime dependencies. No image or model assets — every block, character, and effect is built in code.
-
-## Deploy
-
-The project is configured for GitHub Pages. Push to `main` and the `deploy-pages` workflow builds and publishes automatically.
+| Keyboard & mouse | Touch | Action |
+| --- | --- | --- |
+| WASD · Mouse | Left thumb · Right drag | Move · Look |
+| Shift | ⚡ | Sprint |
+| Space · C | ↑ · ↓ | Jump / ascend · Descend |
+| F | ✈ | Cycle walk → drone → fly |
+| L | 🛬 | Land |
+| M | 🗺️ | Map |
+| G | ☰ | Show / hide panels |
+| X | 🐕 | Dog sit / stand |
+| B | ⬡ | Block outlines |
+| [ · ] | ◀ · ▶ | Time of day |
+| Esc | ⏸ | Pause |
 
 ## License
 

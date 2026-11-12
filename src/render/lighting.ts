@@ -76,6 +76,11 @@ const AERIAL_D = 90;
  */
 const FOG_NEAR = 96;
 
+/** Altitude fog thinning: radius of typical ground, metres per doubling, and cap (×). */
+const ALT_FOG_GROUND = 350 + 18;
+const ALT_FOG_SCALE = 18;
+const ALT_FOG_MAX = 7;
+
 /* Patch the fog into every material at once.
  *
  * three's fog chunk is shared by every shader that declares `fog: true`, so
@@ -259,6 +264,19 @@ export class Atmosphere {
             this.sky.material.uniforms.uTime.value = this.time;
             // Sphere world: orient the sky to the viewer's local up (radial).
             this.sky.material.uniforms.uSkyUp.value.copy(camera.position).normalize();
+            // Altitude above typical ground → how far into space the sky has drained.
+            const _alt = camera.position.length() - 368;
+            this.sky.material.uniforms.uSpace.value = Math.min(1, Math.max(0, (_alt - 220) / 600));
+        }
+        // Altitude thins the air: up high the haze recedes so the far-field planet
+        // shows as a globe; on the ground the authored aerial perspective is unchanged.
+        // Both fogs (material scene.fog and the post haze, via fog.aerialD) follow it.
+        if (this.scene?.fog && this.fogEnabled) {
+            const alt = Math.max(0, camera.position.length() - ALT_FOG_GROUND);
+            const thin = 1 + Math.min(ALT_FOG_MAX, (alt / ALT_FOG_SCALE) ** 1.3);
+            const d = this.aerialD * thin;
+            this.scene.fog.density = 1 / d;
+            this.scene.fog.aerialD = d;
         }
         if (this.hemi) {
             // HemisphereLight takes its sky axis from its position (it looks at the

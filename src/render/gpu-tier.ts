@@ -60,6 +60,8 @@ export interface TierSettings {
     shoreFoam: boolean;
     /** Leaf-cluster shading on tree canopy blocks (instead of flat-coloured cubes). */
     foliageDetail: boolean;
+    /** Low-res whole-planet shell beyond the streamed terrain, so the rest of the world shows. */
+    farField: boolean;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -84,10 +86,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 1,
         birdFlock: 14,
         clouds: 26,
-        critters: 28,
+        critters: 16,
         groundDetail: 1,
         shoreFoam: true,
         foliageDetail: true,
+        farField: true,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -109,10 +112,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 0.7,
         birdFlock: 10,
         clouds: 18,
-        critters: 18,
+        critters: 10,
         groundDetail: 0.7,
         shoreFoam: true,
         foliageDetail: true,
+        farField: true,
     },
     mid: {
         dprCap: 1.25,
@@ -134,10 +138,11 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         grassDensity: 0.8,
         birdFlock: 9,
         clouds: 18,
-        critters: 18,
+        critters: 10,
         groundDetail: 0.8,
         shoreFoam: true,
         foliageDetail: true,
+        farField: true,
     },
     low: {
         dprCap: 1,
@@ -163,6 +168,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         groundDetail: 0.45,
         shoreFoam: false,
         foliageDetail: true,
+        farField: true,
     },
     'very-low': {
         dprCap: 1,
@@ -188,6 +194,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         groundDetail: 0.25,
         shoreFoam: false,
         foliageDetail: false,
+        farField: false,
     },
 };
 

@@ -34,6 +34,8 @@ export const SKY_UNIFORMS_GLSL = /* glsl */ `
   uniform float uNightSkyFull;
   /** The viewer's local up (planet radial). The sky model is authored with +Y up. */
   uniform vec3  uSkyUp;
+  /** 0 on the ground → 1 above the atmosphere: the sky darkens to space. */
+  uniform float uSpace;
 `;
 
 export const SKY_FN_GLSL = /* glsl */ `
@@ -267,6 +269,16 @@ export const SKY_FN_GLSL = /* glsl */ `
     col = mix(col, col * 0.04, uNight * 0.96);
     col += nightSkyAddons(dir, dirW);
 
+    // Above the atmosphere: the daytime sky drains to deep space, keeping a thin
+    // blue limb glow toward the planet below, and the stars come out regardless
+    // of the time of day.
+    if (uSpace > 0.0) {
+      vec3 space = vec3(0.004, 0.006, 0.014);
+      float limb = pow(clamp(1.0 - abs(dir.y + 0.35), 0.0, 1.0), 6.0);
+      vec3 spaceCol = space + vec3(0.2, 0.42, 0.85) * limb * 0.35 + nightSkyAddons(dir, dirW) * (1.0 - uNight);
+      col = mix(col, spaceCol, uSpace);
+    }
+
     return col;
   }
 `;
@@ -294,6 +306,7 @@ export function skyUniformValues(
         uSunGlow: { value: SKY.sunTint.clone().multiplyScalar(0.16) },
         uSunDirWorld: { value: sunDir.clone() },
         uSkyUp: { value: new THREE_.Vector3(0, 1, 0) },
+        uSpace: { value: 0 },
         uNight: { value: 0.0 },
         uMoonDir: { value: new THREE_.Vector3(0, -1, 0) },
         uStarAngle: { value: 0.0 },

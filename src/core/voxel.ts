@@ -638,6 +638,10 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
         get loadRadius() {
             return radius;
         },
+        /** World-unit distances of the near terrain's dither-out band. */
+        get fadeBand(): [number, number] {
+            return [fadeUniforms.uFadeNear.value, fadeUniforms.uFadeFar.value];
+        },
         get loadedCount() {
             return loaded.size;
         },
@@ -1630,6 +1634,23 @@ const FRAG_DECL = /* glsl */ `
     return col;
   }
 
+  /**
+   * Trunk-side coordinates in block units, independent of the mesher's uv axes:
+   * x runs around the trunk (along the face's horizontal tangent), y runs up it
+   * (radially). The sphere mesher's per-face uv layout does not guarantee uv.y is
+   * the layer axis, which tiled end-grain rings across trunk sides.
+   * Takes the face's geometric normal; reads vPosW, so only valid inside main().
+   */
+  vec2 _trunkUV(vec3 faceN) {
+    // The mesher's uv on a side face holds (across-face, layer) in some order. The
+    // layer component matches the fragment's height above the planet, so whichever
+    // component is NOT the height runs around the trunk. Robust on every face.
+    float h = length(vPosW) - uPlanetRadius;
+    float acrossIsX = step(abs(vUvW.y - h), abs(vUvW.x - h));   // 1 if uv.y is the height
+    float around = mix(vUvW.y, vUvW.x, acrossIsX);
+    return vec2(around, h);
+  }
+
   /** End grain on trunk tops/bottoms: rings around the block centre. */
   vec3 patBarkEnd(vec2 uv, vec3 base, vec3 tint) {
     vec2 c = fract(uv) - 0.5;
@@ -1750,6 +1771,11 @@ const BAYER_DITHER_GLSL = /* glsl */ `
     // Chunk fade-in on load, times the distance fade at the edge of the stream
     // radius: far terrain screen-doors out instead of ending in a hard rim.
     float distFade = 1.0 - smoothstep(uFadeNear, uFadeFar, distance(vPosW, cameraPosition));
+    #ifdef FAR_FIELD
+      // The far-field shell is the complement: it dithers IN across the same band
+      // where the streamed chunks dither out, so the hand-over has no seam.
+      distFade = 1.0 - distFade;
+    #endif
     if (uLodAlpha * distFade < threshold) discard;
   }
 `;
@@ -1760,7 +1786,14 @@ const FRAG_BODY = /* glsl */ `
     float pat = mod(vDataV.y, 8.0);
     float fringe = vDataV.z;
     float localV = vDataV.w;
-    float _radial = dot(vNrmW, normalize(vPosW));
+    // Classify the face from its true geometric normal. The mesher writes side
+    // normals as the cube face's constant tangents, which tilt up to ~35° from the
+    // real sideways direction toward a face's edges — enough to misread trunk and
+    // cliff sides as tops (end-grain rings on trunk sides). Derivatives give the
+    // actual plane of the face anywhere on the sphere.
+    vec3 _geoN = normalize(cross(dFdx(vPosW), dFdy(vPosW)));
+    if (dot(_geoN, vNrmW) < 0.0) _geoN = -_geoN;
+    float _radial = dot(_geoN, normalize(vPosW));
     bool isSide = abs(_radial) < 0.5;
     bool isTopFace = _radial > 0.5;
 
@@ -1770,15 +1803,15 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 3.5 && pat < 4.5) col = patBark(vUvW, col, vTintV);
     else if (pat > 4.5 && pat < 5.5) col = patGrassTop(vUvW, col, vTintV);
     else if (pat > 5.5 && pat < 6.5) col = patTile(vUvW, col, vTintV);
-    else if (pat > 6.5 && pat < 7.5) col = patCactus(vUvW, col, vTintV, isSide);
-    #ifdef FOLIAGE_DETAIL
+    else if (pat > 6.5 && pat < 7.5) col = patCactus(isSide ? _trunkUV(_geoN) : vUvW, col, vTintV, isSide);
+    #if defined(FOLIAGE_DETAIL) && !defined(FAR_FIELD)
     // Plain terrain blocks (no pattern, not foliage): surface detail.
     if (pat < 0.5 && vDataV.y < 7.5) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
     // Trunks (the only bark-pattern blocks): furrowed bark on the sides, rings on the ends.
     if (pat > 3.5 && pat < 4.5) {
       if (isSide) {
         float heightT = clamp((length(vPosW) - uSeaLevelRadius) / 10.0, 0.0, 1.0);
-        col = patBarkDetail(vUvW, diffuseColor.rgb, vTintV, heightT);
+        col = patBarkDetail(_trunkUV(_geoN), diffuseColor.rgb, vTintV, heightT);
       } else {
         col = patBarkEnd(vUvW, diffuseColor.rgb, vTintV);
       }
@@ -1896,6 +1929,189 @@ const FRAG_BODY = /* glsl */ `
   }
 `;
 
+/**
+ * Far-field planet shell: the whole planet at 1/FAR_CELL resolution, one mesh.
+ *
+ * Each cell is FAR_CELL×FAR_CELL columns: a flat top at the highest walkable
+ * ground under it, coloured by its most common surface block (live palette), plus
+ * a wall toward any lower neighbour so terraces still read as steps. It is drawn
+ * with a clone of the voxel material whose distance dither is inverted (FAR_FIELD),
+ * so it appears exactly where the streamed chunks fade out — beyond the load
+ * radius you see the rest of the world, not an edge. Rebuilt on palette change.
+ */
+const FAR_CELL = 4;
+const FAR_WALL_MIN = 4;
+export function createFarField(grid: SphereVoxelGrid, nearMaterial: THREE.MeshLambertMaterial, seaLayer: number) {
+    const mat = makeVoxelMaterial();
+    // Share every uniform object with the near material (sun, tints, wind…), so the
+    // two stay in lockstep; only the fade band differs.
+    const nearU = nearMaterial.userData.uniforms;
+    const farU = mat.userData.uniforms;
+    for (const k of Object.keys(nearU)) if (k !== 'uFadeNear' && k !== 'uFadeFar') farU[k] = nearU[k];
+    mat.defines = { ...(mat.defines || {}), FAR_FIELD: 1 };
+
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+    mesh.name = 'far-field';
+    mesh.matrixAutoUpdate = false;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.renderOrder = -1;
+
+    const N = Math.floor(FACE_RES / FAR_CELL);
+    const cellTop = new Int16Array(6 * N * N);
+    const cellBlock = new Uint8Array(6 * N * N);
+
+    function sample() {
+        const counts = new Map<number, number>();
+        for (let f = 0; f < 6; f++)
+            for (let cv = 0; cv < N; cv++)
+                for (let cu = 0; cu < N; cu++) {
+                    let top = -1;
+                    counts.clear();
+                    for (let dv = 0; dv < FAR_CELL; dv++)
+                        for (let du = 0; du < FAR_CELL; du++) {
+                            const u = cu * FAR_CELL + du,
+                                v = cv * FAR_CELL + dv;
+                            const g = grid.columnTop(f, u, v);
+                            if (g > top) top = g;
+                            const id = grid.get(f, u, v, Math.max(0, grid.groundColumnTop(f, u, v)));
+                            counts.set(id, (counts.get(id) || 0) + 1);
+                        }
+                    let best = 0,
+                        bn = -1;
+                    for (const [id, n] of counts) if (n > bn) ((bn = n), (best = id));
+                    const i = (f * N + cv) * N + cu;
+                    cellTop[i] = Math.max(top, seaLayer - 2); // under the sea: a low floor the water covers
+                    cellBlock[i] = best;
+                }
+    }
+
+    const FN = [
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1],
+    ];
+    const FU = [
+        [0, 1, 0],
+        [0, 1, 0],
+        [1, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 1, 0],
+    ];
+    const FV = [
+        [0, 0, 1],
+        [0, 0, -1],
+        [0, 0, -1],
+        [0, 0, 1],
+        [-1, 0, 0],
+        [1, 0, 0],
+    ];
+    const corner = (f: number, u: number, v: number, r: number): [number, number, number] => {
+        const pu = (2 * u) / FACE_RES - 1,
+            pv = (2 * v) / FACE_RES - 1;
+        const x = FN[f][0] + FU[f][0] * pu + FV[f][0] * pv,
+            y = FN[f][1] + FU[f][1] * pu + FV[f][1] * pv,
+            z = FN[f][2] + FU[f][2] * pu + FV[f][2] * pv;
+        const l = Math.hypot(x, y, z);
+        return [(x / l) * r, (y / l) * r, (z / l) * r];
+    };
+
+    function build() {
+        sample();
+        const buf = new MeshBuffer();
+        const white = new THREE.Color(1, 1, 1);
+        const ao4 = [1, 1, 1, 1],
+            lv4 = [1, 1, 1, 1];
+        const uv0: [number, number][] = [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 1],
+        ];
+        const at = (f: number, cu: number, cv: number) => {
+            if (cu < 0 || cv < 0 || cu >= N || cv >= N) return -1; // across a cube seam: no wall
+            return cellTop[(f * N + cv) * N + cu];
+        };
+        for (let f = 0; f < 6; f++)
+            for (let cv = 0; cv < N; cv++)
+                for (let cu = 0; cu < N; cu++) {
+                    const i = (f * N + cv) * N + cu;
+                    const top = cellTop[i];
+                    const blk = BLOCK_BY_ID[cellBlock[i]] as any;
+                    if (!blk) continue;
+                    const r = PLANET_RADIUS + top + 1;
+                    const u0 = cu * FAR_CELL,
+                        v0 = cv * FAR_CELL,
+                        u1 = u0 + FAR_CELL,
+                        v1 = v0 + FAR_CELL;
+                    const c00 = corner(f, u0, v0, r),
+                        c10 = corner(f, u1, v0, r),
+                        c11 = corner(f, u1, v1, r),
+                        c01 = corner(f, u0, v1, r);
+                    const mid = corner(f, (u0 + u1) / 2, (v0 + v1) / 2, 1);
+                    const up = [mid[0], mid[1], mid[2]];
+                    const pattern = blk.sway ? 8 : 0;
+                    buf.quad([c00, c10, c11, c01], up, blk.top, blk.tint || blk.top, white, uv0, ao4, pattern, 0, lv4);
+                    // Walls down to lower neighbours (same face only; seams are rare and hidden by haze).
+                    const sides: Array<[number, number, [number, number, number], [number, number, number]]> = [
+                        [cu + 1, cv, c10, c11],
+                        [cu - 1, cv, c01, c00],
+                        [cu, cv + 1, c11, c01],
+                        [cu, cv - 1, c00, c10],
+                    ];
+                    for (const [nu, nv, a, b] of sides) {
+                        const nt = at(f, nu, nv);
+                        // Only steps of FAR_WALL_MIN+ layers get a wall: a lone 2-layer
+                        // terrace lip is sub-pixel at far-field range and doubled the mesh.
+                        if (nt < 0 || top - nt < FAR_WALL_MIN) continue;
+                        const s = (PLANET_RADIUS + nt + 1) / r;
+                        const a2: [number, number, number] = [a[0] * s, a[1] * s, a[2] * s],
+                            b2: [number, number, number] = [b[0] * s, b[1] * s, b[2] * s];
+                        const ex = (a[0] + b[0]) / 2 - mid[0] * r,
+                            ey = (a[1] + b[1]) / 2 - mid[1] * r,
+                            ez = (a[2] + b[2]) / 2 - mid[2] * r;
+                        const el = Math.hypot(ex, ey, ez) || 1;
+                        const side = blk.side || blk.top;
+                        buf.quad(
+                            [a2, b2, b, a],
+                            [ex / el, ey / el, ez / el],
+                            side,
+                            blk.tint || side,
+                            white,
+                            uv0,
+                            ao4,
+                            pattern,
+                            0,
+                            lv4,
+                        );
+                    }
+                }
+        mesh.geometry.dispose();
+        mesh.geometry = buf.toGeometry();
+        mesh.geometry.computeBoundingSphere();
+        mesh.updateMatrixWorld();
+    }
+
+    build();
+    return {
+        mesh,
+        /** Sit the far field's fade-in on the near terrain's fade-out band. */
+        setBand(near: number, far: number) {
+            farU.uFadeNear.value = near;
+            farU.uFadeFar.value = far;
+        },
+        rebuild: build,
+        dispose() {
+            mesh.geometry.dispose();
+            mat.dispose();
+        },
+    };
+}
+
 export function makeVoxelMaterial() {
     const mat = new THREE.MeshLambertMaterial({
         vertexColors: true,
@@ -1967,7 +2183,8 @@ export function makeVoxelMaterial() {
             );
         mat.userData.shader = shader;
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-voxel-v11' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '');
+    mat.customProgramCacheKey = () =>
+        'VoxelWorld-voxel-v12' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 

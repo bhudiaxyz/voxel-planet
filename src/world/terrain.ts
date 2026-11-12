@@ -149,6 +149,17 @@ const DEADWOOD = registerBlock('DEADWOOD', {
     rough: 0.7,
     isTrunk: true,
 });
+/** Birch: pale bark with the bark pattern's furrows (reads as dark streaks on white). */
+const BIRCH = registerBlock('BIRCH', {
+    top: c(0xd8d2c4),
+    side: c(0xcac2b2),
+    bottom: c(0xa8a092),
+    tint: c(0x5a5248),
+    pattern: PATTERN.BARK,
+    rough: 0.5,
+    isTrunk: true,
+});
+
 /** Per grass/stone column above the lowlands: a dead trunk, rarer than living trees. */
 const DEAD_TRUNK_P = 0.0012;
 /** Dead trunks only from the grassland/forest band upward (layers above sea). */
@@ -225,6 +236,15 @@ export function generateSphereTerrain(
     ];
     const GRASS_IDS = new Set([BLOCKS.GRASS.id, BLOCKS.GRASS_LIGHT.id, BLOCKS.GRASS_DEEP.id]);
     const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id]);
+    // Leaf colours by role (palette slot roles: 0 primary, 1 pale, 2 accent, 3 cream,
+    // 4 leaf green, 5 deep). Each zone draws from the roles that suit it, so every
+    // theme keeps the altitude logic in its own colours.
+    const LEAF_ROLE = {
+        broad: [LEAVES[0], LEAVES[1], LEAVES[4], LEAVES[4]],
+        flowering: [LEAVES[2]],
+        conifer: [LEAVES[5], LEAVES[4], LEAVES[5]],
+        birch: [LEAVES[1], LEAVES[3]],
+    };
 
     for (let face = 0; face < 6; face++) {
         for (let v = 0; v < FACE_RES; v++) {
@@ -234,7 +254,8 @@ export function generateSphereTerrain(
 
                 const roll = treeRng();
                 if (sl > SEA_LAYER + 1 && GRASS_IDS.has(topId)) {
-                    if (roll < 0.012) plantSphereTree(grid, face, u, v, sl, treeRng, LEAVES);
+                    const zone = zoneOf(sl - SEA_LAYER);
+                    if (roll < ZONE[zone].treeP) plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
                     else if (roll < 0.012 + DEAD_TRUNK_P && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
                         plantDeadTrunk(grid, face, u, v, sl, treeRng);
                     else if (roll < 0.042) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(BUSH_PALETTE));
@@ -242,8 +263,22 @@ export function generateSphereTerrain(
                     else if (roll < 0.08)
                         plantSingle(grid, face, u, v, sl, sl < SEA_LAYER + 4 ? GRASS_TALL : SHRUB_TALL);
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
-                    // High, cold rock: wind-killed snags stand alone on the slopes.
-                    if (roll < DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
+                    // Cold rock: conifers where the highland is, a thin cover lower down,
+                    // and wind-killed snags standing alone on the slopes.
+                    const zone = zoneOf(sl - SEA_LAYER);
+                    const onRockP = zone === 'highland' ? 0.01 : zone === 'treeline' ? 0.005 : 0.0025;
+                    if (roll < onRockP)
+                        plantZoneTree(
+                            grid,
+                            face,
+                            u,
+                            v,
+                            sl,
+                            treeRng,
+                            zone === 'treeline' ? 'treeline' : 'highland',
+                            LEAF_ROLE,
+                        );
+                    else if (roll < onRockP + DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
                     else if (roll < 0.018)
                         plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.chance(0.7) ? SCRUB_BLOCK : BUSH_MAUVE);
                     else if (roll < 0.055)
@@ -315,6 +350,220 @@ function selectRock(noise: Noise3, dir: THREE.Vector3, layer: number, stone: any
     return v > 0.2 ? stonePale.id : stone.id;
 }
 
+/* ============================================================================
+ * Trees by altitude.
+ *
+ * Height above sea (layers) picks a zone; the zone picks the species mix, the
+ * size range and which leaf-colour roles to use. Within a zone every tree draws
+ * its own continuous size, so a forest holds saplings, mid trees and giants.
+ *
+ *   coast     2–3   palms, broad shade trees
+ *   lowland   4–7   rainforest emergents, broadleaf canopy, palms near water
+ *   midland   8–11  mixed broadleaf, birch, the first firs
+ *   highland 12–15  firs and spruces, tall tiered conifers
+ *   treeline   16+  sparse, short, wind-bent pines (krummholz)
+ * ========================================================================== */
+type Zone = 'coast' | 'lowland' | 'midland' | 'highland' | 'treeline';
+type Species = 'broadleaf' | 'palm' | 'emergent' | 'birch' | 'fir' | 'spruce' | 'krummholz';
+
+const zoneOf = (rise: number): Zone =>
+    rise <= 3 ? 'coast' : rise <= 7 ? 'lowland' : rise <= 11 ? 'midland' : rise <= 15 ? 'highland' : 'treeline';
+
+/** Per zone: tree chance per grass column, species weights, size range (0..1). */
+const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [number, number] }> = {
+    coast: {
+        treeP: 0.011,
+        mix: [
+            ['palm', 5],
+            ['broadleaf', 3],
+        ],
+        size: [0.35, 0.85],
+    },
+    lowland: {
+        treeP: 0.016,
+        mix: [
+            ['broadleaf', 6],
+            ['emergent', 2],
+            ['palm', 1],
+        ],
+        size: [0.2, 1.0],
+    },
+    midland: {
+        treeP: 0.013,
+        mix: [
+            ['broadleaf', 5],
+            ['birch', 3],
+            ['fir', 2],
+        ],
+        size: [0.2, 0.9],
+    },
+    highland: {
+        treeP: 0.012,
+        mix: [
+            ['fir', 5],
+            ['spruce', 4],
+            ['birch', 1],
+        ],
+        size: [0.3, 1.0],
+    },
+    treeline: {
+        treeP: 0.006,
+        mix: [
+            ['krummholz', 6],
+            ['spruce', 1],
+        ],
+        size: [0.15, 0.5],
+    },
+};
+
+function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
+    let total = 0;
+    for (const [, w] of mix) total += w;
+    let r = rng() * total;
+    for (const [s, w] of mix) if ((r -= w) <= 0) return s;
+    return mix[mix.length - 1][0];
+}
+
+function plantZoneTree(
+    grid: SphereVoxelGrid,
+    face: number,
+    u: number,
+    v: number,
+    surfaceLayer: number,
+    rng: ReturnType<typeof makeRng>,
+    zone: Zone,
+    roles: Record<'broad' | 'flowering' | 'conifer' | 'birch', any[]>,
+) {
+    const z = ZONE[zone];
+    const species = weightedPick(z.mix, rng);
+    const size = rng.range(z.size[0], z.size[1]);
+    if (species === 'broadleaf') {
+        // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
+        const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;
+        plantSphereTree(grid, face, u, v, surfaceLayer, rng, leaves, size);
+        return;
+    }
+    const set = (du: number, dl: number, dv: number, id: number) => {
+        const nu = u + du,
+            nv = v + dv,
+            nl = surfaceLayer + 1 + dl;
+        if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
+        if (grid.get(face, nu, nv, nl) !== 0) return false;
+        grid.set(face, nu, nv, nl, id);
+        return true;
+    };
+    /** A flat disc of leaves (radius r, Chebyshev with clipped corners) at height dl. */
+    const disc = (cu: number, dl: number, cv: number, r: number, id: number, ragged = 0.0) => {
+        for (let dv = -r; dv <= r; dv++)
+            for (let du = -r; du <= r; du++) {
+                const d = Math.abs(du) + Math.abs(dv);
+                if (d > r + Math.floor(r / 2)) continue; // round off the square
+                if (ragged && d >= r && rng() < ragged) continue;
+                set(cu + du, dl, cv + dv, id);
+            }
+    };
+    const pick = (arr: any[]) => arr[Math.floor(rng() * arr.length)].id;
+    const dirs: Array<[number, number]> = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ];
+
+    switch (species) {
+        case 'palm': {
+            // Slim trunk curving one way as it climbs, a crown of drooping fronds.
+            const h = Math.round(6 + size * 7);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            let ou = 0,
+                ov = 0;
+            for (let l = 0; l < h; l++) {
+                if (l > h * 0.45 && l % 3 === 0) {
+                    set(ou + lu, l - 1, ov + lv, BLOCKS.TRUNK_PALE.id); // joint, so the bend reads as one trunk
+                    ou += lu;
+                    ov += lv;
+                }
+                set(ou, l, ov, BLOCKS.TRUNK_PALE.id);
+            }
+            const leaf = pick(roles.broad);
+            const len = Math.round(2 + size * 3);
+            set(ou, h, ov, leaf);
+            for (const [du, dv] of [...dirs, [1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>)
+                for (let r = 1; r <= len; r++) set(ou + du * r, h - (r > len / 2 ? 1 : 0), ov + dv * r, leaf); // fronds droop at the tips
+            return;
+        }
+        case 'emergent': {
+            // Rainforest giant: tall bare trunk (2×2 when big), buttress roots, a wide
+            // flat-topped layered crown above the canopy around it.
+            const h = Math.round(11 + size * 9);
+            const thick = size > 0.55;
+            const trunk = BLOCKS.TRUNK.id;
+            for (let l = 0; l < h; l++) {
+                set(0, l, 0, trunk);
+                if (thick) {
+                    set(1, l, 0, trunk);
+                    set(0, l, 1, trunk);
+                    set(1, l, 1, trunk);
+                }
+            }
+            for (const [du, dv] of dirs) set(du * (thick ? 2 : 1), 0, dv * (thick ? 2 : 1), trunk); // buttresses
+            const leaf = pick(roles.broad),
+                leaf2 = pick(roles.broad);
+            const r = Math.round(3 + size * 3);
+            disc(0, h, 0, r, leaf, 0.35);
+            disc(rng.int(-1, 1), h + 1, rng.int(-1, 1), r - 1, leaf2, 0.25);
+            disc(0, h + 2, 0, Math.max(1, r - 3), leaf, 0.2);
+            // A lower, smaller tier partway up — the canopy's layered look.
+            const mid = Math.round(h * 0.6);
+            const [bu, bv] = dirs[Math.floor(rng() * 4)];
+            disc(bu * 2, mid, bv * 2, Math.max(1, r - 3), leaf2, 0.3);
+            return;
+        }
+        case 'birch': {
+            // Slim pale trunk, light open crown in pale/cream leaves.
+            const h = Math.round(5 + size * 6);
+            for (let l = 0; l < h; l++) set(0, l, 0, BIRCH.id);
+            const leaf = pick(roles.birch);
+            const r = size > 0.5 ? 2 : 1;
+            for (let l = Math.round(h * 0.55); l <= h; l++) disc(0, l, 0, l === h ? Math.max(1, r - 1) : r, leaf, 0.45);
+            set(0, h + 1, 0, leaf);
+            return;
+        }
+        case 'fir':
+        case 'spruce': {
+            // Conifer: tiers that shrink toward a pointed top. Firs are taller and
+            // narrower with gaps between tiers; spruces are denser and wider.
+            const fir = species === 'fir';
+            const h = Math.round((fir ? 8 : 6) + size * (fir ? 10 : 7));
+            const base = fir ? 2 : 1; // bare trunk below the lowest tier
+            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            const leaf = pick(roles.conifer);
+            const maxR = Math.max(1, Math.round((fir ? 2 : 3) * (0.5 + size * 0.6)));
+            for (let l = base; l <= h; l++) {
+                const t = (l - base) / Math.max(1, h - base); // 0 at the bottom tier, 1 at the top
+                if (fir && l % 2 === 1 && t < 0.85) continue; // gaps between fir tiers
+                const r = Math.max(0, Math.round(maxR * (1 - t)));
+                if (r === 0) set(0, l, 0, leaf);
+                else disc(0, l, 0, r, leaf, fir ? 0.15 : 0.08);
+            }
+            set(0, h + 1, 0, leaf); // the point
+            return;
+        }
+        case 'krummholz': {
+            // Treeline pine: short, gnarled, crown swept to one side by the wind.
+            const h = Math.round(2 + size * 3);
+            const [wu, wv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            const leaf = pick(roles.conifer);
+            for (let l = 1; l <= h; l++) {
+                set(0, l, 0, leaf);
+                for (let r = 1; r <= 1 + (l < h ? 1 : 0); r++) set(wu * r, l, wv * r, leaf); // downwind flag
+            }
+            return;
+        }
+    }
+}
+
 type TreeForm = 'stack' | 'round' | 'spire' | 'broad' | 'weeping' | 'twin' | 'palm' | 'nub';
 
 function pickTreeForm(scale: number, rng: ReturnType<typeof makeRng>): TreeForm {
@@ -331,12 +580,14 @@ function plantSphereTree(
     surfaceLayer: number,
     rng: ReturnType<typeof makeRng>,
     leaves: (typeof BLOCKS)[keyof typeof BLOCKS][],
+    /** 0..1 — chosen by the zone; spans saplings (small/unit 1) to the largest forms. */
+    sizeIn?: number,
 ) {
     const leaf = rng.pick(leaves) as any;
     // Pale variant = next in list (cyclic), for two-tone canopies
     const pale = leaves[(leaves.indexOf(leaf) + 1) % leaves.length] as any;
     const trunk = rng.chance(0.55) ? BLOCKS.TRUNK : BLOCKS.TRUNK_PALE;
-    const scale = rng.range(0.4, 1.0);
+    const scale = sizeIn ?? rng.range(0.4, 1.0);
     const form = pickTreeForm(scale, rng);
     const twoTone = rng.chance(0.62);
     const li = twoTone ? pale.id : leaf.id;

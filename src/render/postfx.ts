@@ -701,6 +701,9 @@ export function createPostFX(
             u.uCamPos.value.copy(camera.position);
             // Sphere world: the sky's up is the viewer's radial direction.
             u.uSkyUp.value.copy(camera.position).normalize();
+            // Altitude above typical ground → how far into space the sky has drained.
+            const _alt = camera.position.length() - 368;
+            u.uSpace.value = Math.min(1, Math.max(0, (_alt - 220) / 600));
             type ExtFog = THREE.FogExp2 & { enabled?: boolean; aerialD?: number };
             const extFog = scene.fog as ExtFog | null;
             const fogEnabled = extFog?.enabled !== false;

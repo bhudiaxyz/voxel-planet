@@ -20,6 +20,7 @@ import { createCritters } from './fx/critters';
 import { dirToFaceUV } from './core/geoutil';
 import { createSphereMap } from './render/map';
 import { createSphereDroneMode } from './player/drone';
+import { createFarField } from './core/voxel';
 import { createSphereFlyMode } from './player/fly';
 import { createSphereDog } from './player/dog';
 import { PLANET_RADIUS, FACE_RES } from './core/voxel';
@@ -123,6 +124,13 @@ async function start(): Promise<void> {
     dayNight.voxelUniforms = (world.streaming.meshes as any).material?.userData?.uniforms;
 
     const voxMat = (world.streaming.meshes as any).material;
+    // Far field: the rest of the planet, low-res, fading in where the chunks fade out.
+    const farField = ts.farField ? createFarField(world.grid, voxMat, SEA_LAYER) : null;
+    if (farField) {
+        const [near, far] = world.streaming.fadeBand;
+        farField.setBand(near, far);
+        scene.add(farField.mesh);
+    }
     if (ts.foliageDetail && voxMat) {
         // Leaf-cluster shading on canopy blocks; a define, so tiers without it pay nothing.
         voxMat.defines = { ...(voxMat.defines || {}), FOLIAGE_DETAIL: 1 };
@@ -314,6 +322,7 @@ async function start(): Promise<void> {
         // Terrain and vegetation colours are baked into their meshes: rebuild them so
         // the new palette applies to the ground and trees, not just sky and light.
         world.streaming.rebuildAll(fly.active ? fly.dir : drone.active ? drone.dir : controller.dir);
+        farField?.rebuild();
     });
 
     touch.onEdgeToggle(toggleEdges);
@@ -384,6 +393,11 @@ async function start(): Promise<void> {
         const streamDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
         world.streaming.update(streamDir);
         world.streaming.tick(dt);
+        if (farField) {
+            // Follow the settings slider: the far field always starts where the chunks end.
+            const [near, far] = world.streaming.fadeBand;
+            farField.setBand(near, far);
+        }
 
         const camPos2 = fpCam.camera.position;
         atmo.followTarget(camPos2.x, camPos2.z);
