@@ -150,6 +150,8 @@ Converts an out-of-range `(u, v)` on `face` to the canonical `[face, u, v]`. It 
 
 `buildSphereWorld(seed, scene, onProgress, opts)` is async and yields to the browser between steps (`setTimeout 0`) so the boot label paints. `generateSphereTerrain` is async for the same reason: it reports `(p, stage)` and yields after each stage label, so its sub-steps actually appear on screen.
 
+**Boot never freezes the page.** The terrain column fill yields every 40 rows, so the bar paints and the tab is never flagged as hung. Only the *near* view (`NEAR_FILL = 9` chunks, about 250 units) is meshed before entry, in 24 ms slices with a paint between them (`streaming.pendingNear` / `fillNearSlice`). Everything farther streams in on the normal per-frame budget after entry, inside the fog. A full-radius synchronous fill used to mesh 1,400-2,200 chunks first. Teleports and palette rebuilds use the same near-only `fillNear`. Before the first frame `main.ts` awaits `renderer.compileAsync(scene, camera)` (the 'preparing shaders' step). Otherwise the big voxel shader and its shadow, depth and edge variants compiled synchronously on the first render, which was seconds of frozen screen on Mali and Adreno. In a headless software-rendered test, boot-to-ready went from 20 s to 8 s.
+
 Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); `setProgress` looks each label up in that list, so a new stage only needs its label added there, in order. `opts` carries tier-derived `streamRadius`, `grassDensity`, `groundDetail`, `shoreFoam`, `tier`.
 
 | Progress | Label | Work |
@@ -158,7 +160,7 @@ Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); 
 | 0.43 | carving rivers & lakes | `carveFreshWater` (section 4a) |
 | 0.54 | growing forests | Scatter pass: trees, bushes, cacti, ground cover |
 | 0.72 | placing landmarks | `buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f))` |
-| 0.73 | building terrain meshes | `createSphereChunkStreamer(grid, { loadRadius: streamRadius })`; vegetation created with `makeRng` seed `seed ^ 0x3b1e7f`, wind amplitude 0.1, registered via `streaming.setListener`; `streaming.update(spawnDir, Infinity)` fills the whole view synchronously |
+| 0.73 -> 0.90 | building terrain meshes | `createSphereChunkStreamer(grid, { loadRadius: streamRadius })`; vegetation created with `makeRng` seed `seed ^ 0x3b1e7f`, wind amplitude 0.1, registered via `streaming.setListener`; `streaming.update(spawnDir, Infinity)` fills the whole view synchronously |
 | 0.90 | adding ocean | `bakeShoreMap` (skipped on `very-low`) then `createSphereWater` |
 | 1.0 | ready | |
 
@@ -347,6 +349,9 @@ Per face it computes:
 | `BUILD_BUDGET_MS` | 4 | Main-thread meshing budget per `update`; at least one chunk always builds (`do ... while`) |
 | `FADE_BAND` | 0.28 | Outer fraction of the radius that dither-fades with distance |
 | `DETAIL_RADIUS` | 7 chunks | Within this: outlines visible and chunk casts shadows. Beyond: both off (`setDetail`) |
+| `NEAR_FILL` | 9 chunks | Radius meshed synchronously on boot, teleport and rebuild |
+
+**Outline edges are built only where they are drawn.** Edge collection was about 40% of chunk build time. The streamer now takes `edges` (the tier's `edgeMask`, so only `high`) and builds edges only for chunks inside `DETAIL_RADIUS`. When a chunk built far, without edges, comes near, the scan unloads it and re-queues it, and the normal budgeted build re-meshes it with edges. The mesher skips the convex and concave mask work entirely when `edgeMap` is null.
 
 `scan(playerDir)` classifies each chunk by `dot(chunkDir, playerDir)` against `loadCos`, `unloadCos`, `detailCos`, builds a load queue sorted closest-first (popped from the end), flips detail on already-loaded chunks as the viewer moves, and unloads chunks outside the unload cone. `update(playerDir, budgetMs)` rescans if needed, then builds queued chunks until the budget is spent. `budgetMs = Infinity` (startup, `rebuildAll`) fills the view synchronously and skips the fade-in.
 
@@ -381,7 +386,7 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 
 `PATTERN` ids (`core/palette.ts`): `NONE 0, BRICK 1, STONE 2, PLANK 3, BARK 4, GRASS 5, TILE 6, CACTUS 7`. The fragment shader takes `pat = mod(aData.y, 8.0)`; bit 3 (value 8) is the sway flag (leaf blocks), and the value 16 marks fresh water (`isFresh`). All eight 3-bit pattern slots are taken, so a new surface type needs a flag value like water's rather than a new `PATTERN` id.
 
-**Fringe-channel flags.** `aData.z` (fringe) is >= 0 for real grass fringes, so negative values carry per-block style flags without a new attribute: `-1` = carved landmark masonry (`patMasonry`), `-(2 + s)` = bark style `s` from the block's `barkStyle` (0 furrowed, 1 papery, 2 scaly, 3 ringed, 4 smooth). The grass-fringe code only runs for `fringe > 0.001`, so flags never draw a fringe. Per-pattern functions:
+**Fringe-channel flags.** `aData.z` (fringe) is >= 0 for real grass fringes, so negative values carry per-block style flags without a new attribute: `-1` = carved landmark masonry (`patMasonry`), `-(2 + s)` = bark style `s` from the block's `barkStyle` (0 furrowed, 1 papery, 2 scaly, 3 ringed, 4 smooth), `-7` = weathered marble (`patMarble`). The grass-fringe code only runs for `fringe > 0.001`, so flags never draw a fringe. Per-pattern functions:
 
 | Function | Used for |
 | --- | --- |
@@ -395,6 +400,7 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 | `patBarkRinged` | Bark style 3 (palm): stacked leaf-scar rings, fibrous bands that bulge slightly |
 | `patBarkSmooth` | Bark style 4 (cypress, mangrove, willow, acacia): grey-green, faint streaks, mottling, pale lichen, moss at the foot |
 | `patBarkEnd` | Same condition, trunk top/bottom faces: growth rings with a bark rim |
+| `patMarble` | Monolith ring slabs and caps (`marble: true`, fringe flag -7): weathered marble. Cloudy variation, thin wandering dark veins (domain-warped noise ridges at two scales), rocky grain and pits, a darker foot on side faces. No courses or grid |
 | `patMasonry` | Landmark blocks (`carved: true`): coursed stones with a soft mortar line, per-stone tone, weathering, chipped corners; tops are offset dressed slabs |
 
 `FOLIAGE_DETAIL` is a `#define` set on the material by `main.ts` when the tier's `foliageDetail` is true (`voxMat.defines.FOLIAGE_DETAIL = 1`, `needsUpdate`); tiers without it pay nothing and render canopy and terrain as flat colour.
@@ -564,7 +570,7 @@ The sky model is authored with +Y up. On a sphere the viewer's up is the planet-
 - Fog: `THREE.FogExp2(hazeColor, 1/AERIAL_D)`, `AERIAL_D = 90`. The shared `THREE.ShaderChunk.fog_fragment` is patched once at module load to subtract `FOG_NEAR = 180` from the fog depth before squaring (raised from 96 so the clear radius spans the extended stream radius) (clear air near the camera; without it, FogExp2 bites from distance zero and washes the whole frame). If the chunk text changes shape the patch warns and is skipped. `setAerialD` and `setFogEnabled` (settings) keep `scene.fog.aerialD`, which postfx reads each frame. `hazeColor = SKY.haze.lerp(SKY.horizon, 0.35)`.
 - Sky dome: sphere radius `worldSize*2.6` (worldSize = 800), `BackSide`, `depthWrite: false`, `renderOrder -1000`, positioned on the camera each frame. Fragment adds a very faint banded cloud (+3.5% max) on top of `skyRadiance`.
 - Lights: shadow-casting `DirectionalLight` sun (intensity `RIG.sun = 1.85`), `HemisphereLight` (`RIG.hemi = 1.08`), a camera-side lavender `DirectionalLight` fill (`RIG.fill = 0.22`), `AmbientLight` in haze colour (`RIG.amb = 0.12`). Intensities are overwritten each frame by `DayNight`.
-- Shadows: VSM; map size, blur samples and frustum half-extent from the tier (`min(worldSize*0.42, tier.shadowExtent)`); resolution capped by `MAX_TEXTURE_SIZE`; `bias -0.00018`, `normalBias 0.1`, radius 2.25, intensity 0.48; `setShadowResolution` rounds to 1024-multiples within 1024..4096 (0 disables).
+- Shadows: VSM; map size, blur samples and frustum half-extent from the tier (`min(worldSize*0.42, tier.shadowExtent)`); resolution capped by `MAX_TEXTURE_SIZE`, read from the live renderer (`renderer.capabilities`, not a throwaway probe context, which leaked: mobile browsers cap live contexts); `bias -0.00018`, `normalBias 0.1`, radius 2.25, intensity 0.552 (raised 15% from 0.48: shadows read too faint); `setShadowResolution` rounds to 1024-multiples within 1024..4096 (0 disables).
 - Hemisphere light axis: `HemisphereLight` takes its sky axis from its position (it looks at the origin). Left at the default +Y it lit the planet by world up, so on the flanks every face got the full blue sky term and the scene read cold. `Atmosphere.update` sets `hemi.position = normalize(camera.position)` each frame so its sky axis is the viewer's local up.
 
 ### Day/night (`render/day-night.ts`)
@@ -609,7 +615,11 @@ Bracketed passes depend on tier flags. Everything before Grade is linear HDR.
 - Grade (`GradeShader`): ACES tone mapping and sRGB conversion performed inside the shader (`material.toneMapped = false`; replaces a separate OutputPass), then lift/gamma/gain, saturation, contrast, vignette, grain (0.006), chromatic aberration (0.0008), a faint "milk" lilac lift (0.01), a highlight knee (0.8), and the edge ink composite (`tEdges` mask, `uEdgeDark (0.39, 0.32, 0.43)`, `uEdgeLight (0.94, 0.91, 0.93)`, opacities mixed in display space after tone mapping so pale ink cannot become an emitter). Grade values come from `GRADE` (palette). `B` toggles the opacities between 0 and (0.64 dark, 0.30 light). At night (`uNight`) both inks are scaled down: they are fixed display colours applied after tone mapping, so on the dark night scene even the dark ink read as a bright outline. The light ink dims to ~12% and mostly fades; the dark ink drops below the terrain to read as a shadow line.
 - AA: SMAA (`high`, `mobile-high`, `mid`), FXAA (`low`), none (`very-low`). `needsSwap = false` on these passes avoids the composer ping-pong that caused a depth-texture mismatch and a full-screen flash.
 
+Per-frame savings: the crepuscular pass is disabled while the sun is off-screen (`setSunScreenPos`), and the haze pass only calls `skyRadiance` where `fog x uSkyBlend > 0.003`. That lookup is costly at night (Milky Way) and invisible inside the clear radius.
+
 `render(dt)` per frame updates times, inverse projection/view, camera position, `uSkyUp`, fog sync (`uAerialD`, `uMistMax` zeroed when fog is disabled) and calls `composer.render`. `setSize` resizes all targets; `setSunScreenPos` feeds the crepuscular pass.
+
+**Frame cap.** On `mobile-high`, and on touch devices below `high`, the loop holds about 60 fps (skips a frame if under 15.5 ms since the last). A 120 Hz phone otherwise rendered everything, including a VSM update, twice as often and heated and throttled.
 
 `renderer.ts`: `antialias: false`, `powerPreference: 'high-performance'`, `ACESFilmicToneMapping`, `VSMShadowMap`, pixel ratio capped at the tier's `dprCap`, clear colour `0x07070a`, `preserveDrawingBuffer` only with `?capture=1`, `shadowMap.autoUpdate = tier is not low/very-low`.
 
@@ -705,9 +715,9 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 
 `classifyGpu(probe)` is pure (checked by `scripts/check-tiers.ts`):
 
-- No WebGL2 -> `very-low`. Software renderers (`swiftshader|llvmpipe|software|microsoft basic render`) -> `very-low` on mobile, `low` otherwise.
-- Mobile: `memGB <= 2` or `cores <= 4` -> `very-low`; any "Apple" GPU -> `mobile-high`; Adreno 7xx -> `mobile-high`, 61x-6xx -> `mid`, older -> `very-low`; Xclipse/Immortalis -> `mobile-high`; Mali-G (G710+, G78, G77, G76) -> `mid`, older -> `very-low`; unknown: `cores >= 8` -> `mid` else `very-low`.
-- Desktop: `memGB <= 2` or `cores <= 2` -> `low`; discrete/Apple Silicon (`nvidia|geforce|quadro|rtx|radeon (rx|pro)|rx NNN|apple mN|apple gpu`, excluding Vega/Radeon(TM) Graphics iGPUs) -> `high` if `cores >= 4` else `mid`; Intel Arc A-series -> `high`; Arc iGPU / Iris Xe / Radeon 6xx-8xxM / generic Radeon Graphics -> `mid`; other Intel -> `low`; unknown: `cores >= 8` -> `mid` else `low`.
+- No WebGL2 -> `very-low`. The probe context requests `powerPreference: 'high-performance'` like the real renderer, so hybrid laptops are tiered on the GPU the game runs on. Software renderers (`swiftshader|llvmpipe|software|microsoft basic render`) -> `very-low` on mobile, `low` otherwise.
+- Mobile: any "Apple" GPU first: `mobile-high` (`mid` if `memGB <= 2`). It must come before the core count because Safari's `hardwareConcurrency` isn't physical and can report 2-4 on capable iPads. Then `memGB <= 2` or `cores <= 4` -> `very-low`; Adreno 7xx -> `mobile-high`, 630-6xx (2018-20 flagships) -> `mid`, 610-62x (budget) -> `low`, older -> `very-low`; Xclipse/Immortalis -> `mobile-high`; Mali-G610+, G78, G77, G76 -> `mid`, older -> `very-low`; unknown: `cores >= 8` -> `mid` else `very-low`.
+- Desktop: `memGB <= 2` or `cores <= 2` -> `low`; older or entry-level discrete GPUs (GTX 7xx/9xx/1030-1050, GTX 1630/1650, MX laptop chips, GT-series, RX 550/560, Quadro K/M/P: 2-4 GB, about 2014-19) -> `mid`; other discrete/Apple Silicon (`nvidia|geforce|quadro|rtx|radeon (rx|pro)|rx NNN|apple mN|apple gpu`, excluding Vega/Radeon(TM) Graphics iGPUs) -> `high` if `cores >= 4` else `mid`; Intel Arc A-series -> `high`; Arc iGPU / Iris Xe / Radeon 6xx-8xxM / generic Radeon Graphics -> `mid`; other Intel -> `low`; unknown: `cores >= 8` -> `mid` else `low`.
 
 `detectGpuTier()`: `?tier=<high|mobile-high|mid|low|very-low>` overrides detection (testing a phone profile or rescuing a misclassified device).
 
@@ -716,6 +726,7 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 | Field | high | mobile-high | mid | low | very-low | Meaning |
 | --- | --- | --- | --- | --- | --- | --- |
 | `dprCap` | 2 | 1.5 | 1.25 | 1 | 1 | Max device pixel ratio |
+| `maxMegapixels` | 4.2 | 2.0 | 2.4 | 1.6 | 1.0 | Drawing-buffer pixel budget; DPR is lowered to fit (HiDPI laptops and large iPads otherwise meant about 8 MP of HalfFloat post targets) |
 | `shadowRes` | 3072 | 2048 | 2048 | 1024 | 512 | VSM map size |
 | `shadowBlurSamples` | 12 | 8 | 8 | 4 | 4 | VSM blur taps |
 | `shadowExtent` | 120 | 110 | 120 | 100 | 80 | Shadow frustum half-extent |
@@ -724,8 +735,8 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 | `aoTaps` | 8 | 4 | 4 | 0 | 0 | Large-scale AO taps |
 | `dof` | yes | yes | yes | no | no | Defocus in haze pass |
 | `crepuscularTaps` | 8 | 4 | 4 | 0 | 0 | God-ray taps |
-| `edgeMask` | yes | no | no | no | no | EdgeMaskPass (doubles scene draw calls) |
-| `cloudShadow` | yes | yes | yes | no | no | Voxel-cloud shadows (coverage map + haze pass) |
+| `edgeMask` | yes | no | no | no | no | EdgeMaskPass (doubles scene draw calls); also gates building outline edges at all |
+| `cloudShadow` | yes | yes | yes | no | no | Voxel-cloud shadows (coverage map + haze pass; skipped at low sun) |
 | `nightSkyFull` | yes | yes | yes | no | no | Milky Way/nebula path |
 | `aaQuality` | smaa | smaa | smaa | fxaa | none | AA pass |
 | `streamRadius` | 22 | 16 | 17 | 9 | 7 | Terrain stream radius (chunks, ~28 units each); raised from 16/12/13 so more land is detailed before the far field |
@@ -744,6 +755,7 @@ Trees are kept at every tier; only grass and ground clutter scale.
 ### Startup checks (`main.ts`)
 
 - WebGL2 probe: a throwaway canvas requests `webgl2`, listening for `webglcontextcreationerror` to capture the browser's reason; failure shows the reason on the boot screen and aborts. The probe context is released with `WEBGL_lose_context`.
+- Startup errors: `start().catch` shows the actual reason (`Unable to start: <message>`) and suggests `?tier=low`. An out-of-memory RangeError, a shader error and a context failure used to all look identical. `sessionStorage` calls are guarded (they throw in blocked or private modes).
 - Context loss: `webglcontextlost` is prevented and, once per session (`sessionStorage['voxel-planet.gl-reloaded']`), the page reloads after 800 ms (streamed chunks and render targets would otherwise all need rebuilding). A second loss shows a message suggesting `?tier=low`. After 60 s of stable running the flag is cleared, re-arming one reload (repeated GPU resets cause Chrome to block WebGL for the whole site).
 
 ---
@@ -768,7 +780,7 @@ Instanced voxel-box clusters on a disc of radius 180 in the tangent plane above 
 
 **Night.** Clouds are unlit and write no depth (the haze pass skips them), so `main.ts` authors their night colour directly: lit tops fall to ~3% of the day value and lean toward a dim moonlit blue-grey, undersides to ~2%.
 
-**Cloud shadows.** Cloud positions are computed in the vertex shader (a wrapped disc in a tangent frame), so the sun's shadow map cannot see them, and its frustum only spans ~120 units anyway. Instead `renderShadow(renderer)` redraws the same instances with a coverage-only material (same vertex shader, MAX blending) into a 256x256 target, from an orthographic camera looking straight down on the disc with `uE2` as screen-up, so texture (x, y) equals disc (e1, e2). The haze pass (`postfx.ts`) casts each surface pixel's world position along the sun direction up to the mean cloud height (`CLOUD_LAYER_H = 90` above the disc centre), converts the hit to disc coordinates and samples coverage with two soft taps. The darkening is `uCloudShadowStr (0.32) x coverage x sunFade x (1 - fog)`, where `sunFade` weakens shadows at low sun. Because it runs on the final image it shades terrain, vegetation and water alike; the shadows have the real clouds' shapes and drift with them. `main.ts` binds the live frame vectors once (they update in place) and calls `renderShadow` each frame while the tier's `cloudShadow` is on. This replaced an earlier world-`xz` noise shadow that was unrelated to the clouds and striped on the planet's flanks.
+**Cloud shadows.** Cloud positions are computed in the vertex shader (a wrapped disc in a tangent frame), so the sun's shadow map cannot see them, and its frustum only spans ~120 units anyway. Instead `renderShadow(renderer)` redraws the same instances with a coverage-only material (same vertex shader, MAX blending) into a 256x256 target, from an orthographic camera looking straight down on the disc with `uE2` as screen-up, so texture (x, y) equals disc (e1, e2). The haze pass (`postfx.ts`) casts each surface pixel's world position along the sun direction up to the mean cloud height (`CLOUD_LAYER_H = 90` above the disc centre), converts the hit to disc coordinates and samples coverage with two soft taps. The darkening is `uCloudShadowStr (0.32) x coverage x sunFade x (1 - fog)`, where `sunFade` weakens shadows at low sun. Because it runs on the final image it shades terrain, vegetation and water alike; the shadows have the real clouds' shapes and drift with them. `main.ts` binds the live frame vectors once (they update in place) and calls `renderShadow` each frame while the tier's `cloudShadow` is on *and* the sun is more than about 3 degrees up. The haze pass ignores the map below that, so the extra render-target pass, which is costly on tile GPUs, is skipped at dusk and night. This replaced an earlier world-`xz` noise shadow that was unrelated to the clouds and striped on the planet's flanks.
 
 ### Critters (`critters.ts`)
 
@@ -879,7 +891,7 @@ Wiring that works at runtime: seed field (reload with new seed), palette select 
 
 ### Map (`render/map.ts`)
 
-`createSphereMap(grid)` bakes a 1024x512 equirectangular image (longitude `atan2(z, x)`, latitude `asin(y)`) by sampling the grid per pixel: ocean (`columnTop <= SEA_LAYER`) coloured `shoal`/`shallow`/`deep` by depth below sea level (<2, <6, else), land by the ground block's `mapColor ?? top ?? side` (using `groundColumnTop`, so sky islands don't paint over the land), tinted 45% toward the leaf colour under a canopy, then hill-shaded. Before sRGB encoding every pixel is graded in linear space (`MAP_EXPOSURE = 0.82`, `MAP_SATURATION = 1.15`): raw block tops are colours at full flat light, while in-game every surface is shaded by sun, AO and haze, so the ungraded map looked white-washed next to the world. The sea is not lerped toward the haze (that made it pale once the sky turned bluer). `rebake()` is called after palette switches. Each frame it draws, in order: landmark badges (a circle in the kind's `LANDMARK_COLOR` with a dark rim and glow; the kind's glyph forced to white by temporarily overriding `fillStyle`/`strokeStyle`), always-on name labels on dark pills (each tries below then above its badge and is skipped if it would overlap an earlier label or the reserved box around the player), the player marker **last** so it is always on top (bright orange `#ff8c1a` arrow, 20 px, with a glow and a dark rim; an 8 px dot when stationary), and an N/E/S/W compass in the top-right corner (fixed: the equirectangular map is always north-up). Hover tooltips show `name · kind`. Displayed at 971x486 CSS px, max 90vw/90vh; on touch the map closes on tap.
+`createSphereMap(grid)` bakes a 1024x512 equirectangular image (longitude `atan2(z, x)`, latitude `asin(y)`) by sampling the grid per pixel: ocean (`columnTop <= SEA_LAYER`) coloured `shoal`/`shallow`/`deep` by depth below sea level (<2, <6, else), land by the ground block's `mapColor ?? top ?? side` (using `groundColumnTop`, so sky islands don't paint over the land), tinted 45% toward the leaf colour under a canopy, then hill-shaded. Before sRGB encoding every pixel is graded in linear space (`MAP_EXPOSURE = 0.82`, `MAP_SATURATION = 1.15`): raw block tops are colours at full flat light, while in-game every surface is shaded by sun, AO and haze, so the ungraded map looked white-washed next to the world. The sea is not lerped toward the haze (that made it pale once the sky turned bluer). `rebake()` is called after palette switches. `main.ts` calls `update` only while the map is open: the redraw is a 2 MB `putImageData` plus labels, and ran every frame while hidden. Each frame it draws, in order: landmark badges (a circle in the kind's `LANDMARK_COLOR` with a dark rim and glow; the kind's glyph forced to white by temporarily overriding `fillStyle`/`strokeStyle`), always-on name labels on dark pills (each tries below then above its badge and is skipped if it would overlap an earlier label or the reserved box around the player), the player marker **last** so it is always on top (bright orange `#ff8c1a` arrow, 20 px, with a glow and a dark rim; an 8 px dot when stationary), and an N/E/S/W compass in the top-right corner (fixed: the equirectangular map is always north-up). Hover tooltips show `name · kind`. Displayed at 971x486 CSS px, max 90vw/90vh; on touch the map closes on tap.
 
 ### HUD (`ui/hud.ts`)
 
@@ -893,9 +905,11 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 
 `buildSphereLandmarks(grid, rng)` runs after terrain and returns `LandmarkRecord[]` (`kind`, unit `dir`, `name`, optional `sky`).
 
+**Monolith ring** (after planet-explorer's): nine slabs on a radius-13 circle, each 2 wide and 1 deep with its long side along the ring's tangent (so its face looks at the centre), 8-12 high, sunk one layer into the ground, half of them leaning one block at the top, capped in the ring's accent colour, with a glowing altar at the centre. No lintels. The slabs are weathered marble (`LANDMARK_MARBLE`, `LANDMARK_MARBLE_RING`), not coursed masonry. **Obelisks** are dark polished marble (`LANDMARK_MARBLE_DARK`, `LANDMARK_MARBLE_OBELISK`): near-black with pale veins. `patMarble` draws pale veins whenever a block's tint is lighter than its base, and dark veins otherwise.
+
 **Kinds (11):** twisted spire, obelisk, monolith ring, tombstone field, floating biosphere, ancient well, ruined arch, stepped ziggurat, ruined watchtower, crystal grove, old aqueduct.
 
-**Placement.** `LANDMARK_TOTAL = 27` are dealt round-robin to the faces (4-5 each) at random land columns (margin 10, not water, >= `MIN_SEP = 20` apart on a face, up to 1,200 attempts per face). Kinds come from shuffled decks across the whole planet, so every kind appears before any repeats: two full decks plus five, i.e. each kind 2-3 times. Before building, `clearAround` removes trees, bushes, cacti and ground cover within a per-kind radius (`CLEAR_R`), which also keeps structures off the canopy.
+**Placement.** `LANDMARK_TOTAL = 27` are dealt round-robin to the faces (4-5 each) at random land columns (margin 10, not water, >= `MIN_SEP = 20` apart on a face, up to 1,200 attempts per face). Kinds come from shuffled decks across the whole planet, so every kind appears before any repeats: two full decks plus five, i.e. each kind 2-3 times. Before building, `clearAround` removes trees, bushes, cacti and ground cover within a per-kind radius (`CLEAR_R`, 16 for the ring), which also keeps structures off the canopy.
 
 **Materials.** Landmarks don't use terrain stone (they read as boulders). Each kind has a colour (`LANDMARK_COLOR`, shared with the map badges) and gets three registered blocks: `LANDMARK_MASONRY` (carved cream masonry, `patMasonry`), `LANDMARK_ACCENT_<KIND>` (masonry in the kind colour) and `LANDMARK_GEM_<KIND>` (emissive, faceted, catches bloom). Gems cap spires and obelisks, sit at the ring's altar and tomb field's memorial, glow in the well, key the arch, light the tower's window and crown, and tip the biosphere's drips; the crystal grove is made of them.
 
@@ -927,7 +941,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 `npm run check` runs, in order:
 
 1. `node scripts/check-controls.ts`: for 500 random up vectors and yaws, `tangentBasis`'s `fwd`/`rgt` match a real `PerspectiveCamera.lookAt` frame (W = view-forward, D = screen-right).
-2. `node scripts/check-tiers.ts`: `classifyGpu` over a table of ~25 real renderer strings (desktop discrete/iGPU/Arc, SwiftShader, Adreno/Mali/Xclipse/Apple mobile, low-memory phones, no WebGL2).
+2. `node scripts/check-tiers.ts`: `classifyGpu` over 34 real renderer strings (desktop discrete/iGPU/Arc, old GTX/MX/RX parts, SwiftShader, Adreno/Mali/Xclipse/Apple mobile, an iPad reporting 4 cores, low-memory phones, no WebGL2).
 3. `node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts`: pathfinder scenarios on a hand-built patch (wall, water, trunk, terrace, cliff, incremental search).
 4. `check-trees.ts`: generates seed 1337 and fails if leaf or bark voxel counts collapse, or if any of the five bark styles is missing from the planet.
 5. `check-rivers.ts`: generates seed 1337; asserts at least 2,000 fresh-water columns and that no water column's top is above a dry neighbour's ground (the "carved, never floating" rule).

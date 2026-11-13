@@ -180,7 +180,8 @@ export class Atmosphere {
         // with enough samples that the penumbra is smooth rather than speckled.
         sun.shadow.radius = 2.25;
         sun.shadow.blurSamples = ts.shadowBlurSamples ?? 12;
-        sun.shadow.intensity = 0.48;
+        // 0.48 → 0.552 (+15%): shadows read too faint against the bluer sky and darker map.
+        sun.shadow.intensity = 0.552;
         // Keep this fully dynamic. A day/night system can animate the sun every
         // frame and both terrain and player shadows will respond immediately.
         sun.shadow.autoUpdate = true;

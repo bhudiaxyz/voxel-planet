@@ -3,7 +3,7 @@
 // rewritten to use SphereVoxelGrid face-local (face, u, v, layer) coordinates.
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/voxel';
-import { BLOCKS, BLOCK_BY_ID, PATTERN, registerBlock } from '../core/palette';
+import { BLOCKS, BLOCK_BY_ID, PATTERN, ROCK, registerBlock } from '../core/palette';
 import { makeRng } from '../core/rng';
 import { columnDir } from '../core/geoutil';
 import { LANDMARK_NAMES_BY_KIND } from '../core/names';
@@ -51,35 +51,72 @@ export const LANDMARK_COLOR: Record<Kind, number> = {
 };
 
 /*
- * Landmarks used the terrain's own stone blocks, so they read as boulders.
- * They get their own: a carved, coursed masonry (brick pattern, warm cream —
- * nothing natural on the planet looks like it), an accent stone in the kind's
- * colour, and an emissive gem that the bloom pass catches, so a landmark shows
- * from a distance by day and glows at night.
+ * Landmark stone. Landmarks used the terrain's own stone (they read as boulders),
+ * then a coursed brick masonry (which read as brickwork, not ancient rock). Each
+ * kind is now built from the natural stone that suits it, via the voxel shader's
+ * shared `patRock` library (grain, veins, bedding, speckle, pits — no courses):
+ *
+ *   spire       basalt      dark, rough, vesicle pits
+ *   obelisk     dark marble near-black, pale veins
+ *   ring        marble      pale, cloudy, fine dark veins
+ *   tombs       slate       dark blue-grey, tight cleavage, flaky
+ *   biosphere   basalt      island rock under the soil
+ *   well        granite     speckled crystal grain
+ *   arch        slate       dark stone-slate
+ *   ziggurat    sandstone   warm, soft bedding bands, grainy
+ *   tower       granite     coarse grey, speckled
+ *   grove       quartzite   pale crystalline sockets for the glowing shards
+ *   aqueduct    sandstone   warm Roman stone
+ *
+ * BODY[kind] is the main stone; ACCENT[kind] is the same stone shot with the
+ * kind's colour (so map badge and world agree); GEM[kind] is emissive, faceted.
  */
 const col = (hex: number) => new THREE.Color(hex);
-const MASON = registerBlock('LANDMARK_MASONRY', {
-    top: col(0xf0e4c8),
-    side: col(0xe2d0aa),
-    bottom: col(0xc9b48c),
-    tint: col(0xb8a07a), // mortar
-    pattern: PATTERN.BRICK,
-    carved: true, // patMasonry in the voxel shader
-    rough: 0.55,
-});
+/** Base stone colours (sRGB hex): [top, side, bottom, tint (vein colour)]. */
+const STONE_LOOK: Record<number, [number, number, number, number]> = {
+    [ROCK.MARBLE]: [0xe8e4dc, 0xdcd6cc, 0xb8b2a8, 0x5a5660],
+    [ROCK.DARK_MARBLE]: [0x3a3a44, 0x30303a, 0x22222a, 0xb8bcc8],
+    [ROCK.SLATE]: [0x5a6270, 0x4c5462, 0x3a404c, 0x8a96a8],
+    [ROCK.SANDSTONE]: [0xd8b88a, 0xc8a676, 0xa88a60, 0x8a6a44],
+    [ROCK.GRANITE]: [0xb0aaa4, 0xa29c96, 0x847e78, 0x4a4644],
+    [ROCK.BASALT]: [0x4a4644, 0x3e3a38, 0x2c2a28, 0x6a6460],
+    [ROCK.QUARTZITE]: [0xece4e8, 0xe0d6dc, 0xc4b8c0, 0xffffff],
+};
+const KIND_STONE: Record<Kind, number> = {
+    spire: ROCK.BASALT,
+    obelisk: ROCK.DARK_MARBLE,
+    ring: ROCK.MARBLE,
+    tombs: ROCK.SLATE,
+    biosphere: ROCK.BASALT,
+    well: ROCK.GRANITE,
+    arch: ROCK.SLATE,
+    ziggurat: ROCK.SANDSTONE,
+    tower: ROCK.GRANITE,
+    grove: ROCK.QUARTZITE,
+    aqueduct: ROCK.SANDSTONE,
+};
+/** A natural-stone block in a given style (reusable: any landmark or prop). */
+function rockBlock(name: string, style: number, look: [number, number, number, number], tintWith?: THREE.Color) {
+    const [t, s0, b0, v] = look.map(col);
+    if (tintWith) for (const c of [t, s0, b0]) c.lerp(tintWith, 0.55);
+    return registerBlock(name, {
+        top: t,
+        side: s0,
+        bottom: b0,
+        tint: v,
+        pattern: PATTERN.STONE,
+        rockStyle: style,
+        rough: style === ROCK.DARK_MARBLE || style === ROCK.MARBLE ? 0.3 : 0.6,
+    });
+}
+const BODY = {} as Record<Kind, { id: number }>;
 const ACCENT = {} as Record<Kind, { id: number }>;
 const GEM = {} as Record<Kind, { id: number }>;
 for (const kind of Object.keys(LANDMARK_COLOR) as Kind[]) {
     const c = col(LANDMARK_COLOR[kind]);
-    ACCENT[kind] = registerBlock(`LANDMARK_ACCENT_${kind.toUpperCase()}`, {
-        top: c.clone().lerp(col(0xffffff), 0.12),
-        side: c.clone(),
-        bottom: c.clone().multiplyScalar(0.75),
-        tint: c.clone().multiplyScalar(0.7),
-        pattern: PATTERN.BRICK,
-        carved: true,
-        rough: 0.4,
-    });
+    const style = KIND_STONE[kind];
+    BODY[kind] = rockBlock(`LANDMARK_STONE_${kind.toUpperCase()}`, style, STONE_LOOK[style]);
+    ACCENT[kind] = rockBlock(`LANDMARK_ACCENT_${kind.toUpperCase()}`, style, STONE_LOOK[style], c);
     GEM[kind] = registerBlock(`LANDMARK_GEM_${kind.toUpperCase()}`, {
         top: c.clone().lerp(col(0xffffff), 0.45),
         side: c.clone().lerp(col(0xffffff), 0.3),
@@ -95,7 +132,7 @@ for (const kind of Object.keys(LANDMARK_COLOR) as Kind[]) {
 const CLEAR_R: Record<Kind, number> = {
     spire: 6,
     obelisk: 6,
-    ring: 13,
+    ring: 16, // the ring itself is radius 13
     tombs: 14,
     biosphere: 8,
     well: 6,
@@ -179,7 +216,7 @@ function twistedSpire(grid: SphereVoxelGrid, face: number, cu: number, cv: numbe
         ov = 0;
     for (let dy = 3; dy <= totalH; dy++) {
         // Masonry with an accent band every fifth course.
-        put(grid, face, cu + ou, cv + ov, baseL + dy, dy % 5 === 0 ? ACCENT.spire.id : MASON.id);
+        put(grid, face, cu + ou, cv + ov, baseL + dy, dy % 5 === 0 ? ACCENT.spire.id : BODY.spire.id);
         if (dy % 4 === 2) {
             const [ddu, ddv] = dirs[rng.int(0, 3)];
             ou = Math.max(-2, Math.min(2, ou + ddu));
@@ -200,11 +237,11 @@ function obelisk(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rn
     // Taller shaft: 2x2 for the lower third, then 1x1, capped by a gem.
     const shaftH = 12 + rng.int(0, 6);
     for (let dy = 3; dy <= shaftH; dy++) {
-        put(grid, face, cu, cv, baseL + dy, MASON.id);
+        put(grid, face, cu, cv, baseL + dy, BODY.obelisk.id);
         if (dy < 3 + shaftH / 3) {
-            put(grid, face, cu + 1, cv, baseL + dy, MASON.id);
-            put(grid, face, cu, cv + 1, baseL + dy, MASON.id);
-            put(grid, face, cu + 1, cv + 1, baseL + dy, MASON.id);
+            put(grid, face, cu + 1, cv, baseL + dy, BODY.obelisk.id);
+            put(grid, face, cu, cv + 1, baseL + dy, BODY.obelisk.id);
+            put(grid, face, cu + 1, cv + 1, baseL + dy, BODY.obelisk.id);
         }
     }
     put(grid, face, cu, cv, baseL + shaftH + 1, GEM.obelisk.id);
@@ -212,14 +249,22 @@ function obelisk(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rn
     // Lantern stones either side, with small gems.
     for (const du of [-3, 3]) {
         const lL = top(grid, face, cu + du, cv);
-        put(grid, face, cu + du, cv, lL + 1, MASON.id);
+        put(grid, face, cu + du, cv, lL + 1, BODY.obelisk.id);
         put(grid, face, cu + du, cv, lL + 2, GEM.obelisk.id);
     }
 }
 
+/**
+ * Monolith ring, after planet-explorer's: nine tall slabs on a radius-13 circle,
+ * each 2 wide and 1 deep and turned to face the centre (its long side along the
+ * ring's tangent), 8-12 high, sunk one layer into the ground, with a slight lean
+ * at the top. Voxel Planet extras: the slabs are capped in the ring's accent
+ * colour, and a glowing altar marks the centre so the ring shows at night.
+ * Stones are weathered marble (patRock style ROCK.MARBLE).
+ */
 function monolithRing(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
-    const count = 7 + rng.int(0, 1);
-    const ringR = 8 + rng.int(0, 3);
+    const COUNT = 9;
+    const R = 13;
     // Altar at the centre: an accent plinth with a glowing gem.
     if (isLand(grid, face, cu, cv)) {
         const cL = top(grid, face, cu, cv);
@@ -227,30 +272,30 @@ function monolithRing(grid: SphereVoxelGrid, face: number, cu: number, cv: numbe
             for (let du = -1; du <= 1; du++) overwrite(grid, face, cu + du, cv + dv, cL + 1, ACCENT.ring.id);
         put(grid, face, cu, cv, cL + 2, GEM.ring.id);
     }
-
-    for (let i = 0; i < count; i++) {
-        const a = (i / count) * Math.PI * 2;
-        const su = Math.round(cu + Math.cos(a) * ringR);
-        const sv = Math.round(cv + Math.sin(a) * ringR);
+    for (let i = 0; i < COUNT; i++) {
+        const a = (i / COUNT) * Math.PI * 2;
+        const su = Math.round(cu + Math.cos(a) * R);
+        const sv = Math.round(cv + Math.sin(a) * R);
         if (!isLand(grid, face, su, sv)) continue;
-        const sL = top(grid, face, su, sv);
-        const sh = 5 + rng.int(0, 3);
-        for (let dy = 1; dy <= sh; dy++) put(grid, face, su, sv, sL + dy, dy === sh ? ACCENT.ring.id : MASON.id);
-
-        // Lintel connecting every other pair
-        if (i % 2 === 0) {
-            const a2 = ((i + 1) / count) * Math.PI * 2;
-            const eu = Math.round(cu + Math.cos(a2) * ringR);
-            const ev = Math.round(cv + Math.sin(a2) * ringR);
-            if (!isLand(grid, face, eu, ev)) continue;
-            const lintelL = sL + sh + 1;
-            const steps = Math.max(Math.abs(eu - su), Math.abs(ev - sv));
-            if (steps > 0 && steps < 10) {
-                for (let k = 0; k <= steps; k++) {
-                    const lu = Math.round(su + ((eu - su) * k) / steps);
-                    const lv = Math.round(sv + ((ev - sv) * k) / steps);
-                    put(grid, face, lu, lv, lintelL, MASON.id);
-                }
+        const h = 8 + rng.int(0, 4);
+        // Tangent direction, snapped to the grid axis it runs closest to: the
+        // slab's 2-wide face then looks toward the centre.
+        const tu = -Math.sin(a),
+            tv = Math.cos(a);
+        const [wu, wv] = Math.abs(tu) > Math.abs(tv) ? [Math.sign(tu), 0] : [0, Math.sign(tv)];
+        // Slight lean: the top two layers step one block outward or inward.
+        const lean = rng.chance(0.5) ? (rng.chance(0.5) ? 1 : -1) : 0;
+        const ou = lean * Math.round(Math.cos(a)),
+            ov = lean * Math.round(Math.sin(a));
+        for (const w of [0, 1]) {
+            const cu2 = su + wu * w,
+                cv2 = sv + wv * w;
+            const g = top(grid, face, cu2, cv2);
+            // Sunk one layer into the ground, like planet-explorer's (- 0.6).
+            for (let l = g; l <= g + h; l++) {
+                const leaning = l > g + h - 2;
+                const id = l === g + h ? ACCENT.ring.id : BODY.ring.id;
+                overwrite(grid, face, cu2 + (leaning ? ou : 0), cv2 + (leaning ? ov : 0), l, id);
             }
         }
     }
@@ -262,7 +307,7 @@ function tombstoneField(grid: SphereVoxelGrid, face: number, cu: number, cv: num
     // A central memorial pillar with a gem, so the field has a focus.
     if (isLand(grid, face, cu, cv)) {
         const cL = top(grid, face, cu, cv);
-        for (let dy = 1; dy <= 4; dy++) put(grid, face, cu, cv, cL + dy, dy === 1 ? ACCENT.tombs.id : MASON.id);
+        for (let dy = 1; dy <= 4; dy++) put(grid, face, cu, cv, cL + dy, dy === 1 ? ACCENT.tombs.id : BODY.tombs.id);
         put(grid, face, cu, cv, cL + 5, GEM.tombs.id);
     }
     for (let i = 0; i < count; i++) {
@@ -280,7 +325,7 @@ function tombstoneField(grid: SphereVoxelGrid, face: number, cu: number, cv: num
                 su,
                 sv,
                 sL + dy,
-                dy === sh ? ACCENT.tombs.id : rng.chance(0.55) ? MASON.id : BLOCKS.STONE.id,
+                dy === sh ? ACCENT.tombs.id : rng.chance(0.55) ? BODY.tombs.id : BLOCKS.STONE.id,
             );
         // Random lean cap
         if (rng.chance(0.35)) {
@@ -318,7 +363,7 @@ function floatingBiosphere(
                 const isTop = qTop > 1.0;
                 let id: number;
                 if (isTop && dy > 0) id = BLOCKS.LEAF_CREAM.id;
-                else if (isTop) id = MASON.id;
+                else if (isTop) id = BODY.biosphere.id;
                 else if (dy > 0) id = BLOCKS.SOIL.id;
                 else id = ACCENT.biosphere.id;
                 overwrite(grid, face, cu + du, cv + dv, floatL + dy, id);
@@ -335,7 +380,7 @@ function floatingBiosphere(
         const len = rng.int(3, 8);
         for (let dy = 1; dy <= len; dy++) {
             // Glowing tips hang below the island.
-            const id = dy === len ? GEM.biosphere.id : dy <= 2 ? ACCENT.biosphere.id : MASON.id;
+            const id = dy === len ? GEM.biosphere.id : dy <= 2 ? ACCENT.biosphere.id : BODY.biosphere.id;
             put(grid, face, su, sv, floatL - ry - dy, id);
         }
     }
@@ -360,14 +405,14 @@ function ancientWell(grid: SphereVoxelGrid, face: number, cu: number, cv: number
     for (let dv = -1; dv <= 1; dv++)
         for (let du = -1; du <= 1; du++) {
             if (du === 0 && dv === 0) continue;
-            overwrite(grid, face, cu + du, cv + dv, baseL + 1, MASON.id);
+            overwrite(grid, face, cu + du, cv + dv, baseL + 1, BODY.well.id);
             overwrite(grid, face, cu + du, cv + dv, baseL + 2, ACCENT.well.id);
         }
     // Glowing water-gem in the shaft.
     overwrite(grid, face, cu, cv, baseL, GEM.well.id);
 
     // Posts and crossbeam
-    for (const du of [-1, 1]) for (let dy = 3; dy <= 4; dy++) put(grid, face, cu + du, cv, baseL + dy, MASON.id);
+    for (const du of [-1, 1]) for (let dy = 3; dy <= 4; dy++) put(grid, face, cu + du, cv, baseL + dy, BODY.well.id);
     for (let du = -1; du <= 1; du++) put(grid, face, cu + du, cv, baseL + 5, ACCENT.well.id);
 
     // Scattered worn stones nearby
@@ -376,7 +421,7 @@ function ancientWell(grid: SphereVoxelGrid, face: number, cu: number, cv: number
         const d = rng.range(3, 6);
         const su = Math.round(cu + Math.cos(a) * d);
         const sv = Math.round(cv + Math.sin(a) * d);
-        if (isLand(grid, face, su, sv)) put(grid, face, su, sv, top(grid, face, su, sv) + 1, MASON.id);
+        if (isLand(grid, face, su, sv)) put(grid, face, su, sv, top(grid, face, su, sv) + 1, BODY.well.id);
     }
 }
 
@@ -389,7 +434,7 @@ function ruinedArch(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
     for (const du of [-span, span]) {
         const pL = top(grid, face, cu + du, cv);
         for (let dy = 1; dy <= pillarH; dy++)
-            put(grid, face, cu + du, cv, pL + dy, dy % 3 === 0 ? ACCENT.arch.id : MASON.id);
+            put(grid, face, cu + du, cv, pL + dy, dy % 3 === 0 ? ACCENT.arch.id : BODY.arch.id);
     }
 
     // Partial lintel
@@ -409,7 +454,7 @@ function ruinedArch(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
         const ru = Math.round(cu + Math.cos(a) * d);
         const rv = Math.round(cv + Math.sin(a) * d);
         if (isLand(grid, face, ru, rv))
-            put(grid, face, ru, rv, top(grid, face, ru, rv) + 1, rng.chance(0.5) ? BLOCKS.STONE.id : MASON.id);
+            put(grid, face, ru, rv, top(grid, face, ru, rv) + 1, rng.chance(0.5) ? BLOCKS.STONE.id : BODY.arch.id);
     }
 }
 
@@ -425,7 +470,7 @@ function ziggurat(grid: SphereVoxelGrid, face: number, cu: number, cv: number, r
             for (let dv = -r; dv <= r; dv++)
                 for (let du = -r; du <= r; du++) {
                     const edge = Math.max(Math.abs(du), Math.abs(dv)) === r;
-                    overwrite(grid, face, cu + du, cv + dv, l, edge && h === 1 ? ACCENT.ziggurat.id : MASON.id);
+                    overwrite(grid, face, cu + du, cv + dv, l, edge && h === 1 ? ACCENT.ziggurat.id : BODY.ziggurat.id);
                 }
     }
     // Stair up the +v side: one step per layer, cut into the terraces.
@@ -437,7 +482,7 @@ function ziggurat(grid: SphereVoxelGrid, face: number, cu: number, cv: number, r
         [-1, 1],
         [1, 1],
     ])
-        for (let h = 0; h < 2; h++) put(grid, face, cu + du, cv + dv, l + h, MASON.id);
+        for (let h = 0; h < 2; h++) put(grid, face, cu + du, cv + dv, l + h, BODY.ziggurat.id);
     put(grid, face, cu, cv, l, GEM.ziggurat.id);
 }
 
@@ -454,7 +499,7 @@ function watchtower(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
                 // Broken crown: the top few courses crumble away on one side.
                 if (h > H - 3 && du + dv > (H - h) * 1.5) continue;
                 const band = h % 6 === 0;
-                overwrite(grid, face, cu + du, cv + dv, baseL + h, band ? ACCENT.tower.id : MASON.id);
+                overwrite(grid, face, cu + du, cv + dv, baseL + h, band ? ACCENT.tower.id : BODY.tower.id);
             }
     // Lit window slit high on the wall, and a beacon gem on the crown.
     put(grid, face, cu + 3, cv, baseL + Math.floor(H * 0.6), GEM.tower.id);
@@ -465,7 +510,7 @@ function watchtower(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
             d = rng.range(3.5, 6);
         const su = Math.round(cu + Math.cos(a) * d),
             sv = Math.round(cv + Math.sin(a) * d);
-        if (isLand(grid, face, su, sv)) put(grid, face, su, sv, top(grid, face, su, sv) + 1, MASON.id);
+        if (isLand(grid, face, su, sv)) put(grid, face, su, sv, top(grid, face, su, sv) + 1, BODY.tower.id);
     }
 }
 
@@ -513,12 +558,12 @@ function aqueduct(grid: SphereVoxelGrid, face: number, cu: number, cv: number, r
         const archTop = deckL - 1 - (pier ? 0 : Math.round(2 * Math.sin(((((du % 4) + 4) % 4) / 4) * Math.PI)));
         for (let l = g + 1; l <= deckL; l++) {
             if (!pier && l < archTop) continue;
-            overwrite(grid, face, cu + du, cv, l, l === deckL ? ACCENT.aqueduct.id : MASON.id);
-            overwrite(grid, face, cu + du, cv + 1, l, MASON.id);
+            overwrite(grid, face, cu + du, cv, l, l === deckL ? ACCENT.aqueduct.id : BODY.aqueduct.id);
+            overwrite(grid, face, cu + du, cv + 1, l, BODY.aqueduct.id);
         }
         // Channel lip with glowing water-gems along the deck every few columns.
-        put(grid, face, cu + du, cv - 1, deckL + 1, MASON.id);
-        put(grid, face, cu + du, cv + 2, deckL + 1, MASON.id);
+        put(grid, face, cu + du, cv - 1, deckL + 1, BODY.aqueduct.id);
+        put(grid, face, cu + du, cv + 2, deckL + 1, BODY.aqueduct.id);
         if (du % 3 === 0) put(grid, face, cu + du, cv, deckL + 1, GEM.aqueduct.id);
     }
 }
@@ -555,7 +600,13 @@ function skyIsland(grid: SphereVoxelGrid, face: number, cu: number, cv: number, 
             for (let k = 0; k <= bottom; k++) {
                 const l = capL - k;
                 const id =
-                    k === 0 ? BLOCKS.GRASS.id : k <= 2 ? BLOCKS.SOIL.id : k === bottom ? ACCENT.biosphere.id : MASON.id;
+                    k === 0
+                        ? BLOCKS.GRASS.id
+                        : k <= 2
+                          ? BLOCKS.SOIL.id
+                          : k === bottom
+                            ? ACCENT.biosphere.id
+                            : BODY.biosphere.id;
                 overwrite(grid, face, cu + du, cv + dv, l, id);
             }
         }
@@ -567,7 +618,8 @@ function skyIsland(grid: SphereVoxelGrid, face: number, cu: number, cv: number, 
             sv = cv + Math.round(Math.sin(a) * d);
         const under = capL - Math.round(depth * (1 - (d / R) ** 1.6)) - 1;
         const len = rng.int(1, 4);
-        for (let j = 0; j < len; j++) put(grid, face, su, sv, under - j, j === len - 1 ? GEM.biosphere.id : MASON.id);
+        for (let j = 0; j < len; j++)
+            put(grid, face, su, sv, under - j, j === len - 1 ? GEM.biosphere.id : BODY.biosphere.id);
     }
     // A tree or two on top.
     const trees = R >= 5 ? rng.int(1, 3) : 1;

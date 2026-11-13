@@ -337,6 +337,20 @@ export const BLOCK_BY_ID = (() => {
  * Add a block at runtime.
  * Ids are Uint8 — 60..250 is the free range.
  */
+/**
+ * Natural-stone styles for the voxel shader's shared `patRock` (see voxel.ts).
+ * A block opts in with `rockStyle: ROCK.X`; any system can reuse them.
+ */
+export const ROCK = {
+    MARBLE: 0,
+    DARK_MARBLE: 1,
+    SLATE: 2,
+    SANDSTONE: 3,
+    GRANITE: 4,
+    BASALT: 5,
+    QUARTZITE: 6,
+} as const;
+
 let _nextBlockId = 60;
 export function registerBlock(name: any, def: any) {
     if ((BLOCKS as any)[name]) return (BLOCKS as any)[name];

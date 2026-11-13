@@ -1001,15 +1001,17 @@ export function meshSphereFaceRegion(
                         [ao[3], ao[2], ao[1], ao[0]],
                         patternPacked,
                         // Carved landmark stone signals itself with fringe = -1 (fringe
-                        // is otherwise >= 0), picked up by patMasonry in the shader.
+                        // is otherwise >= 0):
                         // Negative fringe values are flags (fringe is otherwise >= 0):
-                        //   -1          carved landmark masonry (patMasonry)
                         //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
-                        (block as any).carved
-                            ? -1
-                            : (block as any).barkStyle !== undefined
-                              ? -(2 + (block as any).barkStyle)
-                              : (block as any).fringe || 0,
+                        //   -(10 + s)   natural stone style s for patRock (0 marble .. 6 quartzite)
+                        (block as any).rockStyle !== undefined
+                            ? -(10 + (block as any).rockStyle)
+                            : (block as any).carved
+                              ? -1
+                              : (block as any).barkStyle !== undefined
+                                ? -(2 + (block as any).barkStyle)
+                                : (block as any).fringe || 0,
                         [localV[3], localV[2], localV[1], localV[0]],
                     );
                 }
@@ -1654,36 +1656,66 @@ const FRAG_DECL = /* glsl */ `
   }
 
   /**
-   * Carved landmark masonry: the brick courses with a clearer (still soft)
-   * mortar line, per-stone tone and a gentle weathering mottle; tops are large
-   * dressed slabs; side faces darken toward their foot with grime.
+   * Shared natural-stone library. One function, styles built from the same
+   * layers in different strengths — all smooth noise, so there are no courses,
+   * rows or grids anywhere (brick textures read as masonry, not rock):
+   *   grain    fine, uneven mineral grain over everything
+   *   veins    thin wandering ridges of domain-warped noise, at two scales
+   *   bedding  soft wavy layers (sandstone) / tight cleavage planes (slate)
+   *   speckle  crystal flecks, light and dark (granite) or glints (quartzite)
+   *   pits     vesicles and weathering pocks (basalt, sandstone)
+   *   foot     a darker weathered base on side faces
+   * Vein colour follows the tint: a tint darker than the base draws dark veins,
+   * a paler tint draws pale veins (dark marble, slate).
+   * style: 0 marble, 1 dark marble, 2 slate, 3 sandstone, 4 granite, 5 basalt, 6 quartzite.
+   * Reads vPosW (weathered foot), so only valid inside main().
    */
-  vec3 patMasonry(vec2 uv, vec3 base, vec3 mortar, bool top, bool side) {
-    float wear = vxNoise(uv * 2.3) * 0.6 + vxNoise(uv * 6.1 + 4.0) * 0.4;
-    if (top) {
-      // Two slabs per block, offset row to row.
-      vec2 p = vec2(uv.x + mod(floor(uv.y * 2.0), 2.0) * 0.5, uv.y * 2.0);
-      vec2 f = fract(p);
-      float m = min(smoothstep(0.0, 0.05, f.x) * smoothstep(0.0, 0.05, 1.0 - f.x),
-                    smoothstep(0.0, 0.1, f.y) * smoothstep(0.0, 0.1, 1.0 - f.y));
-      vec3 slab = base * (0.93 + 0.12 * vxHash(floor(p) + 2.3)) * (0.94 + 0.1 * wear);
-      return mix(mortar * 0.92, slab, m);
+  vec3 patRock(vec2 uv, vec3 base, vec3 tint, bool top, float style) {
+    // Per-style strengths.
+    float veinK   = style < 1.5 ? 0.7 : style < 2.5 ? 0.35 : style < 3.5 ? 0.12 : style < 4.5 ? 0.18 : style < 5.5 ? 0.1 : 0.45;
+    float bedK    = style > 1.5 && style < 2.5 ? 0.6 : style > 2.5 && style < 3.5 ? 0.45 : 0.0;
+    float specK   = style > 3.5 && style < 4.5 ? 0.55 : style > 5.5 ? 0.4 : 0.06;
+    float pitK    = style > 4.5 && style < 5.5 ? 0.35 : style > 2.5 && style < 3.5 ? 0.15 : 0.08;
+    float grainK  = style > 2.5 && style < 3.5 ? 0.22 : style > 4.5 && style < 5.5 ? 0.2 : 0.14;
+    float cloudK  = style < 1.5 ? 0.16 : style > 5.5 ? 0.2 : 0.1;
+
+    vec2 p = uv * 0.9;
+    vec2 w = vec2(vxNoise(p * 1.3 + 4.1), vxNoise(p * 1.3 - 2.7));
+    // Cloudy body variation.
+    float cloud = vxNoise(p * 1.1 + w * 1.5) * 0.6 + vxNoise(p * 2.7 + 9.0) * 0.4;
+    vec3 col = base * (1.0 - cloudK + 2.0 * cloudK * smoothstep(0.2, 0.85, cloud));
+
+    // Bedding / cleavage: along the layer axis on side faces (uv.y here), wavy.
+    if (bedK > 0.0 && !top) {
+      float freq = style < 2.5 ? 7.0 : 2.4;                    // slate tight, sandstone broad
+      float b = sin((uv.y + (vxNoise(vec2(uv.x * 0.8, uv.y * 0.3)) - 0.5) * (style < 2.5 ? 0.25 : 0.8)) * freq * 6.2832);
+      col *= 1.0 - bedK * 0.18 * (0.5 + 0.5 * b);
+      // Thin darker partings between beds.
+      col *= 1.0 - bedK * 0.25 * (1.0 - smoothstep(0.0, 0.12, abs(b - 0.96)));
     }
-    const float ch = 0.3333;
-    float row = floor(uv.y / ch);
-    vec2 p = vec2((uv.x + mod(row, 2.0) * 0.5) / 0.8, uv.y / ch);
-    vec2 f = fract(p);
-    float m = min(smoothstep(0.0, 0.06, f.x) * smoothstep(0.0, 0.06, 1.0 - f.x),
-                  smoothstep(0.0, 0.11, f.y) * smoothstep(0.0, 0.11, 1.0 - f.y));
-    float h = vxHash(floor(p) + 3.7);
-    vec3 stone = base * (0.9 + 0.16 * h) * (0.93 + 0.12 * wear);
-    // Chipped corners: the occasional stone darker at one end.
-    stone *= 1.0 - 0.1 * step(0.86, h) * smoothstep(0.5, 1.0, f.x);
-    vec3 c = mix(mortar * 0.85, stone, m);
-    // Grime at the foot of each block face (localV is not available here, so
-    // use the fractional height within the block).
-    if (side) c *= 0.9 + 0.1 * smoothstep(0.0, 0.5, fract(uv.y));
-    return c;
+
+    // Veins.
+    bool paleVeins = dot(tint, vec3(0.333)) > dot(base, vec3(0.333));
+    vec3 vein = paleVeins ? tint : tint * 0.55;
+    float v1 = 1.0 - smoothstep(0.0, 0.035, abs(vxNoise(p * 1.6 + w * 2.2) - 0.5));
+    float v2 = 1.0 - smoothstep(0.0, 0.022, abs(vxNoise(p * 4.2 + w * 1.4 + 13.0) - 0.5));
+    col = mix(col, vein, clamp(veinK * (v1 * 0.95 + v2 * 0.5), 0.0, 0.85));
+
+    // Crystal speckle: light and dark flecks; quartzite glints a little.
+    float sp = vxNoise(uv * 23.0 + 3.3), sp2 = vxNoise(uv * 31.0 - 7.1);
+    col = mix(col, base * 1.35 + vec3(0.03, 0.02, 0.02), specK * smoothstep(0.78, 0.9, sp));
+    col = mix(col, base * 0.45, specK * smoothstep(0.8, 0.92, sp2));
+
+    // Grain: fine and uneven, two octaves so it reads as mineral, not noise.
+    float g = vxNoise(uv * 14.0) * 0.6 + vxNoise(uv * 37.0 + 5.0) * 0.4;
+    col *= 1.0 - grainK * 0.5 + grainK * g;
+
+    // Pits / vesicles.
+    col *= 1.0 - pitK * smoothstep(0.82, 0.93, vxNoise(uv * 7.5 + 21.0));
+
+    // Weathered foot on side faces.
+    if (!top) col *= 0.82 + 0.18 * smoothstep(-2.0, 6.0, length(vPosW) - uSeaLevelRadius);
+    return col;
   }
 
   vec3 patStone(vec2 uv, vec3 base, vec3 tint) {
@@ -2074,7 +2106,8 @@ const FRAG_BODY = /* glsl */ `
     bool isSide = abs(_radial) < 0.5;
     bool isTopFace = _radial > 0.5;
 
-    if (pat > 0.5 && pat < 1.5)      col = fringe < -0.5 ? patMasonry(vUvW, col, vTintV, isTopFace, isSide) : patBrick(vUvW, col, vTintV);
+    if (fringe < -9.5)               col = patRock(vUvW, col, vTintV, isTopFace, -fringe - 10.0);
+    else if (pat > 0.5 && pat < 1.5) col = patBrick(vUvW, col, vTintV);
     else if (pat > 1.5 && pat < 2.5) col = patStone(vUvW, col, vTintV);
     else if (pat > 2.5 && pat < 3.5) col = patPlank(vUvW, col, vTintV);
     else if (pat > 3.5 && pat < 4.5) col = patBark(vUvW, col, vTintV);
@@ -2090,7 +2123,7 @@ const FRAG_BODY = /* glsl */ `
         float heightT = clamp((length(vPosW) - uSeaLevelRadius) / 10.0, 0.0, 1.0);
         // Bark style from the fringe flag (see the mesher): -2 furrowed, -3 papery,
         // -4 scaly, -5 ringed, -6 smooth. Unflagged trunks are furrowed.
-        float barkStyle = fringe < -1.5 ? -fringe - 2.0 : 0.0;
+        float barkStyle = fringe < -1.5 && fringe > -9.5 ? -fringe - 2.0 : 0.0;
         vec2 tuv = _trunkUV(_geoN);
         if (barkStyle > 3.5)      col = patBarkSmooth(tuv, diffuseColor.rgb, vTintV, heightT);
         else if (barkStyle > 2.5) col = patBarkRinged(tuv, diffuseColor.rgb, vTintV);
@@ -2486,7 +2519,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v19' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v22' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 
