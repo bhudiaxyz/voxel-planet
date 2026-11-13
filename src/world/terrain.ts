@@ -254,14 +254,18 @@ export function generateSphereTerrain(
 
                 const roll = treeRng();
                 if (sl > SEA_LAYER + 1 && GRASS_IDS.has(topId)) {
+                    // Altitude zone picks trees AND ground cover: cumulative shares per column.
                     const zone = zoneOf(sl - SEA_LAYER);
-                    if (roll < ZONE[zone].treeP) plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
-                    else if (roll < 0.012 + DEAD_TRUNK_P && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
+                    const g = GROUND[zone];
+                    let t = ZONE[zone].treeP;
+                    if (roll < t) plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
+                    else if (roll < (t += DEAD_TRUNK_P) && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
                         plantDeadTrunk(grid, face, u, v, sl, treeRng);
-                    else if (roll < 0.042) plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(BUSH_PALETTE));
-                    else if (roll < 0.065) plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
-                    else if (roll < 0.08)
-                        plantSingle(grid, face, u, v, sl, sl < SEA_LAYER + 4 ? GRASS_TALL : SHRUB_TALL);
+                    else if (roll < (t += g.bush))
+                        plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(g.bushes));
+                    else if (roll < (t += g.fern))
+                        plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
+                    else if (roll < (t += g.tall)) plantSingle(grid, face, u, v, sl, treeRng.pick(g.talls));
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
                     // Cold rock: conifers where the highland is, a thin cover lower down,
                     // and wind-killed snags standing alone on the slopes.
@@ -282,7 +286,17 @@ export function generateSphereTerrain(
                     else if (roll < 0.018)
                         plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.chance(0.7) ? SCRUB_BLOCK : BUSH_MAUVE);
                     else if (roll < 0.055)
-                        plantSingle(grid, face, u, v, sl, treeRng.chance(0.5) ? MOSS_THICK : LICHEN_PALE);
+                        // Moss on the lower, damper rock; pale lichen takes over with height.
+                        plantSingle(
+                            grid,
+                            face,
+                            u,
+                            v,
+                            sl,
+                            treeRng.chance(zone === 'treeline' ? 0.15 : zone === 'highland' ? 0.4 : 0.7)
+                                ? MOSS_THICK
+                                : LICHEN_PALE,
+                        );
                 } else if (sl > SEA_LAYER + 1 && topId === BLOCKS.SAND.id) {
                     // Desert dunes: sparse cacti, each one its own height and shape.
                     if (roll < CACTUS_P) plantCactus(grid, face, u, v, sl, treeRng);
@@ -364,7 +378,34 @@ function selectRock(noise: Noise3, dir: THREE.Vector3, layer: number, stone: any
  *   treeline   16+  sparse, short, wind-bent pines (krummholz)
  * ========================================================================== */
 type Zone = 'coast' | 'lowland' | 'midland' | 'highland' | 'treeline';
-type Species = 'broadleaf' | 'palm' | 'emergent' | 'birch' | 'fir' | 'spruce' | 'krummholz';
+/** Species with their own builders below, plus voxel-world forms built by plantSphereTree. */
+type Species =
+    | 'broadleaf'
+    | 'palm'
+    | 'emergent'
+    | 'birch'
+    | 'fir'
+    | 'spruce'
+    | 'krummholz'
+    | 'mangrove'
+    | 'oak'
+    | 'pine'
+    | 'cypress'
+    | 'acacia'
+    | 'willow'
+    | 'baobab'
+    | 'juniper';
+/** Species drawn by plantSphereTree (as a forced form) and which leaf role they wear. */
+const FORM_SPECIES: Partial<Record<Species, 'broad' | 'conifer'>> = {
+    mangrove: 'broad',
+    oak: 'broad',
+    acacia: 'broad',
+    willow: 'broad',
+    baobab: 'broad',
+    pine: 'conifer',
+    cypress: 'conifer',
+    juniper: 'conifer',
+};
 
 const zoneOf = (rise: number): Zone =>
     rise <= 3 ? 'coast' : rise <= 7 ? 'lowland' : rise <= 11 ? 'midland' : rise <= 15 ? 'highland' : 'treeline';
@@ -376,6 +417,8 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
         mix: [
             ['palm', 5],
             ['broadleaf', 3],
+            ['mangrove', 2],
+            ['willow', 1],
         ],
         size: [0.35, 0.85],
     },
@@ -384,6 +427,10 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
         mix: [
             ['broadleaf', 6],
             ['emergent', 2],
+            ['oak', 2],
+            ['acacia', 1],
+            ['baobab', 1],
+            ['willow', 1],
             ['palm', 1],
         ],
         size: [0.2, 1.0],
@@ -391,8 +438,11 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
     midland: {
         treeP: 0.013,
         mix: [
-            ['broadleaf', 5],
+            ['broadleaf', 4],
+            ['oak', 3],
             ['birch', 3],
+            ['cypress', 1],
+            ['pine', 2],
             ['fir', 2],
         ],
         size: [0.2, 0.9],
@@ -402,6 +452,7 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
         mix: [
             ['fir', 5],
             ['spruce', 4],
+            ['pine', 3],
             ['birch', 1],
         ],
         size: [0.3, 1.0],
@@ -410,10 +461,36 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
         treeP: 0.006,
         mix: [
             ['krummholz', 6],
+            ['juniper', 3],
             ['spruce', 1],
         ],
         size: [0.15, 0.5],
     },
+};
+
+/**
+ * Ground cover per zone (chance per grass column, after trees and dead trunks).
+ * Lush ferns and tall grass by the water, flowering bushes in the lowlands,
+ * tall shrubs mid-slope, then thin grey scrub and moss toward the treeline.
+ */
+const GROUND: Record<Zone, { bush: number; fern: number; tall: number; bushes: any[]; talls: any[] }> = {
+    coast: { bush: 0.015, fern: 0.03, tall: 0.03, bushes: [BUSH_CREAM, BUSH_ROSE], talls: [GRASS_TALL] },
+    lowland: { bush: 0.035, fern: 0.03, tall: 0.02, bushes: BUSH_PALETTE, talls: [GRASS_TALL, SHRUB_TALL] },
+    midland: {
+        bush: 0.03,
+        fern: 0.015,
+        tall: 0.02,
+        bushes: [BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK],
+        talls: [SHRUB_TALL],
+    },
+    highland: {
+        bush: 0.02,
+        fern: 0.006,
+        tall: 0.012,
+        bushes: [SCRUB_BLOCK, SCRUB_BLOCK, BUSH_MAUVE],
+        talls: [SHRUB_TALL, MOSS_THICK],
+    },
+    treeline: { bush: 0.012, fern: 0, tall: 0.02, bushes: [SCRUB_BLOCK], talls: [MOSS_THICK, LICHEN_PALE] },
 };
 
 function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
@@ -441,6 +518,11 @@ function plantZoneTree(
         // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
         const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;
         plantSphereTree(grid, face, u, v, surfaceLayer, rng, leaves, size);
+        return;
+    }
+    const role = FORM_SPECIES[species];
+    if (role) {
+        plantSphereTree(grid, face, u, v, surfaceLayer, rng, roles[role], size, species as TreeForm);
         return;
     }
     const set = (du: number, dl: number, dv: number, id: number) => {
@@ -564,13 +646,51 @@ function plantZoneTree(
     }
 }
 
-type TreeForm = 'stack' | 'round' | 'spire' | 'broad' | 'weeping' | 'twin' | 'palm' | 'nub';
+type TreeForm =
+    | 'stack'
+    | 'round'
+    | 'spire'
+    | 'broad'
+    | 'weeping'
+    | 'twin'
+    | 'palm'
+    | 'nub'
+    | 'umbrella'
+    | 'tall'
+    | 'layered'
+    // Named species from voxel-world, placed by zone (see ZONE)
+    | 'mangrove'
+    | 'oak'
+    | 'pine'
+    | 'cypress'
+    | 'acacia'
+    | 'willow'
+    | 'baobab'
+    | 'juniper';
 
 function pickTreeForm(scale: number, rng: ReturnType<typeof makeRng>): TreeForm {
-    if (scale > 0.72) return rng.pick(['stack', 'round', 'broad', 'weeping', 'twin', 'palm'] as TreeForm[]);
-    if (scale > 0.55) return rng.pick(['round', 'spire', 'twin', 'stack', 'broad'] as TreeForm[]);
-    return rng.pick(['round', 'spire', 'stack', 'nub'] as TreeForm[]);
+    if (scale > 0.72)
+        return rng.pick(['stack', 'round', 'broad', 'weeping', 'twin', 'palm', 'umbrella', 'layered'] as TreeForm[]);
+    if (scale > 0.55) return rng.pick(['round', 'spire', 'twin', 'stack', 'broad', 'umbrella', 'tall'] as TreeForm[]);
+    return rng.pick(['round', 'spire', 'stack', 'nub', 'tall', 'layered'] as TreeForm[]);
 }
+
+/** Bare-trunk height for the forms ported from voxel-world: [min, + scale × extra]. */
+const FORM_TRUNK: Partial<Record<TreeForm, [number, number]>> = {
+    umbrella: [4, 3.5],
+    tall: [6, 9],
+    layered: [3, 4],
+    mangrove: [2, 2],
+    oak: [3, 3],
+    pine: [6, 8],
+    cypress: [1, 2],
+    acacia: [4, 4],
+    willow: [3, 3],
+    baobab: [3, 4],
+    juniper: [1, 2],
+};
+/** Forms whose silhouette the foliage tufts would blur. */
+const NO_TUFTS = new Set<TreeForm>(['spire', 'palm', 'pine', 'cypress', 'willow', 'layered']);
 
 function plantSphereTree(
     grid: SphereVoxelGrid,
@@ -582,13 +702,20 @@ function plantSphereTree(
     leaves: (typeof BLOCKS)[keyof typeof BLOCKS][],
     /** 0..1 — chosen by the zone; spans saplings (small/unit 1) to the largest forms. */
     sizeIn?: number,
+    /** Forces a form (named species from the zone mix); otherwise picked by scale. */
+    formIn?: TreeForm,
 ) {
     const leaf = rng.pick(leaves) as any;
     // Pale variant = next in list (cyclic), for two-tone canopies
     const pale = leaves[(leaves.indexOf(leaf) + 1) % leaves.length] as any;
-    const trunk = rng.chance(0.55) ? BLOCKS.TRUNK : BLOCKS.TRUNK_PALE;
     const scale = sizeIn ?? rng.range(0.4, 1.0);
-    const form = pickTreeForm(scale, rng);
+    const form = formIn ?? pickTreeForm(scale, rng);
+    const trunk =
+        form === 'baobab' || form === 'juniper' || form === 'oak'
+            ? BLOCKS.TRUNK
+            : rng.chance(0.55)
+              ? BLOCKS.TRUNK
+              : BLOCKS.TRUNK_PALE;
     const twoTone = rng.chance(0.62);
     const li = twoTone ? pale.id : leaf.id;
     const dx = rng.chance(0.5) ? 1 : -1;
@@ -597,16 +724,18 @@ function plantSphereTree(
     // Trunk height varies by form and scale
     // jitter adds ±1-2 blocks of variety on top of the scale-driven height
     const jitter = Math.round(rng.range(-1.5, 1.5));
-    const bare =
-        form === 'spire'
-            ? Math.max(5, Math.round(5 + scale * 7) + jitter)
-            : form === 'palm'
-              ? Math.max(8, Math.round(8 + scale * 8) + jitter)
-              : form === 'broad'
-                ? Math.max(4, Math.round(4 + scale * 3) + jitter)
-                : form === 'weeping'
-                  ? Math.max(5, Math.round(5 + scale * 4) + jitter)
-                  : Math.max(4, Math.round(4 + scale * 5) + jitter);
+    const ft = FORM_TRUNK[form];
+    const bare = ft
+        ? Math.max(ft[0], Math.round(ft[0] + scale * ft[1]) + jitter)
+        : form === 'spire'
+          ? Math.max(5, Math.round(5 + scale * 7) + jitter)
+          : form === 'palm'
+            ? Math.max(8, Math.round(8 + scale * 8) + jitter)
+            : form === 'broad'
+              ? Math.max(4, Math.round(4 + scale * 3) + jitter)
+              : form === 'weeping'
+                ? Math.max(5, Math.round(5 + scale * 4) + jitter)
+                : Math.max(4, Math.round(4 + scale * 5) + jitter);
     const large = scale >= 0.72;
     const unit = scale >= 0.42 ? 2 : 1;
 
@@ -630,8 +759,11 @@ function plantSphereTree(
         _topDl = Math.max(_topDl, bare + oy + sy - 1);
     };
 
-    // Trunk
-    for (let l = 0; l < bare + unit; l++) set(0, l, 0, trunk.id);
+    // Trunk — baobab is 2×2 (3×3 when big), oak 2×2 when large, everything else 1×1.
+    const tw = form === 'baobab' ? (scale >= 0.6 ? 3 : 2) : form === 'oak' && large ? 2 : 1;
+    const to = -Math.floor((tw - 1) / 2);
+    for (let l = 0; l < bare + unit; l++)
+        for (let a = 0; a < tw; a++) for (let b = 0; b < tw; b++) set(to + a, l, to + b, trunk.id);
 
     // Canopy by form — ported from voxel-world/vegetation.ts
     switch (form) {
@@ -744,6 +876,146 @@ function plantSphereTree(
                 fill(dx, 2, dz, 2, 2, 2, li);
             }
             break;
+        /* ---- ported from voxel-world/vegetation.ts (x,y,z → u,layer,v) ---- */
+        case 'umbrella': {
+            // Wide flat disc crown — lone savanna tree.
+            const w = large ? 7 : unit === 2 ? 5 : 4;
+            fill(0, 0, 0, w, 1, w, leaf.id);
+            fill(dx * 2, 0, dz, Math.ceil(w / 2), 1, Math.ceil(w / 3), leaf.id);
+            fill(-dx, 1, -dz, Math.ceil(w / 2), 1, Math.ceil(w / 2), li);
+            if (unit === 2) fill(dx, 2, dz, 2, 1, 2, li);
+            break;
+        }
+        case 'tall':
+            // Poplar: very tall bare trunk, small airy crown.
+            if (large) {
+                fill(0, 0, 0, 3, 2, 3, leaf.id);
+                fill(dx * 2, 1, dz, 2, 2, 2, li);
+                fill(0, 3, 0, 2, 1, 2, li);
+            } else if (unit === 2) {
+                fill(0, 0, 0, 3, 2, 3, leaf.id);
+                fill(dx, 2, dz, 2, 1, 2, li);
+            } else {
+                fill(0, 0, 0, 2, 1, 2, leaf.id);
+                fill(dx, 1, dz, 1, 1, 1, li);
+            }
+            break;
+        case 'layered': {
+            // Tiered horizontal discs — pagoda / cedar.
+            const tiers = large ? 4 : unit === 2 ? 3 : 2;
+            const baseW = large ? 7 : unit === 2 ? 5 : 3;
+            const gap = unit === 2 ? 3 : 2;
+            for (let t = 0; t < tiers; t++) {
+                fill(
+                    t & 1 ? dx : 0,
+                    t * gap,
+                    t & 1 ? dz : 0,
+                    Math.max(1, baseW - t * 2),
+                    1,
+                    Math.max(1, baseW - t * 2),
+                    t === 0 ? leaf.id : li,
+                );
+                if (t > 0) for (let k = 1; k < gap; k++) set(0, bare + (t - 1) * gap + k, 0, trunk.id); // trunk through the gaps
+            }
+            break;
+        }
+        case 'mangrove':
+            // Stilt roots fanning out near the base, broad low crown.
+            for (const [ru, rv] of [
+                [2 * dx, 0],
+                [0, 2 * dz],
+                [-dx, dz],
+                [dx, -dz],
+            ] as Array<[number, number]>)
+                set(ru, 0, rv, trunk.id);
+            if (large) {
+                fill(0, 0, 0, 5, 1, 5, leaf.id);
+                fill(3 * dx, 0, dz, 2, 2, 2, leaf.id);
+                fill(-2 * dx, 0, -2 * dz, 2, 1, 3, leaf.id);
+                fill(dx, 1, -dz, 3, 1, 3, li);
+            } else {
+                fill(0, 0, 0, 4, 1, 4, leaf.id);
+                fill(2 * dx, 0, dz, 2, 1, 2, leaf.id);
+                fill(dx, 1, 0, 3, 1, 3, li);
+            }
+            break;
+        case 'oak': {
+            // Broad, heavy, irregular crown wider than tall, on a short thick trunk.
+            const w = large ? 9 : unit === 2 ? 7 : 5;
+            fill(0, 0, 0, w, 2, w - 1, leaf.id);
+            fill(3 * dx, 1, -2 * dz, 3, 2, 3, leaf.id);
+            fill(-3 * dx, 1, 2 * dz, 3, 2, 3, leaf.id);
+            fill(dx, 2, dz, w - 3, 2, w - 3, li);
+            fill(-dx, 4, 0, Math.max(2, w - 5), 1, Math.max(2, w - 5), li);
+            break;
+        }
+        case 'pine': {
+            // Tall bare trunk, compact flat crown with short whorls just below.
+            const w = large ? 5 : unit === 2 ? 4 : 3;
+            fill(0, 0, 0, w, 1, w, leaf.id);
+            fill(2 * dx, -2, 0, 2, 1, 2, leaf.id);
+            fill(-2 * dx, -3, dz, 2, 1, 2, leaf.id);
+            fill(0, 1, 0, w - 1, 1, w - 1, li);
+            fill(dx, 2, dz, Math.max(1, w - 3), 1, Math.max(1, w - 3), li);
+            break;
+        }
+        case 'cypress': {
+            // Tall narrow column — Mediterranean cypress.
+            const h = large ? 12 : unit === 2 ? 9 : 6;
+            fill(0, 0, 0, 2, h - 2, 2, leaf.id);
+            fill(dx, 2, 0, 1, h - 5, 1, li);
+            fill(0, h - 2, 0, 1, 2, 1, li);
+            break;
+        }
+        case 'acacia': {
+            // Trunk forks into two limbs; very flat wide crown plus an offset lower layer.
+            const w = large ? 9 : unit === 2 ? 7 : 5;
+            set(dx, bare - 1, 0, trunk.id);
+            set(-dx, bare - 1, dz, trunk.id);
+            fill(0, 0, 0, w, 1, w - 2, leaf.id);
+            fill(dx * Math.ceil(w / 3), -1, dz * 2, Math.ceil(w / 2), 1, Math.ceil(w / 2), leaf.id);
+            fill(-dx, 1, 0, w - 3, 1, Math.max(2, w - 5), li);
+            break;
+        }
+        case 'willow': {
+            // Rounded crown with long strands hanging from the rim most of the way down.
+            const w = large ? 7 : unit === 2 ? 5 : 4;
+            fill(0, 0, 0, w, 2, w, leaf.id);
+            fill(0, 2, 0, w - 2, 1, w - 2, li);
+            const r = Math.floor(w / 2);
+            const drop = Math.max(2, bare - 1);
+            for (let a = 0; a < 12; a++) {
+                if (!rng.chance(0.7)) continue;
+                const th = (a / 12) * Math.PI * 2;
+                const su = Math.round(Math.cos(th) * r),
+                    sv = Math.round(Math.sin(th) * r);
+                const len = rng.int(Math.ceil(drop * 0.5), drop);
+                for (let k = 1; k <= len; k++) set(su, bare - k, sv, k & 1 ? leaf.id : li);
+            }
+            break;
+        }
+        case 'baobab':
+            // Fat bottle trunk, a sparse crown of stubby branch tips on top.
+            for (const [bu, bv] of [
+                [2, 0],
+                [-2, 1],
+                [1, -2],
+                [-1, 2],
+            ] as Array<[number, number]>) {
+                set(bu, bare, bv, trunk.id);
+                fill(bu, 1, bv, 2, 1, 2, rng.chance(0.5) ? leaf.id : li);
+            }
+            fill(0, 1, 0, 3, 1, 3, leaf.id);
+            break;
+        case 'juniper':
+            // Wind-twisted scrub: leaning limb, a few lopsided dense pads.
+            set(dx, bare, 0, trunk.id);
+            set(2 * dx, bare + 1, dz, trunk.id);
+            fill(2 * dx, 1, dz, unit === 2 ? 4 : 3, 2, unit === 2 ? 3 : 2, leaf.id);
+            fill(-dx, 0, -dz, 2, 2, 2, leaf.id);
+            fill(3 * dx, 3, dz, 2, 1, 2, li);
+            break;
+
         case 'stack':
         default:
             if (large) {
@@ -770,6 +1042,25 @@ function plantSphereTree(
                 fill(dx, 1, 0, 2, 1, 2, li);
                 fill(-dx, 2, dz, 1, 1, 1, li);
             }
+    }
+
+    // Extra foliage tufts across the crown to break up the box silhouette (voxel-world).
+    if (!NO_TUFTS.has(form)) {
+        const spread = large ? 3 : unit === 2 ? 2 : 1;
+        const crownH = _topDl - bare;
+        const count = large ? rng.int(5, 9) : unit === 2 ? rng.int(3, 6) : rng.int(2, 4);
+        for (let k = 0; k < count; k++) {
+            const sw = rng.chance(0.55) ? 2 : 1;
+            fill(
+                rng.int(-spread, spread),
+                rng.int(0, Math.max(1, crownH + 1)),
+                rng.int(-spread, spread),
+                sw,
+                1,
+                sw,
+                rng.chance(0.55) ? li : leaf.id,
+            );
+        }
     }
 }
 
