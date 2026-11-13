@@ -6,7 +6,7 @@ import { dirToFaceUV } from '../core/geoutil';
 const GRAVITY = 28;
 const JUMP_VEL = 10.5;
 const WALK_SPEED = 9;
-const SPRINT_SPEED = 20;
+const SPRINT_SPEED = 18;
 const EYE_HEIGHT = 1.75;
 
 const MAX_STEP = 1.1; // max terrain step-up in world units

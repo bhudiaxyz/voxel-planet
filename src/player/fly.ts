@@ -6,7 +6,7 @@ import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 
 const FLY_SPEED = 24; // m/s
-const FLY_SPRINT = 70; // m/s with Shift
+const FLY_SPRINT = 63; // m/s with Shift
 const FLOOR_CLEARANCE = 1.75; // m above terrain
 const FLOOR_DROP_RATE = 8.0; // max m/s floor can descend (cliff smoothing)
 const AUTO_CLIMB_RATE = 14; // m/s upward push when obstacle is ahead

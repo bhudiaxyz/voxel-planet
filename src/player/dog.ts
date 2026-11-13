@@ -17,7 +17,7 @@ const HEEL_SIDE = 1.5;
 const HEEL_AHEAD = 4.0;
 const TELEPORT_DIST = 45 / PLANET_RADIUS; // beyond this (after fly/drone, or outrun) it reappears and runs in
 const TROT_SPEED = 8; // m/s
-const RUN_SPEED = 22; // m/s — faster than the player's sprint (20) so it can catch up
+const RUN_SPEED = 22; // m/s — faster than the player's sprint (18) so it can catch up
 const RUN_COLS = 10; // more waypoints left than this → run
 /** Where it appears at startup: ahead of the camera and a little to one side, so it's in view. */
 const APPEAR_AHEAD = 4.5;

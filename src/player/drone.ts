@@ -4,7 +4,7 @@ import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/v
 import { dirToFaceUV } from '../core/geoutil';
 
 const DRONE_SPEED = 18; // m/s horizontal cruise
-const DRONE_SPRINT_SPEED = 120; // m/s horizontal when shift held
+const DRONE_SPRINT_SPEED = 91; // m/s horizontal when shift held
 const DRONE_VSPEED = 20; // m/s vertical (manual)
 const MIN_CLEARANCE = 1.5; // m above surface
 const ENTER_LIFT = 8; // m above ground on enter
