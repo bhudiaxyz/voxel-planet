@@ -1578,13 +1578,54 @@ const COMMON_GLSL = /* glsl */ `
     p *= 17.0;
     return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
   }
+  #ifdef NOISE_TEX
+  // One bilinear fetch from a 256² random texture instead of four hashes and
+  // three mixes: offsetting the sample point by the smoothstep-faded fraction
+  // makes the hardware filter interpolate with the same weights, so it matches
+  // the arithmetic version (value noise, period 256 cells). ~4-5x cheaper per
+  // call; the voxel shader makes 11-16 of them per fragment.
+  uniform sampler2D uNoiseTex;
+  float vxNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return texture2D(uNoiseTex, (i + f + 0.5) / 256.0).r;
+  }
+  #else
   float vxNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
     return mix(mix(vxHash(i), vxHash(i + vec2(1.0, 0.0)), f.x),
                mix(vxHash(i + vec2(0.0, 1.0)), vxHash(i + vec2(1.0, 1.0)), f.x), f.y);
   }
+  #endif
 `;
+
+/**
+ * Random-value texture for the fast vxNoise (NOISE_TEX). 256² R8, repeating,
+ * bilinear, no mips. Built once and shared by every voxel material.
+ */
+let _noiseTex: THREE.DataTexture | null = null;
+export function voxelNoiseTexture(): THREE.DataTexture {
+    if (_noiseTex) return _noiseTex;
+    const N = 256;
+    const data = new Uint8Array(N * N);
+    // Deterministic, well-mixed values (mulberry32), so the look is stable.
+    let a = 0x2f6b4c1d;
+    for (let i = 0; i < data.length; i++) {
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        data[i] = ((t ^ (t >>> 14)) >>> 0) & 255;
+    }
+    const tex = new THREE.DataTexture(data, N, N, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    _noiseTex = tex;
+    return tex;
+}
 
 const VERT_DECL = /* glsl */ `
   attribute vec3 aTint;
@@ -2482,6 +2523,8 @@ export function makeVoxelMaterial() {
         vertexColors: true,
         dithering: false,
     });
+    // Fast texture noise for every tier (one fetch per vxNoise call).
+    mat.defines = { ...(mat.defines || {}), NOISE_TEX: 1 };
     mat.userData.uniforms = {
         uLodAlpha: { value: 1.0 },
         /* Distance dither: fully drawn inside uFadeNear, gone at uFadeFar (world units from camera). */
@@ -2495,6 +2538,7 @@ export function makeVoxelMaterial() {
         uShadowTintStrength: { value: 0.82 },
         /** Extra darkening inside cast shadows (0 = hue shift only). */
         uShadowDeepen: { value: 0.22 },
+        uNoiseTex: { value: voxelNoiseTexture() },
         uSunDir: { value: LIGHT.sunDir.clone() },
         uSunAmbient: { value: 0.14 }, // diffuse lift on sun-facing sides
         uFillAmbient: { value: 0.06 }, // flat lift on shadow sides
@@ -2555,7 +2599,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v24' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v25' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 
@@ -2595,12 +2639,12 @@ export function makeGlowMaterial() {
           // centre (like sunlight through a crystal), fading toward the rim. Rays
           // vary in width and length by angle, so there is no regular X or grid.
           vec2 f = fract(vUvG) - 0.5;
-          float r = length(f);
-          float a = atan(f.y, f.x);
-          float core = 1.0 - smoothstep(0.0, 0.55, r);
-          float rays = pow(0.5 + 0.5 * cos(a * 7.0 + sin(a * 3.0) * 1.3), 3.0)
-                     * (0.6 + 0.4 * (0.5 + 0.5 * cos(a * 4.0 + 1.7)));
-          rays *= smoothstep(0.5, 0.06, r);      // strongest near the centre
+          float rad = length(f);                 // ('r' above is the face-up dot)
+          float ang = atan(f.y, f.x);
+          float core = 1.0 - smoothstep(0.0, 0.55, rad);
+          float rays = pow(0.5 + 0.5 * cos(ang * 7.0 + sin(ang * 3.0) * 1.3), 3.0)
+                     * (0.6 + 0.4 * (0.5 + 0.5 * cos(ang * 4.0 + 1.7)));
+          rays *= smoothstep(0.5, 0.06, rad);    // strongest near the centre
           float rim = smoothstep(0.38, 0.5, max(abs(f.x), abs(f.y)));
           vec3 c = mix(diffuseColor.rgb, vTintG, core * 0.5);
           c *= 0.8 + 0.34 * core;
@@ -2614,6 +2658,6 @@ export function makeGlowMaterial() {
         uAoStrength: { value: 0 },
         uAoTint: { value: new THREE.Color(1, 1, 1) },
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v6';
+    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v7';
     return mat;
 }
