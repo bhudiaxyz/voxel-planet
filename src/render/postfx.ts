@@ -69,6 +69,8 @@ const GradeShader = {
         uEdgeLight: { value: new THREE.Vector3(0.94, 0.91, 0.93) },
         uEdgeDarkOpacity: { value: 0.0 },
         uEdgeLightOpacity: { value: 0.0 },
+        /** 0 day .. 1 midnight: dims the ink so outlines don't glow on the night scene. */
+        uNight: { value: 0.0 },
         // "Milk": a flat mix toward a bright lilac across the whole frame. The
         // reference frames are clean and confidently coloured, so this stays low
         // — just enough to keep the darkest values from going heavy.
@@ -89,6 +91,7 @@ const GradeShader = {
     uniform vec3 uEdgeDark, uEdgeLight;
     uniform float uSat, uContrast, uVignette, uTime, uGrain, uAberration, uMilk, uKnee;
     uniform float uEdgeDarkOpacity, uEdgeLightOpacity;
+    uniform float uNight;
     varying vec2 vUv;
 
     #include <tonemapping_pars_fragment>
@@ -156,8 +159,16 @@ const GradeShader = {
       vec2 edge = clamp(texture2D(tEdges, uv).rg, 0.0, 1.0);
       float darkCoverage = edge.r;
       float lightCoverage = edge.g * (1.0 - smoothstep(0.0, 0.35, darkCoverage));
-      col = mix(col, uEdgeLight, lightCoverage * uEdgeLightOpacity);
-      col = mix(col, uEdgeDark, darkCoverage * uEdgeDarkOpacity);
+      // The inks are fixed display colours applied after tone mapping, so on the
+      // night scene (~0.05) even the "dark" ink (0.39) read as a bright outline.
+      // At night the light ink dims to a faint moonlit grey and mostly fades, and
+      // the dark ink drops below the terrain so it reads as a shadow line.
+      vec3 inkLight = mix(uEdgeLight, uEdgeLight * 0.12, uNight);
+      vec3 inkDark = mix(uEdgeDark, uEdgeDark * 0.06, uNight);
+      float lightOp = uEdgeLightOpacity * mix(1.0, 0.25, uNight);
+      float darkOp = uEdgeDarkOpacity * mix(1.0, 0.6, uNight);
+      col = mix(col, inkLight, lightCoverage * lightOp);
+      col = mix(col, inkDark, darkCoverage * darkOp);
 
       // --- vignette --------------------------------------------------------
       // Tinted rather than neutral; a grey vignette on a lilac frame reads as

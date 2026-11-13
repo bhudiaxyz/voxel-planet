@@ -112,6 +112,45 @@ function iconWell(ctx: CanvasRenderingContext2D) {
     ctx.fillStyle = '#8090a8';
     ctx.fill();
 }
+function iconZiggurat(ctx: CanvasRenderingContext2D) {
+    const s = ICON_R;
+    for (let t = 0; t < 3; t++) {
+        const w = s * (1.6 - t * 0.5),
+            y = s * (0.6 - t * 0.55);
+        ctx.fillRect(-w / 2, y - s * 0.45, w, s * 0.45);
+    }
+}
+function iconTower(ctx: CanvasRenderingContext2D) {
+    const s = ICON_R;
+    ctx.fillRect(-s * 0.4, -s * 0.8, s * 0.8, s * 1.6);
+    // Crenellations
+    for (const x of [-0.4, 0, 0.4]) ctx.fillRect(x * s - s * 0.12, -s * 1.05, s * 0.24, s * 0.3);
+}
+function iconGrove(ctx: CanvasRenderingContext2D) {
+    const s = ICON_R;
+    for (const [x, h] of [
+        [-0.55, 0.9],
+        [0, 1.3],
+        [0.55, 1.0],
+    ]) {
+        ctx.beginPath();
+        ctx.moveTo(x * s, -h * s * 0.8);
+        ctx.lineTo(x * s + s * 0.22, s * 0.7);
+        ctx.lineTo(x * s - s * 0.22, s * 0.7);
+        ctx.closePath();
+        ctx.fill();
+    }
+}
+function iconAqueduct(ctx: CanvasRenderingContext2D) {
+    const s = ICON_R;
+    ctx.fillRect(-s * 1.1, -s * 0.55, s * 2.2, s * 0.35);
+    ctx.lineWidth = s * 0.28;
+    for (const x of [-0.6, 0.6]) {
+        ctx.beginPath();
+        ctx.arc(x * s, s * 0.6, s * 0.42, Math.PI, 0);
+        ctx.stroke();
+    }
+}
 function iconArch(ctx: CanvasRenderingContext2D) {
     const w = ICON_R,
         h = ICON_R * 1.1,
@@ -148,6 +187,10 @@ const GLYPHS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) => 
     biosphere: iconBiosphere,
     well: iconWell,
     arch: iconArch,
+    ziggurat: iconZiggurat,
+    tower: iconTower,
+    grove: iconGrove,
+    aqueduct: iconAqueduct,
 };
 
 /** One saturated, clearly different colour per landmark kind (badge fill). */
@@ -309,8 +352,9 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
             // Map: +x = east (+px), +y = south (-N)
             const angle = Math.atan2(fwdE, fwdN); // angle from north, clockwise
 
-            const R = 13,
-                HEAD = 9.5;
+            // Larger than the landmark badges so the player is the first thing you see.
+            const R = 20,
+                HEAD = 15;
             ctx.save();
             ctx.translate(px, py);
             ctx.rotate(angle);
@@ -334,7 +378,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
         } else {
             // Stationary — plain dot
             ctx.beginPath();
-            ctx.arc(px, py, 5, 0, 2 * Math.PI);
+            ctx.arc(px, py, 8, 0, 2 * Math.PI);
             ctx.shadowColor = 'rgba(255, 140, 26, 0.85)';
             ctx.shadowBlur = 8;
             ctx.fillStyle = PLAYER_ORANGE;
@@ -346,6 +390,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
         }
 
         if (landmarks) {
+            labelBoxes.length = 0;
             for (const lm of landmarks) {
                 const llon = Math.atan2(lm.dir.z, lm.dir.x);
                 const llat = Math.asin(Math.max(-1, Math.min(1, lm.dir.y)));
@@ -355,7 +400,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
                 ctx.translate(lpx, lpy);
                 drawBadge(ctx, lm.kind);
                 ctx.restore();
-                drawLabel(LANDMARK_LABELS[lm.kind], lpx, lpy);
+                drawLabel(lm.sky ? 'Sky Island' : LANDMARK_LABELS[lm.kind], lpx, lpy);
             }
         }
         drawCompass();
@@ -414,14 +459,29 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
      * sand, grass and sea. Flips above the icon near the bottom edge and is kept
      * inside the map horizontally.
      */
+    /** Label rectangles already drawn this frame [x, y, w, h]. */
+    const labelBoxes: Array<[number, number, number, number]> = [];
+    const overlaps = (x: number, y: number, w: number, h: number) =>
+        labelBoxes.some(([bx, by, bw, bh]) => x < bx + bw + 2 && x + w + 2 > bx && y < by + bh + 1 && y + h + 1 > by);
+
     function drawLabel(text: string, x: number, y: number) {
         ctx.save();
         ctx.font = '600 11px sans-serif';
         const w = ctx.measureText(text).width + 8,
             h = 15;
-        const below = y + 14 + h < MAP_H;
         const lx = Math.max(2, Math.min(MAP_W - w - 2, x - w / 2));
-        const ly = below ? y + 14 : y - 14 - h;
+        // Try below, then above; if both collide with an earlier label, skip it
+        // (the badge still shows and the hover tooltip still names it).
+        const yBelow = y + 14,
+            yAbove = y - 14 - h;
+        let ly = -1;
+        if (yBelow + h < MAP_H && !overlaps(lx, yBelow, w, h)) ly = yBelow;
+        else if (yAbove > 0 && !overlaps(lx, yAbove, w, h)) ly = yAbove;
+        if (ly < 0) {
+            ctx.restore();
+            return;
+        }
+        labelBoxes.push([lx, ly, w, h]);
         ctx.fillStyle = 'rgba(20, 16, 28, 0.72)';
         ctx.beginPath();
         ctx.roundRect(lx, ly, w, h, 4);
@@ -440,6 +500,10 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
         biosphere: 'Floating Biosphere',
         well: 'Ancient Well',
         arch: 'Ruined Arch',
+        ziggurat: 'Stepped Ziggurat',
+        tower: 'Ruined Watchtower',
+        grove: 'Crystal Grove',
+        aqueduct: 'Old Aqueduct',
     };
 
     // Tooltip element
@@ -470,7 +534,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
             }
         }
         if (found) {
-            tip.textContent = LANDMARK_LABELS[found.kind];
+            tip.textContent = found.sky ? 'Sky Island' : LANDMARK_LABELS[found.kind];
             tip.style.left = e.clientX + 12 + 'px';
             tip.style.top = e.clientY - 4 + 'px';
             tip.style.display = 'block';

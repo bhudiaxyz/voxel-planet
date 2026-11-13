@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { createRenderer } from './render/renderer';
 import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName, BLOCKS } from './core/palette';
 import { Atmosphere } from './render/lighting';
-import { FPCamera } from './render/fp-camera';
+import { FPCamera, tangentBasis } from './render/fp-camera';
+import { createLocations } from './ui/locations';
 import { createPostFX } from './render/postfx';
 import { buildSphereWorld } from './world/world';
 import { DayNight } from './render/day-night';
@@ -169,7 +170,8 @@ async function start(): Promise<void> {
     const rng = makeRng(SEED);
     // Petals/motes/pollen. 300 is the authored look (more reads as confetti — see
     // particles.ts); the tier budget only ever lowers it on weaker devices.
-    const particles = createParticles(80, rng, Math.min(300, ts.particleCount));
+    // ×0.8: 20% fewer floating petals/motes/pollen than the authored 300, on every tier.
+    const particles = createParticles(80, rng, Math.round(Math.min(300, ts.particleCount) * 0.8));
     scene.add(particles.group);
     const birds = createBirds(scene, ts.birdFlock, SEED ^ 0xb1d5);
     const clouds = createClouds(scene, ts.clouds, SEED ^ 0xc10d);
@@ -241,6 +243,43 @@ async function start(): Promise<void> {
         if (drone.active) drone.beginLanding();
         else if (fly.active) exitFly();
     };
+    /**
+     * Teleport to a landmark (planet-explorer's Locations panel). Ground
+     * landmarks: drop to walking a few columns off the structure (not inside it),
+     * facing it. Sky islands can't be reached on foot, so arrive in the drone
+     * beside the island. The dog reappears at heel on its own (it runs in when
+     * the player is beyond its TELEPORT_DIST).
+     */
+    const _tpDir = new THREE.Vector3(),
+        _tpSide = new THREE.Vector3(),
+        _tpFwd = new THREE.Vector3();
+    const teleportTo = (r: { dir: THREE.Vector3; sky?: boolean }) => {
+        // A tangent step from the landmark: 6 columns for ground, 14 for islands.
+        const cols = r.sky ? 14 : 6;
+        _tpSide.set(0, 1, 0);
+        if (Math.abs(r.dir.y) > 0.9) _tpSide.set(1, 0, 0);
+        _tpSide.addScaledVector(r.dir, -_tpSide.dot(r.dir)).normalize();
+        const step = (cols * 2) / FACE_RES; // ~one column per (2 / FACE_RES) on the unit cube
+        _tpDir.copy(r.dir).addScaledVector(_tpSide, step).normalize();
+        if (fly.active) {
+            fly.exit();
+            fpCam.flyActive = false;
+        }
+        if (drone.active) {
+            drone.exit();
+            fpCam.droneActive = false;
+        }
+        controller.snapToDir(_tpDir, world.grid);
+        // Face the landmark: yaw so the tangent toward it is 'forward'.
+        _tpFwd.copy(r.dir).sub(_tpDir).addScaledVector(_tpDir, -r.dir.clone().sub(_tpDir).dot(_tpDir)).normalize();
+        const { fwd, rgt } = tangentBasis(_tpDir, 0);
+        fpCam.yaw = -Math.atan2(_tpFwd.dot(rgt), _tpFwd.dot(fwd));
+        fpCam.pitch = r.sky ? 0.35 : 0;
+        if (r.sky) enterDrone();
+        world.streaming.update(drone.active ? drone.dir : controller.dir, Infinity); // no empty first frame
+    };
+    const locations = createLocations(world.landmarks, teleportTo);
+    if (isTouchDevice) locations.hide(); // touch: opened from the ☰ panels button, as in planet-explorer
     const toggleEdges = () => {
         const g = post.grade.uniforms;
         const on = g['uEdgeDarkOpacity'].value === 0;
@@ -267,6 +306,7 @@ async function start(): Promise<void> {
                 return;
             case 'KeyG':
                 hud.toggle();
+                locations.toggle();
                 return;
             // voxel-planet extras, on keys planet-explorer leaves free:
             case 'KeyX': // dog sit / stand
@@ -364,7 +404,10 @@ async function start(): Promise<void> {
     touch.onTimeBack(() => stepTime(-1));
     touch.onTimeForward(() => stepTime(1));
     touch.onCycle(cycleMode);
-    touch.onPanels(() => hud.toggle());
+    touch.onPanels(() => {
+        hud.toggle();
+        locations.toggle();
+    });
     touch.onLand(land);
     touch.onMap(sphereMapToggle.toggle);
     touch.onDog(() => dog.toggleSit());
@@ -440,6 +483,7 @@ async function start(): Promise<void> {
 
         if (world.sphereWater) {
             world.sphereWater.update(dt, dayNight.getNightFactor());
+            post.grade.uniforms.uNight.value = dayNight.getNightFactor();
             world.sphereWater.material.uniforms.uSunDir.value.copy(dayNight.sunDir);
         }
 

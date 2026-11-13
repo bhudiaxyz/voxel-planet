@@ -8,8 +8,21 @@ import { makeRng } from '../core/rng';
 import { columnDir } from '../core/geoutil';
 
 export interface LandmarkRecord {
-    kind: 'spire' | 'obelisk' | 'ring' | 'tombs' | 'biosphere' | 'well' | 'arch';
+    kind:
+        | 'spire'
+        | 'obelisk'
+        | 'ring'
+        | 'tombs'
+        | 'biosphere'
+        | 'well'
+        | 'arch'
+        | 'ziggurat'
+        | 'tower'
+        | 'grove'
+        | 'aqueduct';
     dir: THREE.Vector3; // world-space unit direction from planet centre
+    /** A floating sky island (drawn on the map, but not a ground landmark). */
+    sky?: boolean;
 }
 
 const _tmp = new THREE.Vector3();
@@ -28,6 +41,10 @@ export const LANDMARK_COLOR: Record<Kind, number> = {
     biosphere: 0x27ae60,
     well: 0x00a6a6,
     arch: 0xe8590c,
+    ziggurat: 0xd4a017, // ochre
+    tower: 0xc0392b, // crimson
+    grove: 0xff5fa2, // magenta
+    aqueduct: 0x5dade2, // sky
 };
 
 /*
@@ -44,6 +61,7 @@ const MASON = registerBlock('LANDMARK_MASONRY', {
     bottom: col(0xc9b48c),
     tint: col(0xb8a07a), // mortar
     pattern: PATTERN.BRICK,
+    carved: true, // patMasonry in the voxel shader
     rough: 0.55,
 });
 const ACCENT = {} as Record<Kind, { id: number }>;
@@ -56,6 +74,7 @@ for (const kind of Object.keys(LANDMARK_COLOR) as Kind[]) {
         bottom: c.clone().multiplyScalar(0.75),
         tint: c.clone().multiplyScalar(0.7),
         pattern: PATTERN.BRICK,
+        carved: true,
         rough: 0.4,
     });
     GEM[kind] = registerBlock(`LANDMARK_GEM_${kind.toUpperCase()}`, {
@@ -70,7 +89,19 @@ for (const kind of Object.keys(LANDMARK_COLOR) as Kind[]) {
 }
 
 /** Clearing radius per kind (columns): enough open ground for the shape to read. */
-const CLEAR_R: Record<Kind, number> = { spire: 6, obelisk: 6, ring: 13, tombs: 14, biosphere: 8, well: 6, arch: 8 };
+const CLEAR_R: Record<Kind, number> = {
+    spire: 6,
+    obelisk: 6,
+    ring: 13,
+    tombs: 14,
+    biosphere: 8,
+    well: 6,
+    arch: 8,
+    ziggurat: 9,
+    tower: 6,
+    grove: 9,
+    aqueduct: 14,
+};
 
 /**
  * Clear trees, bushes, cacti and ground cover around a site (they were scattered
@@ -239,7 +270,14 @@ function tombstoneField(grid: SphereVoxelGrid, face: number, cu: number, cv: num
         const sL = top(grid, face, su, sv);
         const sh = 2 + rng.int(0, 2);
         for (let dy = 1; dy <= sh; dy++)
-            put(grid, face, su, sv, sL + dy, dy === sh ? ACCENT.tombs.id : rng.chance(0.55) ? MASON.id : BLOCKS.STONE.id);
+            put(
+                grid,
+                face,
+                su,
+                sv,
+                sL + dy,
+                dy === sh ? ACCENT.tombs.id : rng.chance(0.55) ? MASON.id : BLOCKS.STONE.id,
+            );
         // Random lean cap
         if (rng.chance(0.35)) {
             const leans = [
@@ -367,30 +405,232 @@ function ruinedArch(grid: SphereVoxelGrid, face: number, cu: number, cv: number,
         const ru = Math.round(cu + Math.cos(a) * d);
         const rv = Math.round(cv + Math.sin(a) * d);
         if (isLand(grid, face, ru, rv))
-            put(
-                grid,
-                face,
-                ru,
-                rv,
-                top(grid, face, ru, rv) + 1,
-                rng.chance(0.5) ? BLOCKS.STONE.id : MASON.id,
-            );
+            put(grid, face, ru, rv, top(grid, face, ru, rv) + 1, rng.chance(0.5) ? BLOCKS.STONE.id : MASON.id);
+    }
+}
+
+/** Stepped temple: four shrinking terraces, a stair up one side, a shrine and gem on top. */
+function ziggurat(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
+    const baseL = top(grid, face, cu, cv);
+    const tiers = 4;
+    const R0 = 6 + rng.int(0, 1);
+    let l = baseL + 1;
+    for (let t = 0; t < tiers; t++) {
+        const r = R0 - t * 2;
+        for (let h = 0; h < 2; h++, l++)
+            for (let dv = -r; dv <= r; dv++)
+                for (let du = -r; du <= r; du++) {
+                    const edge = Math.max(Math.abs(du), Math.abs(dv)) === r;
+                    overwrite(grid, face, cu + du, cv + dv, l, edge && h === 1 ? ACCENT.ziggurat.id : MASON.id);
+                }
+    }
+    // Stair up the +v side: one step per layer, cut into the terraces.
+    for (let k = 0; k < tiers * 2; k++) overwrite(grid, face, cu, cv + R0 - k, baseL + 1 + k, ACCENT.ziggurat.id);
+    // Shrine: four posts and a gem.
+    for (const [du, dv] of [
+        [-1, -1],
+        [1, -1],
+        [-1, 1],
+        [1, 1],
+    ])
+        for (let h = 0; h < 2; h++) put(grid, face, cu + du, cv + dv, l + h, MASON.id);
+    put(grid, face, cu, cv, l, GEM.ziggurat.id);
+}
+
+/** Ruined watchtower: hollow round tower, broken crown, a lit window slit. */
+function watchtower(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
+    const baseL = top(grid, face, cu, cv);
+    const H = 14 + rng.int(0, 6);
+    const R = 2.6;
+    for (let h = 1; h <= H; h++)
+        for (let dv = -3; dv <= 3; dv++)
+            for (let du = -3; du <= 3; du++) {
+                const d = Math.hypot(du, dv);
+                if (d > R + 0.4 || d < R - 0.8) continue; // hollow ring wall
+                // Broken crown: the top few courses crumble away on one side.
+                if (h > H - 3 && du + dv > (H - h) * 1.5) continue;
+                const band = h % 6 === 0;
+                overwrite(grid, face, cu + du, cv + dv, baseL + h, band ? ACCENT.tower.id : MASON.id);
+            }
+    // Lit window slit high on the wall, and a beacon gem on the crown.
+    put(grid, face, cu + 3, cv, baseL + Math.floor(H * 0.6), GEM.tower.id);
+    overwrite(grid, face, cu - 2, cv - 1, baseL + H - 2, GEM.tower.id);
+    // Fallen stones at the foot.
+    for (let i = 0; i < 6; i++) {
+        const a = rng.range(0, Math.PI * 2),
+            d = rng.range(3.5, 6);
+        const su = Math.round(cu + Math.cos(a) * d),
+            sv = Math.round(cv + Math.sin(a) * d);
+        if (isLand(grid, face, su, sv)) put(grid, face, su, sv, top(grid, face, su, sv) + 1, MASON.id);
+    }
+}
+
+/** Crystal grove: clusters of glowing leaning shards of mixed height — eerie at night. */
+function crystalGrove(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
+    const n = 7 + rng.int(0, 5);
+    for (let i = 0; i < n; i++) {
+        const a = rng.range(0, Math.PI * 2),
+            d = i === 0 ? 0 : rng.range(1.5, 7);
+        const su = Math.round(cu + Math.cos(a) * d),
+            sv = Math.round(cv + Math.sin(a) * d);
+        if (!isLand(grid, face, su, sv)) continue;
+        const sL = top(grid, face, su, sv);
+        const H = i === 0 ? 9 + rng.int(0, 4) : 3 + rng.int(0, 5);
+        const [lu, lv] = rng.pick([
+            [1, 0],
+            [-1, 0],
+            [0, 1],
+            [0, -1],
+        ] as Array<[number, number]>);
+        let ou = 0,
+            ov = 0;
+        overwrite(grid, face, su, sv, sL + 1, ACCENT.grove.id); // rooted socket
+        for (let h = 2; h <= H; h++) {
+            if (h % 3 === 0) {
+                ou += lu;
+                ov += lv;
+            }
+            put(grid, face, su + ou, sv + ov, sL + h, GEM.grove.id);
+        }
+    }
+}
+
+/** Aqueduct: a run of arches carrying a channel, broken partway along. */
+function aqueduct(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
+    const baseL = top(grid, face, cu, cv);
+    const half = 9 + rng.int(0, 3);
+    const deckL = baseL + 7;
+    const gap = rng.int(-half + 3, half - 3); // where it has fallen
+    for (let du = -half; du <= half; du++) {
+        const g = top(grid, face, cu + du, cv);
+        if (Math.abs(du - gap) <= 1) continue; // the break
+        // Piers every 4 columns, arches between them (open below the deck).
+        const pier = du % 4 === 0;
+        const archTop = deckL - 1 - (pier ? 0 : Math.round(2 * Math.sin(((((du % 4) + 4) % 4) / 4) * Math.PI)));
+        for (let l = g + 1; l <= deckL; l++) {
+            if (!pier && l < archTop) continue;
+            overwrite(grid, face, cu + du, cv, l, l === deckL ? ACCENT.aqueduct.id : MASON.id);
+            overwrite(grid, face, cu + du, cv + 1, l, MASON.id);
+        }
+        // Channel lip with glowing water-gems along the deck every few columns.
+        put(grid, face, cu + du, cv - 1, deckL + 1, MASON.id);
+        put(grid, face, cu + du, cv + 2, deckL + 1, MASON.id);
+        if (du % 3 === 0) put(grid, face, cu + du, cv, deckL + 1, GEM.aqueduct.id);
+    }
+}
+
+/* ---- sky islands ----------------------------------------------------------
+ * Extra floating islands spread through the sky, over land and sea, on top of
+ * the ground landmarks. Each is an inverted cone of rock under a grassy cap,
+ * with glowing drips and a tree or two; sizes and heights vary so the sky has
+ * depth. Kept below SHELL_DEPTH (the grid's ceiling) including the trees. */
+const SKY_ISLANDS = 10;
+const SKY_MIN_L = 46; // above the highest peaks (~layer 35)
+const SKY_MAX_L = 78; // leaves room for the cap + trees under SHELL_DEPTH (96)
+
+function skyIsland(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
+    const R = 3 + rng.int(0, 5); // 3..8
+    const capL = SKY_MIN_L + rng.int(0, SKY_MAX_L - SKY_MIN_L);
+    const depth = Math.round(R * rng.range(1.1, 1.6)); // cone below the cap
+    const nB = makeRng((rng() * 0xffffffff) | 0);
+    // Lumpy outline: a per-angle radius jitter.
+    const jag = Array.from({ length: 12 }, () => nB.range(0.75, 1.15));
+    const rAt = (du: number, dv: number) => {
+        const a = ((Math.atan2(dv, du) / (Math.PI * 2) + 1) % 1) * 12;
+        const i = Math.floor(a),
+            t = a - i;
+        return R * (jag[i % 12] * (1 - t) + jag[(i + 1) % 12] * t);
+    };
+    for (let dv = -R - 2; dv <= R + 2; dv++)
+        for (let du = -R - 2; du <= R + 2; du++) {
+            const d = Math.hypot(du, dv),
+                rr = rAt(du, dv);
+            if (d > rr) continue;
+            // Cone: deeper at the centre, shallow at the rim.
+            const bottom = Math.round(depth * (1 - (d / rr) ** 1.6));
+            for (let k = 0; k <= bottom; k++) {
+                const l = capL - k;
+                const id =
+                    k === 0 ? BLOCKS.GRASS.id : k <= 2 ? BLOCKS.SOIL.id : k === bottom ? ACCENT.biosphere.id : MASON.id;
+                overwrite(grid, face, cu + du, cv + dv, l, id);
+            }
+        }
+    // Glowing drips from the underside.
+    for (let k = 0; k < 3 + R; k++) {
+        const a = rng.range(0, Math.PI * 2),
+            d = rng.range(0, R * 0.7);
+        const su = cu + Math.round(Math.cos(a) * d),
+            sv = cv + Math.round(Math.sin(a) * d);
+        const under = capL - Math.round(depth * (1 - (d / R) ** 1.6)) - 1;
+        const len = rng.int(1, 4);
+        for (let j = 0; j < len; j++) put(grid, face, su, sv, under - j, j === len - 1 ? GEM.biosphere.id : MASON.id);
+    }
+    // A tree or two on top.
+    const trees = R >= 5 ? rng.int(1, 3) : 1;
+    const leaf = rng.pick([BLOCKS.LEAF_MINT, BLOCKS.LEAF_CREAM, BLOCKS.LEAF_PINK, BLOCKS.LEAF_LILAC] as any[]) as any;
+    for (let t = 0; t < trees; t++) {
+        const tu = cu + rng.int(-Math.floor(R / 2), Math.floor(R / 2)),
+            tv = cv + rng.int(-Math.floor(R / 2), Math.floor(R / 2));
+        const h = rng.int(3, 5);
+        for (let l = 1; l <= h; l++) put(grid, face, tu, tv, capL + l, BLOCKS.TRUNK_PALE.id);
+        for (let dv = -2; dv <= 2; dv++)
+            for (let du = -2; du <= 2; du++)
+                if (Math.abs(du) + Math.abs(dv) <= 3) put(grid, face, tu + du, tv + dv, capL + h + 1, leaf.id);
+        for (let dv = -1; dv <= 1; dv++)
+            for (let du = -1; du <= 1; du++) put(grid, face, tu + du, tv + dv, capL + h + 2, leaf.id);
     }
 }
 
 // ── Site picker & entry point ────────────────────────────────────────────────
 
-const BUILDERS = [twistedSpire, obelisk, monolithRing, tombstoneField, floatingBiosphere, ancientWell, ruinedArch];
+const BUILDERS = [
+    twistedSpire,
+    obelisk,
+    monolithRing,
+    tombstoneField,
+    floatingBiosphere,
+    ancientWell,
+    ruinedArch,
+    ziggurat,
+    watchtower,
+    crystalGrove,
+    aqueduct,
+];
 
-const KINDS: LandmarkRecord['kind'][] = ['spire', 'obelisk', 'ring', 'tombs', 'biosphere', 'well', 'arch'];
+const KINDS: LandmarkRecord['kind'][] = [
+    'spire',
+    'obelisk',
+    'ring',
+    'tombs',
+    'biosphere',
+    'well',
+    'arch',
+    'ziggurat',
+    'tower',
+    'grove',
+    'aqueduct',
+];
 
 export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<typeof makeRng>): LandmarkRecord[] {
     const records: LandmarkRecord[] = [];
+    // Deal kinds from shuffled decks across the whole planet, so all eleven
+    // appear before any repeats (a random start per face gave five tombstone
+    // fields on one seed and no ziggurat at all).
+    let deck: number[] = [];
+    const nextKind = () => {
+        if (!deck.length) {
+            deck = KINDS.map((_, i) => i);
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
+        }
+        return deck.pop()!;
+    };
 
     for (let face = 0; face < 6; face++) {
         const placed: [number, number][] = [];
         let attempts = 0;
-        let landmarkIdx = Math.floor(rng() * BUILDERS.length);
         // 16 over 6 faces: faces 0-3 get 3, faces 4-5 get 2.
         const quota = Math.floor(LANDMARK_TOTAL / 6) + (face < LANDMARK_TOTAL % 6 ? 1 : 0);
 
@@ -404,18 +644,33 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
             const tooClose = placed.some(([pu, pv]) => Math.abs(u - pu) < MIN_SEP && Math.abs(v - pv) < MIN_SEP);
             if (tooClose) continue;
 
-            const kind = KINDS[landmarkIdx % KINDS.length];
-            const builder = BUILDERS[landmarkIdx % BUILDERS.length];
+            const k = nextKind();
+            const kind = KINDS[k];
+            const builder = BUILDERS[k];
             // Open ground first: trees were planted before landmarks, and they hid
             // them (and lifted 'top' onto the canopy).
             clearAround(grid, face, u, v, CLEAR_R[kind]);
             builder(grid, face, u, v, makeRng((rng() * 0xffffffff) | 0));
             placed.push([u, v]);
-            landmarkIdx++;
 
             columnDir(face, u, v, FACE_RES, _tmp);
             records.push({ kind, dir: _tmp.clone() });
         }
+    }
+
+    // Sky islands: anywhere (land or sea), well apart from each other and from
+    // the ground landmarks' columns.
+    const sky: Array<[number, number, number]> = [];
+    for (let n = 0, tries = 0; n < SKY_ISLANDS && tries < SKY_ISLANDS * 80; tries++) {
+        const face = n % 6;
+        const u = 14 + Math.floor(rng() * (FACE_RES - 28));
+        const v = 14 + Math.floor(rng() * (FACE_RES - 28));
+        if (sky.some(([f, pu, pv]) => f === face && Math.hypot(u - pu, v - pv) < 60)) continue;
+        skyIsland(grid, face, u, v, makeRng((rng() * 0xffffffff) | 0));
+        sky.push([face, u, v]);
+        n++;
+        columnDir(face, u, v, FACE_RES, _tmp);
+        records.push({ kind: 'biosphere', dir: _tmp.clone(), sky: true });
     }
 
     return records;

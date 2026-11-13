@@ -26,6 +26,8 @@ const VERT = /* glsl */ `
   uniform float uRadius;
   varying float vShade;
   varying float vEdge;
+  varying vec3 vLocal;     // position inside this cloud (moves with it)
+  varying vec3 vNormalL;   // box-face normal, cloud-local
   void main() {
     // Wrap the drifting position back onto the disc (a torus wrap of the square
     // that contains it), then fade clouds out near the rim instead of popping.
@@ -35,6 +37,10 @@ const VERT = /* glsl */ `
     vEdge = 1.0 - smoothstep(0.78, 1.0, rim);
     float c = cos(aShape.y), s = sin(aShape.y);
     vec3 p = position * aShape.x;
+    // Texture coordinates ride along with the cloud; the per-instance yaw and
+    // scale offset them so no two clouds share a pattern.
+    vLocal = p + vec3(aShape.y * 37.0, aShape.x * 11.0, aShape.y * 19.0);
+    vNormalL = normal;
     p = vec3(c * p.x - s * p.z, p.y, s * p.x + c * p.z);
     vec3 world = uCentre + uE1 * (xy.x + p.x) + uE2 * (xy.y + p.z) + uUp * (aCloud.z + p.y);
     // Top faces bright, sides mid, undersides shaded.
@@ -54,9 +60,29 @@ const FRAG = /* glsl */ `
   uniform float uOpacity;
   varying float vShade;
   varying float vEdge;
+  varying vec3 vLocal;
+  varying vec3 vNormalL;
+
+  float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+  float n3(vec3 p) {
+    vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+               mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z);
+  }
+
   void main() {
-    vec3 col = mix(uShadow, uColor, vShade);
-    gl_FragColor = vec4(col, uOpacity * vEdge);
+    // Billows: soft lumps of light and shade across every face, two octaves of
+    // smooth noise so it reads as puffs, never as speckle.
+    float b = n3(vLocal * 0.18) * 0.65 + n3(vLocal * 0.47 + 7.3) * 0.35;
+    float billow = smoothstep(0.25, 0.8, b);
+    // Shade band per face, then billows lift and sink it; tops catch the sun.
+    float shade = vShade * mix(0.86, 1.08, billow);
+    shade += (vNormalL.y > 0.5 ? 0.06 : 0.0) * billow;
+    vec3 col = mix(uShadow, uColor, clamp(shade, 0.0, 1.15));
+    // Wispy rims: thin the alpha where the billow field is low, so the hard box
+    // silhouette frays softly instead of reading as a plastic slab.
+    float wisp = mix(0.72, 1.0, smoothstep(0.18, 0.55, b));
+    gl_FragColor = vec4(col, uOpacity * vEdge * wisp);
     #include <fog_fragment>
     #include <tonemapping_fragment>
     #include <colorspace_fragment>

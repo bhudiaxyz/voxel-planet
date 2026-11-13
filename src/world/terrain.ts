@@ -127,6 +127,45 @@ const CACTUS = registerBlock('CACTUS', {
     rough: 0.5,
     isTrunk: true,
 });
+/** Saguaro / barrel crown: the pale, woolly growing tip. */
+const CACTUS_CROWN = registerBlock('CACTUS_CROWN', {
+    top: c(0xd8e0a8),
+    side: c(0xb8cc80),
+    bottom: c(0x9cb468),
+    tint: c(0x8aa858),
+    pattern: PATTERN.CACTUS,
+    rough: 0.6,
+    isTrunk: true,
+});
+/** Cactus flowers (crown and barrel rim). */
+const CACTUS_FLOWER = registerBlock('CACTUS_FLOWER', {
+    top: c(0xffe066),
+    side: c(0xf2c94c),
+    bottom: c(0xd4a52c),
+    tint: c(0xfff2a8),
+    pattern: PATTERN.NONE,
+    rough: 0.3,
+    isTrunk: true,
+});
+const CACTUS_FLOWER_PINK = registerBlock('CACTUS_FLOWER_PINK', {
+    top: c(0xff7eb3),
+    side: c(0xf06292),
+    bottom: c(0xc2185b),
+    tint: c(0xffb3d1),
+    pattern: PATTERN.NONE,
+    rough: 0.3,
+    isTrunk: true,
+});
+/** Prickly-pear fruit on the paddle rims. */
+const CACTUS_FRUIT = registerBlock('CACTUS_FRUIT', {
+    top: c(0xd6336c),
+    side: c(0xb02a5b),
+    bottom: c(0x8a1f47),
+    tint: c(0xe85d8a),
+    pattern: PATTERN.NONE,
+    rough: 0.35,
+    isTrunk: true,
+});
 /** Dry desert scrub, drawn by the vegetation layer (see plantSingle). */
 const SCRUB_DRY = registerBlock('SCRUB_DRY', {
     top: c(0xb8a070),
@@ -368,7 +407,9 @@ function selectSurface(
     // ponytail: simple temp proxy from latitude (dir.y) + elevation
     const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
     if (temp > 0.6) return grass.id;
-    if (temp > 0.2) return grassLight.id;
+    // -0.05 (was 0.2): grassland reaches further into the cold uplands — grass cover
+    // 46.7% → 61.4% of land (+31%, measured over three seeds), from pale rock.
+    if (temp > -0.05) return grassLight.id;
     return stonePale.id;
 }
 
@@ -1155,12 +1196,17 @@ function plantDeadTrunk(
 }
 
 /**
- * A voxel cactus, varied in kind, height and size:
- *   saguaro  — tall column (4–9) with 0–3 arms that step out then turn upward,
- *              each arm at its own height and length
- *   barrel   — squat 1–2 high, 1 or 2 wide
- *   columns  — a clump of 2–4 slim columns of mixed heights
- * Only placed where the column above is clear, like every other plant.
+ * A voxel cactus, shaped after the real plants:
+ *   saguaro      — tall ribbed column, 2x2 at the base when big; arms leave the
+ *                  trunk at different heights, run out one block, turn up
+ *                  through a joint and taper; a pale crown, sometimes in flower
+ *   barrel       — squat and round: a plus-shaped body wider in the middle, a
+ *                  ring of flowers on the crown
+ *   prickly pear — flat paddle pads (2 wide, 1 thick) stacked at angles off one
+ *                  another, red fruit on the rims
+ *   organ pipe   — many slim stems fanning out from one shared base
+ * Only placed where the cells are clear and the ground is level, like every
+ * other plant.
  */
 function plantCactus(
     grid: SphereVoxelGrid,
@@ -1170,77 +1216,142 @@ function plantCactus(
     surfaceLayer: number,
     rng: ReturnType<typeof makeRng>,
 ) {
-    const set = (du: number, dl: number, dv: number) => {
+    const setId = (du: number, dl: number, dv: number, id: number) => {
         const nu = u + du,
             nv = v + dv,
             nl = surfaceLayer + 1 + dl;
         if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
         if (grid.get(face, nu, nv, nl) !== 0) return false;
-        grid.set(face, nu, nv, nl, CACTUS.id);
+        grid.set(face, nu, nv, nl, id);
         return true;
     };
-    // Only on level ground: a cactus straddling a dune step would float on one side.
+    const set = (du: number, dl: number, dv: number) => setId(du, dl, dv, CACTUS.id);
     const ground = (du: number, dv: number) => grid.columnTop(face, u + du, v + dv);
-    const kind = rng.pick(['saguaro', 'saguaro', 'saguaro', 'barrel', 'columns'] as const);
-
-    if (kind === 'barrel') {
-        const wide = rng.chance(0.4);
-        const h = rng.int(1, 2);
-        const cells: Array<[number, number]> = wide
-            ? [
-                  [0, 0],
-                  [1, 0],
-                  [0, 1],
-                  [1, 1],
-              ]
-            : [[0, 0]];
-        if (cells.some(([du, dv]) => ground(du, dv) !== surfaceLayer)) return;
-        for (const [du, dv] of cells) for (let l = 0; l < h; l++) set(du, l, dv);
-        return;
-    }
-
-    if (kind === 'columns') {
-        const n = rng.int(2, 4);
-        const spots: Array<[number, number]> = [
-            [0, 0],
-            [1, 0],
-            [-1, 0],
-            [0, 1],
-            [0, -1],
-            [1, 1],
-        ];
-        for (let k = 0; k < n; k++) {
-            const [du, dv] = spots[k];
-            if (ground(du, dv) !== surfaceLayer) continue;
-            const h = rng.int(2, k === 0 ? 5 : 4);
-            for (let l = 0; l < h; l++) set(du, l, dv);
-        }
-        return;
-    }
-
-    // Saguaro
-    const height = rng.int(4, 9);
-    for (let l = 0; l < height; l++) if (!set(0, l, 0)) return;
-    const dirs: Array<[number, number]> = [
+    const level = (cells: Array<[number, number]>) => cells.every(([du, dv]) => ground(du, dv) === surfaceLayer);
+    const DIRS: Array<[number, number]> = [
         [1, 0],
         [-1, 0],
         [0, 1],
         [0, -1],
     ];
-    // Shuffle so arms point different ways on different cacti.
+    const kind = rng.pick(['saguaro', 'saguaro', 'saguaro', 'barrel', 'barrel', 'pear', 'pear', 'organ'] as const);
+
+    if (kind === 'barrel') {
+        // Plus-shaped body (centre + 4 sides), the sides one layer shorter, so
+        // the silhouette bulges in the middle and rounds over at the top.
+        const big = rng.chance(0.5);
+        const cells: Array<[number, number]> = big ? [[0, 0], ...DIRS] : [[0, 0]];
+        if (!level(cells)) return;
+        const h = big ? rng.int(2, 3) : rng.int(1, 2);
+        for (let l = 0; l < h; l++) set(0, l, 0);
+        if (big) for (const [du, dv] of DIRS) for (let l = 0; l < h - 1; l++) set(du, l, dv);
+        // Flowers ring the crown.
+        const flower = rng.pick([CACTUS_FLOWER, CACTUS_FLOWER_PINK]);
+        if (big) for (const [du, dv] of DIRS) if (rng.chance(0.6)) setId(du, h - 1, dv, flower.id);
+        setId(0, h, 0, rng.chance(0.5) ? flower.id : CACTUS_CROWN.id);
+        return;
+    }
+
+    if (kind === 'pear') {
+        // Paddles: each a 2-wide, 2-tall, 1-thick slab; the next one grows off a
+        // top corner of the last, turned 90 degrees, so the clump zig-zags.
+        if (!level([[0, 0]])) return;
+        let ou = 0,
+            ol = 0,
+            ov = 0;
+        let alongU = rng.chance(0.5);
+        const pads = rng.int(3, 6);
+        for (let k = 0; k < pads; k++) {
+            const cells: Array<[number, number]> = alongU
+                ? [
+                      [ou, ov],
+                      [ou + 1, ov],
+                  ]
+                : [
+                      [ou, ov],
+                      [ou, ov + 1],
+                  ];
+            for (const [cu, cv] of cells) for (let l = 0; l < 2; l++) set(cu, ol + l, cv);
+            // Fruit on the rim.
+            if (rng.chance(0.35)) setId(cells[1][0], ol + 2, cells[1][1], CACTUS_FRUIT.id);
+            // Next pad from a top corner, turned.
+            const [nu, nv] = rng.pick(cells);
+            ou = nu;
+            ov = nv;
+            ol += 2;
+            alongU = !alongU;
+            if (ol > 7) break;
+        }
+        return;
+    }
+
+    if (kind === 'organ') {
+        // Many slim stems from one shared low base, fanning out a little as they rise.
+        if (!level([[0, 0], ...DIRS])) return;
+        set(0, 0, 0);
+        for (const [du, dv] of DIRS) set(du, 0, dv);
+        const stems: Array<[number, number]> = [[0, 0], ...DIRS, [1, 1], [-1, -1], [1, -1], [-1, 1]];
+        const n = rng.int(4, 7);
+        for (let k = 0; k < n; k++) {
+            let [su, sv] = stems[k];
+            const h = rng.int(3, 7);
+            for (let l = 1; l <= h; l++) {
+                // Lean outward one step partway up.
+                if (l === Math.floor(h / 2) && (su || sv) && rng.chance(0.5)) {
+                    set(su, l, sv); // joint
+                    su += Math.sign(su);
+                    sv += Math.sign(sv);
+                }
+                set(su, l, sv);
+            }
+            setId(su, h + 1, sv, CACTUS_CROWN.id);
+        }
+        return;
+    }
+
+    // Saguaro
+    const height = rng.int(5, 11);
+    const thick =
+        height >= 8 &&
+        level([
+            [0, 0],
+            [1, 0],
+            [0, 1],
+            [1, 1],
+        ]);
+    if (!level([[0, 0]])) return;
+    // Trunk: 2x2 for the lower third of a big one, then a single column.
+    for (let l = 0; l < height; l++) {
+        if (!set(0, l, 0)) return;
+        if (thick && l < height / 3) {
+            set(1, l, 0);
+            set(0, l, 1);
+            set(1, l, 1);
+        }
+    }
+    // Pale crown, and in flower now and then.
+    setId(0, height, 0, rng.chance(0.3) ? CACTUS_FLOWER.id : CACTUS_CROWN.id);
+    // Arms: shuffled directions, each at its own height; out one (or two), up
+    // through a joint, tapering to a pale tip.
+    const dirs = DIRS.slice();
     for (let i = dirs.length - 1; i > 0; i--) {
         const j = Math.floor(rng() * (i + 1));
         [dirs[i], dirs[j]] = [dirs[j], dirs[i]];
     }
-    const arms = height >= 5 ? rng.int(0, Math.min(3, height - 3)) : 0;
+    const arms = height >= 6 ? rng.int(1, Math.min(4, height - 4)) : 0;
+    const used = new Set<number>();
     for (let a = 0; a < arms; a++) {
         const [du, dv] = dirs[a];
-        const at = rng.int(2, height - 2); // arm height on the trunk
-        const reach = rng.chance(0.3) ? 2 : 1; // how far it steps out
-        const rise = rng.int(1, Math.max(1, height - at - 1)); // how far it climbs after turning up
+        let at = rng.int(Math.ceil(height * 0.35), height - 3);
+        while (used.has(at) && at < height - 2) at++; // stagger the arm heights
+        used.add(at);
+        const off = thick && at < height / 3 && (du > 0 || dv > 0) ? 1 : 0; // clear the 2x2 base
+        const reach = 1 + off + (rng.chance(0.25) ? 1 : 0);
+        const rise = rng.int(2, Math.max(2, height - at - 1));
         let ok = true;
         for (let r = 1; r <= reach && ok; r++) ok = set(du * r, at, dv * r);
         for (let l = 1; l <= rise && ok; l++) ok = set(du * reach, at + l, dv * reach);
+        if (ok) setId(du * reach, at + rise + 1, dv * reach, CACTUS_CROWN.id);
     }
 }
 

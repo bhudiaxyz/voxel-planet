@@ -179,10 +179,23 @@ export class SphereVoxelGrid {
         return this.surfaceLayer[this.colIdx(face, u, v)];
     }
 
-    /** Highest walkable (non-foliage) layer — ignores TRUNK, LEAF, and air. */
+    /**
+     * Highest walkable layer of the ground connected to the planet — ignores
+     * leaves, trunks, water and anything floating (sky islands, the biosphere).
+     *
+     * It walks UP from layer 0 to the first air gap rather than down from the
+     * column top: from the top, a floating island's grass read as "ground", so
+     * the player walking under one was snapped up onto it.
+     */
     groundColumnTop(face: number, u: number, v: number): number {
         if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
-        let l = this.surfaceLayer[this.colIdx(face, u, v)];
+        const surf = this.surfaceLayer[this.colIdx(face, u, v)];
+        if (surf < 0) return -1;
+        const base = this.idx(face, u, v, 0);
+        let l = 0;
+        // Contiguous solid-or-standing blocks from the bottom: terrain, then trees
+        // and water resting on it. An air gap ends the connected column.
+        while (l < surf && this.data[base + l + 1] !== 0) l++;
         while (l >= 0) {
             const id = this.data[this.idx(face, u, v, l)];
             if (id === 0) {
@@ -941,7 +954,9 @@ export function meshSphereFaceRegion(
                         [uvs[3], uvs[2], uvs[1], uvs[0]],
                         [ao[3], ao[2], ao[1], ao[0]],
                         patternPacked,
-                        (block as any).fringe || 0,
+                        // Carved landmark stone signals itself with fringe = -1 (fringe
+                        // is otherwise >= 0), picked up by patMasonry in the shader.
+                        (block as any).carved ? -1 : (block as any).fringe || 0,
                         [localV[3], localV[2], localV[1], localV[0]],
                     );
                 }
@@ -1585,6 +1600,39 @@ const FRAG_DECL = /* glsl */ `
     return mix(mortar, face, m);
   }
 
+  /**
+   * Carved landmark masonry: the brick courses with a clearer (still soft)
+   * mortar line, per-stone tone and a gentle weathering mottle; tops are large
+   * dressed slabs; side faces darken toward their foot with grime.
+   */
+  vec3 patMasonry(vec2 uv, vec3 base, vec3 mortar, bool top, bool side) {
+    float wear = vxNoise(uv * 2.3) * 0.6 + vxNoise(uv * 6.1 + 4.0) * 0.4;
+    if (top) {
+      // Two slabs per block, offset row to row.
+      vec2 p = vec2(uv.x + mod(floor(uv.y * 2.0), 2.0) * 0.5, uv.y * 2.0);
+      vec2 f = fract(p);
+      float m = min(smoothstep(0.0, 0.05, f.x) * smoothstep(0.0, 0.05, 1.0 - f.x),
+                    smoothstep(0.0, 0.1, f.y) * smoothstep(0.0, 0.1, 1.0 - f.y));
+      vec3 slab = base * (0.93 + 0.12 * vxHash(floor(p) + 2.3)) * (0.94 + 0.1 * wear);
+      return mix(mortar * 0.92, slab, m);
+    }
+    const float ch = 0.3333;
+    float row = floor(uv.y / ch);
+    vec2 p = vec2((uv.x + mod(row, 2.0) * 0.5) / 0.8, uv.y / ch);
+    vec2 f = fract(p);
+    float m = min(smoothstep(0.0, 0.06, f.x) * smoothstep(0.0, 0.06, 1.0 - f.x),
+                  smoothstep(0.0, 0.11, f.y) * smoothstep(0.0, 0.11, 1.0 - f.y));
+    float h = vxHash(floor(p) + 3.7);
+    vec3 stone = base * (0.9 + 0.16 * h) * (0.93 + 0.12 * wear);
+    // Chipped corners: the occasional stone darker at one end.
+    stone *= 1.0 - 0.1 * step(0.86, h) * smoothstep(0.5, 1.0, f.x);
+    vec3 c = mix(mortar * 0.85, stone, m);
+    // Grime at the foot of each block face (localV is not available here, so
+    // use the fractional height within the block).
+    if (side) c *= 0.9 + 0.1 * smoothstep(0.0, 0.5, fract(uv.y));
+    return c;
+  }
+
   vec3 patStone(vec2 uv, vec3 base, vec3 tint) {
     float n = vxNoise(uv * 1.6) * 0.6 + vxNoise(uv * 4.3) * 0.3 + vxNoise(uv * 11.0) * 0.1;
     vec3 col = mix(base, tint, smoothstep(0.42, 0.78, n));
@@ -1845,7 +1893,7 @@ const FRAG_BODY = /* glsl */ `
     bool isSide = abs(_radial) < 0.5;
     bool isTopFace = _radial > 0.5;
 
-    if (pat > 0.5 && pat < 1.5)      col = patBrick(vUvW, col, vTintV);
+    if (pat > 0.5 && pat < 1.5)      col = fringe < -0.5 ? patMasonry(vUvW, col, vTintV, isTopFace, isSide) : patBrick(vUvW, col, vTintV);
     else if (pat > 1.5 && pat < 2.5) col = patStone(vUvW, col, vTintV);
     else if (pat > 2.5 && pat < 3.5) col = patPlank(vUvW, col, vTintV);
     else if (pat > 3.5 && pat < 4.5) col = patBark(vUvW, col, vTintV);
@@ -2248,27 +2296,54 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v15' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v16' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 
 /** Emissive blocks (lanterns, crystals) — unlit, bright, bloom bait. */
 export function makeGlowMaterial() {
     const mat = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: true });
-    const GLOW_VERT_DECL = /* glsl */ `varying vec3 vNrmW;`;
-    const GLOW_FRAG_DECL = /* glsl */ `varying vec3 vNrmW;`;
+    const GLOW_VERT_DECL = /* glsl */ `
+      attribute vec2 aUv;
+      attribute vec3 aTint;
+      varying vec3 vNrmW;
+      varying vec3 vPosG;
+      varying vec2 vUvG;
+      varying vec3 vTintG;`;
+    const GLOW_FRAG_DECL = /* glsl */ `
+      varying vec3 vNrmW;
+      varying vec3 vPosG;
+      varying vec2 vUvG;
+      varying vec3 vTintG;`;
     mat.onBeforeCompile = (shader) => {
         shader.vertexShader = shader.vertexShader
             .replace('#include <common>', `#include <common>\n${GLOW_VERT_DECL}`)
-            .replace('#include <begin_vertex>', `#include <begin_vertex>\n  vNrmW = normal;`);
+            .replace(
+                '#include <begin_vertex>',
+                `#include <begin_vertex>\n  vNrmW = normal; vPosG = transformed; vUvG = aUv; vTintG = aTint;`,
+            );
         shader.fragmentShader = shader.fragmentShader
             .replace('#include <common>', `#include <common>\n${GLOW_FRAG_DECL}`)
             .replace(
                 '#include <color_fragment>',
                 `#include <color_fragment>
         {
-          float faceShade = vNrmW.y > 0.5 ? 1.06 : (vNrmW.y < -0.5 ? 0.8 : 0.94);
-          diffuseColor.rgb *= faceShade * 1.5;
+          // Faces shaded by the LOCAL up (radial), not world Y: on the planet's
+          // flanks world-Y shading made gem sides read as tops.
+          float r = dot(normalize(vNrmW), normalize(vPosG));
+          float faceShade = r > 0.5 ? 1.06 : (r < -0.5 ? 0.8 : 0.94);
+          // Faceted crystal: a bright core fading to the rim, two faint diagonal
+          // facet ridges, and a sheen toward the paler tint — so a gem face is a
+          // cut stone rather than a flat lamp.
+          vec2 f = fract(vUvG) - 0.5;
+          float core = 1.0 - smoothstep(0.0, 0.62, length(f));
+          float facet = 1.0 - smoothstep(0.0, 0.035, abs(abs(f.x) - abs(f.y)));
+          float rim = smoothstep(0.38, 0.5, max(abs(f.x), abs(f.y)));
+          vec3 c = mix(diffuseColor.rgb, vTintG, core * 0.45);
+          c *= 0.82 + 0.3 * core;
+          c += vTintG * facet * 0.18;
+          c *= 1.0 - rim * 0.22;
+          diffuseColor.rgb = c * faceShade * 1.5;
         }`,
             );
     };
@@ -2276,6 +2351,6 @@ export function makeGlowMaterial() {
         uAoStrength: { value: 0 },
         uAoTint: { value: new THREE.Color(1, 1, 1) },
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v4';
+    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v5';
     return mat;
 }
