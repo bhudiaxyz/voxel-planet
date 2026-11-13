@@ -907,7 +907,7 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 
 Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM here, so no new dependency). A `<details>` pill at top left (z-index 19, under the boot overlay, so it appears after entry); open, it is 200 px wide with a collapsible section per kind (colour swatch, count) and one 22 px row per named place (34 px on coarse pointers). Panel events don't propagate to the canvas, so clicks never grab pointer lock; buttons blur after use so WASD isn't captured. G / ☰ toggles it with the HUD; hidden by default on touch.
 
-`teleportTo(record)` in `main.ts`: leaves fly/drone mode, snaps the walker a few columns off the structure (6 for ground landmarks, 14 for sky islands) along a tangent, and sets yaw to face it (`-atan2(dot(toTarget, rgt), dot(toTarget, fwd))` on `tangentBasis`). Sky islands can't be reached on foot, so the player arrives in drone mode, pitched up. The streamer is filled synchronously so the first frame isn't empty; the dog reappears at heel by itself (it runs in when beyond `TELEPORT_DIST`).
+`teleportTo(record)` in `main.ts` **preserves the current mode**: it notes walk/drone/fly, leaves any air mode, snaps the walker a few columns off the structure (6 for ground landmarks, 14 for sky islands) along a tangent so the ground radius there is known, sets yaw to face the target (`-atan2(dot(toTarget, rgt), dot(toTarget, fwd))` on `tangentBasis`; pitched up 0.35 for sky islands), then re-enters the same mode there (`enterDrone` / `enterFly`). The streamer is filled synchronously so the first frame isn't empty; the dog reappears at heel by itself (it runs in when beyond `TELEPORT_DIST`).
 
 ---
 

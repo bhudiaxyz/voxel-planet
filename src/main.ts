@@ -244,11 +244,11 @@ async function start(): Promise<void> {
         else if (fly.active) exitFly();
     };
     /**
-     * Teleport to a landmark (planet-explorer's Locations panel). Ground
-     * landmarks: drop to walking a few columns off the structure (not inside it),
-     * facing it. Sky islands can't be reached on foot, so arrive in the drone
-     * beside the island. The dog reappears at heel on its own (it runs in when
-     * the player is beyond its TELEPORT_DIST).
+     * Teleport to a landmark (planet-explorer's Locations panel): arrive a few
+     * columns off the structure (not inside it), facing it, in whatever mode you
+     * were in — walking stays walking, drone and fly re-enter at the new spot.
+     * The dog reappears at heel on its own (it runs in when the player is beyond
+     * its TELEPORT_DIST).
      */
     const _tpDir = new THREE.Vector3(),
         _tpSide = new THREE.Vector3(),
@@ -261,6 +261,9 @@ async function start(): Promise<void> {
         _tpSide.addScaledVector(r.dir, -_tpSide.dot(r.dir)).normalize();
         const step = (cols * 2) / FACE_RES; // ~one column per (2 / FACE_RES) on the unit cube
         _tpDir.copy(r.dir).addScaledVector(_tpSide, step).normalize();
+        // Keep the current mode: leave it, move the walker (which finds the ground
+        // radius there), then re-enter the same mode at the new spot.
+        const mode = fly.active ? 'fly' : drone.active ? 'drone' : 'walk';
         if (fly.active) {
             fly.exit();
             fpCam.flyActive = false;
@@ -274,9 +277,11 @@ async function start(): Promise<void> {
         _tpFwd.copy(r.dir).sub(_tpDir).addScaledVector(_tpDir, -r.dir.clone().sub(_tpDir).dot(_tpDir)).normalize();
         const { fwd, rgt } = tangentBasis(_tpDir, 0);
         fpCam.yaw = -Math.atan2(_tpFwd.dot(rgt), _tpFwd.dot(fwd));
-        fpCam.pitch = r.sky ? 0.35 : 0;
-        if (r.sky) enterDrone();
-        world.streaming.update(drone.active ? drone.dir : controller.dir, Infinity); // no empty first frame
+        fpCam.pitch = r.sky ? 0.35 : 0; // look up toward a sky island
+        if (mode === 'drone') enterDrone();
+        else if (mode === 'fly') enterFly();
+        const at = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
+        world.streaming.update(at, Infinity); // no empty first frame
     };
     const locations = createLocations(world.landmarks, teleportTo);
     if (isTouchDevice) locations.hide(); // touch: opened from the ☰ panels button, as in planet-explorer
