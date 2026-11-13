@@ -10,7 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview --port 5161",
-    "check": "node scripts/check-controls.ts && node scripts/check-tiers.ts && node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts && node --import ./scripts/ts-resolve.mjs scripts/check-trees.ts && node --import ./scripts/ts-resolve.mjs scripts/check-rivers.ts && node scripts/check-sky-frame.ts",
+    "check": "node scripts/check-controls.ts && node scripts/check-tiers.ts && node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts && node --import ./scripts/ts-resolve.mjs scripts/check-trees.ts && node --import ./scripts/ts-resolve.mjs scripts/check-rivers.ts && node --import ./scripts/ts-resolve.mjs scripts/check-islands.ts && node scripts/check-sky-frame.ts",
     "format": "prettier --write \"src/**/*.{ts,css}\" \"scripts/**/*.ts\" vite.config.ts index.html"
   },
   "dependencies": {
