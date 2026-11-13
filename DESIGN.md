@@ -69,7 +69,9 @@ src/
     geoutil.ts                basisFromCode, columnDir, dirToFaceUV
   world/
     world.ts                  buildSphereWorld: generation order, streamer, vegetation, water
-    terrain.ts                Elevation, terracing, surface/rock, desert, trees, cacti, dead trunks, ground cover
+    terrain.ts                Elevation, terracing, surface/rock, desert, scatter pass (drives placement)
+    trees.ts                  Bark/leaf blocks, altitude zones (zoneOf, ZONE), species mixes, tree builders
+    plants.ts                 Ground-cover/shrub/cactus blocks, GROUND table, bushes, cacti, dead trunks, PLANT
     rivers.ts                 Fresh water: rivers, streams, lakes, ponds carved into the land (RIVER_WATER)
     wet-map.ts                Distance-to-water per column (critters, waterside plants)
     vegetation.ts             Lazy per-patch grass/flowers/plants/ground detail meshes
@@ -170,7 +172,9 @@ Seed handling (`main.ts`): `?seed=<word>` overrides the default `currentSeedWord
 
 ---
 
-## 4. Terrain generation (`world/terrain.ts`)
+## 4. Terrain generation (`world/terrain.ts`, `world/trees.ts`, `world/plants.ts`)
+
+`terrain.ts` owns elevation, column fill and the scatter pass. Tree blocks, zones and builders live in `trees.ts`; ground-cover blocks, the `GROUND` table and the bush/cactus/dead-trunk builders live in `plants.ts`. `plants.ts` imports `DEADWOOD` and `Zone` from `trees.ts`, never the reverse; `terrain.ts` re-exports `PLANT` for `vegetation.ts`. Block ids are auto-assigned in module-load order (`trees.ts` before `plants.ts`), so they are not stable across refactors and must never be persisted.
 
 `generateSphereTerrain(seed, onProgress)` resolves to `{ grid, spawn }` (async; see section 3). Two `Noise3` (Perlin) instances are used: `noise = Noise3(seed)` and `noise2 = Noise3(seed + 101)`. Tree/plant scattering uses `makeRng(seed ^ 0x7ace31)`, consumed in face -> v -> u order, so layout is deterministic for a given seed.
 
@@ -817,7 +821,7 @@ State: `dir` (unit direction from centre), `groundRadius` (eye radius), `vertica
 | --- | --- |
 | `GRAVITY` | 28 |
 | `JUMP_VEL` | 10.5 |
-| `WALK_SPEED` / `SPRINT_SPEED` | 9 / 20 |
+| `WALK_SPEED` / `SPRINT_SPEED` | 9 / 18 |
 | `EYE_HEIGHT` | 1.75 |
 | `MAX_STEP` | 1.1 |
 
@@ -825,11 +829,11 @@ Per update: look up the column under `dir`; `surfaceR = grid.surfaceRadius` (gro
 
 ### Drone (`player/drone.ts`)
 
-`createSphereDroneMode()` returns an object with `enter, exit, beginLanding, update` plus `active, landing, altitude, dir, heading`. Always cruises forward (a cinematic drone): base `DRONE_SPEED = 18` m/s (`DRONE_SPRINT_SPEED = 120` with Shift); W doubles it, S stops it. Yaw = mouse X plus A/D x 1.2 rad/s about `dir`; position advances as an arc about `dir x heading`. Vertical: a P-controller (`TERRAIN_FOLLOW_GAIN = 3`, clamped to +/-`DRONE_VSPEED/2`) pulls toward `terrainAlt + HOVER_HEIGHT (14)`; manual vertical input (`DRONE_VSPEED = 20` m/s) adds on top; floor is terrain + `MIN_CLEARANCE (1.5)`, ceiling `PLANET_RADIUS + SHELL_DEPTH + 50`. Landing (`L` or `beginLanding`) lerps altitude toward the surface at rate 3 and deactivates within 0.6 of it. `enter` lifts `ENTER_LIFT = 8` above the current eye radius and picks an initial heading perpendicular to `dir`. Camera: position radial, `up = dir`, look along `heading`. Note the drone uses `columnTop` for its floor, so it rides over tree canopy.
+`createSphereDroneMode()` returns an object with `enter, exit, beginLanding, update` plus `active, landing, altitude, dir, heading`. Always cruises forward (a cinematic drone): base `DRONE_SPEED = 18` m/s (`DRONE_SPRINT_SPEED = 91` with Shift); W doubles it, S stops it. Yaw = mouse X plus A/D x 1.2 rad/s about `dir`; position advances as an arc about `dir x heading`. Vertical: a P-controller (`TERRAIN_FOLLOW_GAIN = 3`, clamped to +/-`DRONE_VSPEED/2`) pulls toward `terrainAlt + HOVER_HEIGHT (14)`; manual vertical input (`DRONE_VSPEED = 20` m/s) adds on top; floor is terrain + `MIN_CLEARANCE (1.5)`, ceiling `PLANET_RADIUS + SHELL_DEPTH + 50`. Landing (`L` or `beginLanding`) lerps altitude toward the surface at rate 3 and deactivates within 0.6 of it. `enter` lifts `ENTER_LIFT = 8` above the current eye radius and picks an initial heading perpendicular to `dir`. Camera: position radial, `up = dir`, look along `heading`. Note the drone uses `columnTop` for its floor, so it rides over tree canopy.
 
 ### Fly (`player/fly.ts`)
 
-`createSphereFlyMode()`: free flight; `wishDir` arcs on the sphere at `FLY_SPEED = 24` (`FLY_SPRINT = 70`) m/s; vertical from `drainDroneAltDelta`. Terrain floor `columnTop + 1 + FLOOR_CLEARANCE (1.75)` with descent smoothed (`FLOOR_DROP_RATE = 8` m/s) so cliffs do not snap; auto-climb probes `LOOK_AHEAD = 6` arc-metres ahead and raises altitude by up to `AUTO_CLIMB_RATE = 14` m/s if terrain ahead is higher. The camera orientation is then set by `fpCam.updateSphere` (mouse yaw/pitch apply, up = `fly.dir`).
+`createSphereFlyMode()`: free flight; `wishDir` arcs on the sphere at `FLY_SPEED = 24` (`FLY_SPRINT = 63`) m/s; vertical from `drainDroneAltDelta`. Terrain floor `columnTop + 1 + FLOOR_CLEARANCE (1.75)` with descent smoothed (`FLOOR_DROP_RATE = 8` m/s) so cliffs do not snap; auto-climb probes `LOOK_AHEAD = 6` arc-metres ahead and raises altitude by up to `AUTO_CLIMB_RATE = 14` m/s if terrain ahead is higher. The camera orientation is then set by `fpCam.updateSphere` (mouse yaw/pitch apply, up = `fly.dir`).
 
 ### Mode cycling and handoff (`main.ts`)
 
@@ -862,7 +866,7 @@ Column-grid A*. Nodes are surface columns `(face, u, v)`; neighbours are the 8 s
 | `HEEL_SIDE` / `HEEL_AHEAD` | 1.5 / 4.0 | Heel spot: player's right, ahead (+1.5 while the player is walking) |
 | `TELEPORT_DIST` | 45 / PLANET_RADIUS rad | Beyond this it reappears and runs in |
 | `STRANDED_DIST` | 8 / PLANET_RADIUS rad | Unreachable and farther than this -> reappear; closer -> wait and re-plan |
-| `TROT_SPEED` / `RUN_SPEED` | 8 / 22 m/s | Run (faster than sprint 20) when more than `RUN_COLS = 10` waypoints remain |
+| `TROT_SPEED` / `RUN_SPEED` | 8 / 22 m/s | Run (faster than sprint 18) when more than `RUN_COLS = 10` waypoints remain |
 | `SEARCH_BUDGET` | 400 | A* nodes per frame |
 | `REPLAN_DRIFT` / `REPLAN_EVERY` | 2 columns / 1.5 s | Re-plan when the heel spot drifts or on a timer |
 | `HOP_SLOWDOWN` / `HOP_HEIGHT` / `STEP_EASE` | 0.65 / 0.7 / 12 | Terrace hop speed factor, arc height, vertical easing |
