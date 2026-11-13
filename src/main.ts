@@ -167,8 +167,11 @@ async function start(): Promise<void> {
     }
     if (ts.foliageDetail && voxMat) {
         // Leaf-cluster shading on canopy blocks; a define, so tiers without it pay nothing.
-        voxMat.defines = { ...(voxMat.defines || {}), FOLIAGE_DETAIL: 1 };
-        voxMat.needsUpdate = true;
+        // Both terrain materials: the solid one and the double-sided leaf one.
+        for (const m of (world.streaming.meshes as any).materials ?? [voxMat]) {
+            m.defines = { ...(m.defines || {}), FOLIAGE_DETAIL: 1 };
+            m.needsUpdate = true;
+        }
     }
     if (voxMat?.userData?.uniforms) {
         let storedWind = SETTINGS_DEFAULTS.windStrength;

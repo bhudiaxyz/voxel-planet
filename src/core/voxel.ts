@@ -204,7 +204,9 @@ export class SphereVoxelGrid {
             }
             const b = BLOCK_BY_ID[id] as any;
             // River/lake water is walked through: the ground is the bed beneath it.
-            if (!b?.sway && !b?.isTrunk && !b?.isWater) break;
+            // Leaves are too — but `solid` foliage (bushes, shrubs) is ground: you
+            // stand on / bump into a bush rather than walking through it.
+            if (b?.solid || (!b?.sway && !b?.isTrunk && !b?.isWater)) break;
             l--;
         }
         return l;
@@ -329,9 +331,25 @@ class MeshBuffer {
     dat: number[] = [];
     idx: number[] = [];
     count = 0;
+    /** Index offset where appended leaf faces start (-1 = none); see append(). */
+    leafStart = -1;
 
     get empty() {
         return this.count === 0;
+    }
+
+    /**
+     * Append another buffer's quads after this one's (leaf faces after solid), so
+     * toGeometry() can emit two draw groups: front-sided solid, double-sided leaves.
+     */
+    append(o: MeshBuffer) {
+        if (o.empty) return;
+        this.leafStart = this.idx.length;
+        const b = this.count;
+        for (const k of ['pos', 'nrm', 'col', 'tint', 'fringeCol', 'uv', 'dat'] as const)
+            for (const x of o[k]) this[k].push(x);
+        for (const i of o.idx) this.idx.push(i + b);
+        this.count += o.count;
     }
 
     quad(
@@ -419,6 +437,12 @@ class MeshBuffer {
                 ? new THREE.BufferAttribute(new Uint16Array(this.idx), 1)
                 : new THREE.BufferAttribute(new Uint32Array(this.idx), 1),
         );
+        // Two draw groups when leaves were appended: material 0 (front-sided solid),
+        // material 1 (double-sided leaves). The mesh takes [solidMat, leafMat].
+        if (this.leafStart >= 0) {
+            g.addGroup(0, this.leafStart, 0);
+            g.addGroup(this.leafStart, this.idx.length - this.leafStart, 1);
+        } else g.addGroup(0, this.idx.length, 0);
         g.computeBoundingSphere();
         return g;
     }
@@ -433,6 +457,11 @@ function createMeshRoots() {
     edgeGroup.name = 'voxel-edges';
 
     const solidMat = makeVoxelMaterial();
+    // Leaves: the same voxel material, double-sided, sharing every uniform object
+    // (wind, fade, lighting) so the two stay in lockstep.
+    const leafMat = makeVoxelMaterial();
+    leafMat.side = THREE.DoubleSide;
+    leafMat.userData.uniforms = solidMat.userData.uniforms;
     const glowMat = makeGlowMaterial();
     const edgeMat = makeEdgeMaterial();
     // Preserve the former single-edge-object access path for developer tools.
@@ -443,6 +472,9 @@ function createMeshRoots() {
         glow: glowGroup,
         edges: edgeGroup,
         material: solidMat,
+        /** [front-sided solid, double-sided leaves] — chunk geometry groups 0 and 1. */
+        materials: [solidMat, leafMat],
+        leafMaterial: leafMat,
         glowMaterial: glowMat,
         edgeMaterial: edgeMat,
     };
@@ -464,11 +496,16 @@ function buildSphereMeshChunk(
     const v1 = Math.min(v0 + CHUNK, FACE_RES);
     const solid = new MeshBuffer(),
         glow = new MeshBuffer(),
+        leaves = new MeshBuffer(),
         edgeMap = wantEdges ? new Map() : null;
-    meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1);
+    meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1, leaves);
+    // Leaf faces ride in the solid mesh as a second, double-sided draw group: from
+    // inside a bush or canopy the outward-facing faces are back faces, and front-
+    // sided culling made the plant see-through. Only leaves pay the double side.
+    solid.append(leaves);
     const record: any = { solid: null, glow: null, edges: null };
     if (!solid.empty) {
-        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.material);
+        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.materials);
         record.solid.name = `terrain-${face}-${ci}-${ck}`;
         record.solid.castShadow = true;
         record.solid.receiveShadow = true;
@@ -805,6 +842,8 @@ export function meshSphereFaceRegion(
     glow: any,
     edgeMap: any,
     uHalo = 0,
+    /** Optional buffer for leaf (sway) faces, drawn double-sided; falls back to `solid`. */
+    leaves: MeshBuffer | null = null,
 ) {
     const _fn = new THREE.Vector3(),
         _ftu = new THREE.Vector3(),
@@ -883,7 +922,8 @@ export function meshSphereFaceRegion(
                 if (id === 0) continue;
                 const block = BLOCK_BY_ID[id];
                 if (!block) continue;
-                const target = (block as any).emissive ? glow : solid;
+                // Leaves go to their own buffer (drawn double-sided; see buildSphereMeshChunk).
+                const target = (block as any).emissive ? glow : (block as any).sway && leaves ? leaves : solid;
                 const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
                 const isWaterBlk = !!(block as any).isWater;
 
@@ -2599,7 +2639,10 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v25' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v26' +
+        (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') +
+        (mat.defines?.FAR_FIELD ? '-far' : '') +
+        (mat.side === THREE.DoubleSide ? '-ds' : '');
     return mat;
 }
 

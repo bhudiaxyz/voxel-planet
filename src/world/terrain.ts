@@ -14,39 +14,43 @@ const AMPLITUDE = 24; // max layers above/below sea level
 
 // Ground-cover and shrub block types — registered once, reused by scatter
 const c = (hex: number) => new THREE.Color(hex);
+// Flowering-shrub accents. These were pale blossom pastels that read as washed-out
+// pink under the leafy shading; now deeper, richer flowering-shrub tones.
 const BUSH_ROSE = registerBlock('BUSH_ROSE', {
-    top: c(0xdec3c8),
-    side: c(0xd3b5bc),
-    bottom: c(0xc1a3aa),
-    tint: c(0xd0adb4),
-    topTint: c(0xd6b9be),
+    top: c(0xa8485e), // deep raspberry
+    side: c(0x8e3a4e),
+    bottom: c(0x6e2c3c),
+    tint: c(0xc46a7e),
+    topTint: c(0xb4526a),
     pattern: PATTERN.GRASS,
     rough: 0.45,
 });
 const BUSH_MAUVE = registerBlock('BUSH_MAUVE', {
-    top: c(0xd2c3ca),
-    side: c(0xc6b5be),
-    bottom: c(0xb3a3ab),
-    tint: c(0xc2afb8),
-    topTint: c(0xcabac1),
+    top: c(0x7a4a72), // plum heather
+    side: c(0x653c5e),
+    bottom: c(0x4e2e48),
+    tint: c(0x9a6890),
+    topTint: c(0x86547e),
     pattern: PATTERN.GRASS,
     rough: 0.45,
 });
 const BUSH_CREAM = registerBlock('BUSH_CREAM', {
-    top: c(0xe6dac9),
-    side: c(0xdbcdbb),
-    bottom: c(0xc8baa8),
-    tint: c(0xd6c7b4),
-    topTint: c(0xdfd2c1),
+    top: c(0xb8924a), // warm honey / golden broom
+    side: c(0x9c7a3c),
+    bottom: c(0x7a5e2e),
+    tint: c(0xd0ac64),
+    topTint: c(0xc29c52),
     pattern: PATTERN.GRASS,
     rough: 0.45,
 });
+// Alpine scrub: was a pale pinky grey that stood out among the greens; now a
+// deeper weathered grey-green, like wind-cut heath on high ground.
 const SCRUB_BLOCK = registerBlock('SCRUB', {
-    top: c(0xc6bcbe),
-    side: c(0xbaafb2),
-    bottom: c(0xa79ca0),
-    tint: c(0xb5a9ad),
-    topTint: c(0xbfb4b7),
+    top: c(0x6e7a64),
+    side: c(0x5c6754),
+    bottom: c(0x464f40),
+    tint: c(0x8a9478),
+    topTint: c(0x78846c),
     pattern: PATTERN.GRASS,
     rough: 0.6,
 });
@@ -85,12 +89,13 @@ const LICHEN_PALE = registerBlock('LICHEN_PALE', {
     pattern: PATTERN.STONE,
     rough: 0.65,
 });
+// Tall shrub plant: was a pinky grey; now a dusky sage.
 const SHRUB_TALL = registerBlock('SHRUB_TALL', {
-    top: c(0xb8a0a8),
-    side: c(0xac9298),
-    bottom: c(0x9a8088),
-    tint: c(0xa89098),
-    topTint: c(0xb8a2a8),
+    top: c(0x7e8a62),
+    side: c(0x6a7552),
+    bottom: c(0x535c40),
+    tint: c(0x96a276),
+    topTint: c(0x8a966c),
     pattern: PATTERN.GRASS,
     rough: 0.5,
 });
@@ -305,7 +310,8 @@ const shrub = (name: string, top: number, side: number) =>
         tint: c(top).lerp(c(0xd8e8a0), 0.25),
         pattern: PATTERN.NONE,
         rough: 0.4,
-        sway: true,
+        sway: true, // leafy shading + gentle sway…
+        solid: true, // …but a bush is an obstacle, not walk-through like a canopy
     });
 const SHRUB_SAGE = shrub('SHRUB_SAGE', 0x8aa070, 0x748a5c);
 const SHRUB_OLIVE = shrub('SHRUB_OLIVE', 0x7a8a3c, 0x66752f);
@@ -315,7 +321,8 @@ const SHRUB_BLUEGREEN = shrub('SHRUB_BLUEGREEN', 0x5a8a74, 0x4a7461);
 const SHRUB_LIME = shrub('SHRUB_LIME', 0x9cb84a, 0x84a03c);
 const SHRUB_RUSSET = shrub('SHRUB_RUSSET', 0x9a6a3a, 0x7e562e); // autumn / dry
 /** Flowering accents: the old blossom bushes, now leafy too, used sparingly. */
-for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM]) Object.assign(b, { sway: true, pattern: PATTERN.NONE });
+for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK])
+    Object.assign(b, { sway: true, solid: true, pattern: PATTERN.NONE });
 const BUSH_PALETTE = [SHRUB_FOREST, SHRUB_SAGE, SHRUB_DEEP, SHRUB_LIME, SHRUB_FOREST, BUSH_ROSE];
 
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */

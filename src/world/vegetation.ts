@@ -597,6 +597,9 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
     for (let k = 0; k < n; k++) {
         // Three kinds, so a canopy edge has a natural mix rather than one length:
         // short wisps (50%), medium strands (35%) and long thick lianas (15%).
+        // Lengths scale with the canopy's height: a low crown (~3 layers up) keeps
+        // these base lengths; a tall tree's crown trails proportionally longer vines.
+        const reach = Math.max(1, clearance / 3);
         const kind = rng();
         const [len, width] =
             kind < 0.5
@@ -605,6 +608,7 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
                   ? [rng.range(0.9, 2.2), rng.range(0.06, 0.11)]
                   : [rng.range(2.2, 4.0), rng.range(0.08, 0.14)];
         const maxLen = Math.max(0.3, clearance - 0.6); // never reach the ground
+        const L = (x: number) => Math.min(maxLen, x * reach);
         // A tuft grown DOWN: base at the leaf underside, tip below it.
         const r = root(under, rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
         _down.copy(_up).negate();
@@ -619,7 +623,7 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
                 r2,
                 _down,
                 width * 0.7,
-                len * rng.range(0.75, 0.95),
+                L(len * rng.range(0.75, 0.95)),
                 cols.vine,
                 cols.vineTip,
                 rng() * 6.28,
@@ -633,8 +637,8 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
             buf,
             r,
             _down,
-            width,
-            Math.min(maxLen, len),
+            width * Math.min(1.6, Math.sqrt(reach)), // long vines are thicker cords
+            L(len),
             cols.vine,
             cols.vineTip,
             rng() * 6.28,
