@@ -97,7 +97,7 @@ export class FPCamera {
         const dom = this._dom;
 
         dom.addEventListener('pointerdown', (e: PointerEvent) => {
-            if (e.button === 0 && !this.isLocked) dom.requestPointerLock();
+            if (e.pointerType === 'mouse' && e.button === 0 && !this.isLocked) dom.requestPointerLock();
         });
 
         document.addEventListener('pointerlockchange', () => {

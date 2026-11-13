@@ -493,6 +493,7 @@ async function start(): Promise<void> {
             ctrlEl.textContent = isTouchDevice
                 ? 'Left thumb · move   Right drag · look   ↑ · jump   ✈ · walk / drone / fly   ⏸ · controls'
                 : 'WASD · move   Mouse · look   Space · jump   F · walk / drone / fly   L · land   M · map';
+            if (isTouchDevice) bootEl.querySelector('.ls-enter')!.textContent = 'Tap to enter';
             bootEl.classList.add('ready');
             bootEl.addEventListener(
                 'click',
@@ -500,7 +501,7 @@ async function start(): Promise<void> {
                     hud.showSettingsBtn();
                     bootEl.classList.add('dismissed');
                     bootEl.addEventListener('transitionend', () => bootEl.classList.add('gone'), { once: true });
-                    renderer.domElement.requestPointerLock();
+                    if (!isTouchDevice) renderer.domElement.requestPointerLock();
                 },
                 { once: true },
             );
