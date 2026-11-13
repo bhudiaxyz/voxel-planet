@@ -183,6 +183,8 @@ async function start(): Promise<void> {
             /* ignore */
         }
         voxMat.userData.uniforms._windBase = storedWind;
+        // Hanging vines (vegetation) ride the same canopy wind as the leaf blocks.
+        world.veg.setCanopyWind(voxMat.userData.uniforms);
     }
 
     const rng = makeRng(SEED);

@@ -38,6 +38,16 @@ const PATCHES_PER_EDGE = Math.ceil(FACE_RES / VEG_PATCH);
 type Rng = ReturnType<typeof makeRng>;
 
 /** Shared across every patch: one program, one uniform set, one wind clock. */
+/** Canopy wind uniforms from the voxel material, shared by reference (see setCanopyWind). */
+const canopyWind = {
+    uWindTime: { value: 0 },
+    uWindDir: { value: new THREE.Vector2(1, 0) },
+    uWindStrength: { value: 0 },
+    uPlanetRadius: { value: 350 },
+};
+/** Phase offset that marks hanging growth (vines): it rides the canopy's sway. */
+const HANGING = 100;
+
 function makeVegMaterial(windAmp: number) {
     const uniforms = {
         uTime: { value: 0 },
@@ -52,7 +62,7 @@ function makeVegMaterial(windAmp: number) {
         depthWrite: false,
     });
     mat.onBeforeCompile = (shader) => {
-        Object.assign(shader.uniforms, uniforms);
+        Object.assign(shader.uniforms, uniforms, canopyWind);
         // Normals carry the surface up, not the blade facing. DoubleSide would
         // flip them on back faces — pointing into the ground and rendering the
         // blade black — so keep the same normal on both sides.
@@ -66,7 +76,9 @@ function makeVegMaterial(windAmp: number) {
                 /* glsl */ `#include <common>
                 attribute vec2 aDetail;
                 uniform float uTime;
-                uniform float uWindAmp;`,
+                uniform float uWindAmp;
+                uniform float uWindTime, uWindStrength, uPlanetRadius;
+                uniform vec2 uWindDir;`,
             )
             .replace(
                 '#include <begin_vertex>',
@@ -76,6 +88,25 @@ function makeVegMaterial(windAmp: number) {
                     // so grass on the planet's flank bends sideways rather
                     // than into the ground. Positions are world-space here.
                     float sway = aDetail.x, phase = aDetail.y;
+                    // Hanging vines (phase >= 100): first move the whole vine with the
+                    // canopy it hangs from — the voxel shader's exact leaf sway (same
+                    // phase, height ramp and tangent wind, default stiffness 0.55) —
+                    // so it doesn't detach from a swaying crown. Its own tip sway
+                    // below then trails on top.
+                    if (phase >= ${HANGING}.0 && uWindStrength > 0.0) {
+                        phase -= ${HANGING}.0;
+                        float cph = transformed.x * 0.31 + transformed.z * 0.27;
+                        float flex = mix(0.35, 1.6, 0.55), rate = mix(0.85, 1.25, 0.55);
+                        float cs = (sin(uWindTime * 1.1 * rate + cph) * 0.6
+                                  + sin(uWindTime * 0.47 * rate + cph * 1.9) * 0.4) * uWindStrength * flex;
+                        float hT = clamp((length(transformed) - uPlanetRadius) / 28.0, 0.0, 1.0);
+                        vec3 rad = normalize(transformed);
+                        vec3 w3 = normalize(vec3(uWindDir.x, 0.0, uWindDir.y));
+                        vec3 wt = w3 - dot(w3, rad) * rad;
+                        float wl = length(wt);
+                        wt = wl > 0.001 ? wt / wl : vec3(1.0, 0.0, 0.0);
+                        transformed += wt * cs * hT;
+                    } else if (phase >= ${HANGING}.0) phase -= ${HANGING}.0;
                     vec3 up = normalize(transformed);
                     vec3 t1 = normalize(cross(up, abs(up.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
                     vec3 t2 = cross(up, t1);
@@ -86,7 +117,7 @@ function makeVegMaterial(windAmp: number) {
                 }`,
             );
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-sphereveg-v3';
+    mat.customProgramCacheKey = () => 'VoxelWorld-sphereveg-v4';
     return { mat, uniforms };
 }
 
@@ -162,8 +193,11 @@ function tuft(
     leanA: number,
     leanB: number,
     sway: number,
+    /** Added to the phase attribute only (e.g. HANGING marks vines); not to the facing. */
+    phaseTag = 0,
 ) {
     const hw = w * 0.5;
+    const ph = rot + phaseTag;
     const c = Math.cos(rot),
         s = Math.sin(rot);
     // Contact shadow: the root sits in its own shade (the blades around it block
@@ -179,10 +213,10 @@ function tuft(
         const tx = base.x + up.x * h + _ta.x * leanA + _tb.x * leanB,
             ty = base.y + up.y * h + _ta.y * leanA + _tb.y * leanB,
             tz = base.z + up.z * h + _ta.z * leanA + _tb.z * leanB;
-        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, _root, 0, rot);
-        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, rot);
-        buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, rot);
-        buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, rot);
+        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, _root, 0, ph);
+        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, ph);
+        buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, ph);
+        buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, ph);
     }
 }
 
@@ -557,14 +591,58 @@ const LITTER_BROWN = new THREE.Color(0.32, 0.22, 0.12);
  * Hanging growth under a canopy block: vines and moss strands drooping from the
  * leaf underside (`under` = the bottom face centre), swaying at the tips.
  */
-function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: DetailColours) {
-    const n = rng.int(1, 3);
+/** @param clearance layers of air under the canopy: vines stop short of the ground. */
+function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: DetailColours, clearance = 3) {
+    const n = rng.int(1, 4);
     for (let k = 0; k < n; k++) {
-        const len = rng.range(0.6, 1.8);
+        // Three kinds, so a canopy edge has a natural mix rather than one length:
+        // short wisps (50%), medium strands (35%) and long thick lianas (15%).
+        const kind = rng();
+        const [len, width] =
+            kind < 0.5
+                ? [rng.range(0.3, 0.9), rng.range(0.04, 0.08)]
+                : kind < 0.85
+                  ? [rng.range(0.9, 2.2), rng.range(0.06, 0.11)]
+                  : [rng.range(2.2, 4.0), rng.range(0.08, 0.14)];
+        const maxLen = Math.max(0.3, clearance - 0.6); // never reach the ground
         // A tuft grown DOWN: base at the leaf underside, tip below it.
         const r = root(under, rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
         _down.copy(_up).negate();
-        tuft(buf, r, _down, rng.range(0.05, 0.1), len, cols.vine, cols.vineTip, rng() * 6.28, 0, 0, 0.9);
+        // Lianas often hang as a pair of cords twisting a little apart.
+        if (kind >= 0.85 && rng() < 0.6) {
+            const r2 = _base2
+                .copy(r)
+                .addScaledVector(_ta, rng.range(-0.12, 0.12))
+                .addScaledVector(_tb, rng.range(-0.12, 0.12));
+            tuft(
+                buf,
+                r2,
+                _down,
+                width * 0.7,
+                len * rng.range(0.75, 0.95),
+                cols.vine,
+                cols.vineTip,
+                rng() * 6.28,
+                0,
+                0,
+                1.0,
+                HANGING,
+            );
+        }
+        tuft(
+            buf,
+            r,
+            _down,
+            width,
+            Math.min(maxLen, len),
+            cols.vine,
+            cols.vineTip,
+            rng() * 6.28,
+            0,
+            0,
+            kind >= 0.85 ? 1.0 : 0.9,
+            HANGING,
+        );
     }
 }
 const _down = new THREE.Vector3();
@@ -773,7 +851,13 @@ export function createSphereVegetation(
                         const rise = g - SEA_LAYER;
                         const hangP = HANG_P * groundDetail * (rise <= 7 ? 1 : rise <= 11 ? 0.35 : 0);
                         if (low - g >= 3 && drng() < hangP)
-                            drawHanging(buf, _base.copy(_up).multiplyScalar(PLANET_RADIUS + low), drng, cols);
+                            drawHanging(
+                                buf,
+                                _base.copy(_up).multiplyScalar(PLANET_RADIUS + low),
+                                drng,
+                                cols,
+                                low - g - 1,
+                            );
                     }
                     continue;
                 }
@@ -854,6 +938,14 @@ export function createSphereVegetation(
     const _fp = new THREE.Vector3();
     return {
         group,
+        /** Share the voxel canopy's wind uniforms, so hanging vines sway with the crowns. */
+        setCanopyWind(u: { uWindTime: any; uWindDir: any; uWindStrength: any; uPlanetRadius: any }) {
+            canopyWind.uWindTime = u.uWindTime;
+            canopyWind.uWindDir = u.uWindDir;
+            canopyWind.uWindStrength = u.uWindStrength;
+            canopyWind.uPlanetRadius = u.uPlanetRadius;
+            mat.needsUpdate = true;
+        },
         /** Flower-drift density 0..1 at a unit direction (same field the flowers use). */
         bloomAt(dir: THREE.Vector3): number {
             return field(flowerNoise, _fp.copy(dir).multiplyScalar(PLANET_RADIUS + 20), FLOWER_FREQ);

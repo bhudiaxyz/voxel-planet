@@ -275,6 +275,10 @@ const BARK_REDWOOD = registerBlock('BARK_REDWOOD', {
     isTrunk: true,
 });
 
+/** Minimum clear radius (columns) around a tree / a bush (see the spacing claim grid). */
+const TREE_GAP = 4;
+const BUSH_GAP = 2;
+
 /** Per grass/stone column above the lowlands: a dead trunk, rarer than living trees. */
 const DEAD_TRUNK_P = 0.0012;
 /** Dead trunks only from the grassland/forest band upward (layers above sea). */
@@ -286,7 +290,33 @@ const DESERT_MAX_RISE = 6;
 /** Chance per desert sand column of a cactus — sparse, so each one stands alone. */
 const CACTUS_P = 0.006;
 
-const BUSH_PALETTE = [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, BUSH_ROSE, BUSH_MAUVE];
+/*
+ * Foliage bushes. The old bushes were dusty rose/mauve/cream (blossom palette)
+ * with the grass pattern, so they read as pink lumps, not shrubs. These are real
+ * leaf greens and are `sway` blocks, so they get the canopy shading (lit clumps,
+ * shaded pockets, leaf speckle), per-plant shade variety, and a gentle sway —
+ * and, like leaves, you can push through them.
+ */
+const shrub = (name: string, top: number, side: number) =>
+    registerBlock(name, {
+        top: c(top),
+        side: c(side),
+        bottom: c(side).multiplyScalar(0.78),
+        tint: c(top).lerp(c(0xd8e8a0), 0.25),
+        pattern: PATTERN.NONE,
+        rough: 0.4,
+        sway: true,
+    });
+const SHRUB_SAGE = shrub('SHRUB_SAGE', 0x8aa070, 0x748a5c);
+const SHRUB_OLIVE = shrub('SHRUB_OLIVE', 0x7a8a3c, 0x66752f);
+const SHRUB_DEEP = shrub('SHRUB_DEEP', 0x3f6a32, 0x325627);
+const SHRUB_FOREST = shrub('SHRUB_FOREST', 0x4f7d3a, 0x41692f);
+const SHRUB_BLUEGREEN = shrub('SHRUB_BLUEGREEN', 0x5a8a74, 0x4a7461);
+const SHRUB_LIME = shrub('SHRUB_LIME', 0x9cb84a, 0x84a03c);
+const SHRUB_RUSSET = shrub('SHRUB_RUSSET', 0x9a6a3a, 0x7e562e); // autumn / dry
+/** Flowering accents: the old blossom bushes, now leafy too, used sparingly. */
+for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM]) Object.assign(b, { sway: true, pattern: PATTERN.NONE });
+const BUSH_PALETTE = [SHRUB_FOREST, SHRUB_SAGE, SHRUB_DEEP, SHRUB_LIME, SHRUB_FOREST, BUSH_ROSE];
 
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
 export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK, SCRUB_DRY };
@@ -377,7 +407,37 @@ export async function generateSphereTerrain(
         birch: [LEAVES[1], LEAVES[3]],
     };
 
+    /*
+     * Spacing. Placement is one roll per column, so trees and bushes could land in
+     * neighbouring columns and clump into dense mats. A per-face claim grid keeps
+     * them apart: a tree needs TREE_GAP clear columns around it, a bush BUSH_GAP.
+     * The roll still happens for every column (the RNG stream is unchanged), so a
+     * spot that's too crowded just grows nothing.
+     */
+    const claim = new Uint8Array(FACE_RES * FACE_RES);
+    const free = (u: number, v: number) => claim[v * FACE_RES + u] === 0;
+    const stake = (u: number, v: number, r: number) => {
+        for (let dv = -r; dv <= r; dv++)
+            for (let du = -r; du <= r; du++) {
+                if (du * du + dv * dv > r * r) continue;
+                const uu = u + du,
+                    vv = v + dv;
+                if (uu >= 0 && vv >= 0 && uu < FACE_RES && vv < FACE_RES) claim[vv * FACE_RES + uu] = 1;
+            }
+    };
+    const tree = (face: number, u: number, v: number, sl: number, zone: Zone) => {
+        if (!free(u, v)) return;
+        plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
+        stake(u, v, TREE_GAP);
+    };
+    const bush = (face: number, u: number, v: number, sl: number, block: { id: number }) => {
+        if (!free(u, v)) return;
+        plantSphereBush(grid, face, u, v, sl, treeRng, block);
+        stake(u, v, BUSH_GAP);
+    };
+
     for (let face = 0; face < 6; face++) {
+        claim.fill(0);
         for (let v = 0; v < FACE_RES; v++) {
             for (let u = 0; u < FACE_RES; u++) {
                 const sl = grid.columnTop(face, u, v);
@@ -389,11 +449,10 @@ export async function generateSphereTerrain(
                     const zone = zoneOf(sl - SEA_LAYER);
                     const g = GROUND[zone];
                     let t = ZONE[zone].treeP;
-                    if (roll < t) plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
+                    if (roll < t) tree(face, u, v, sl, zone);
                     else if (roll < (t += DEAD_TRUNK_P) && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
                         plantDeadTrunk(grid, face, u, v, sl, treeRng);
-                    else if (roll < (t += g.bush))
-                        plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.pick(g.bushes));
+                    else if (roll < (t += g.bush)) bush(face, u, v, sl, treeRng.pick(g.bushes));
                     else if (roll < (t += g.fern))
                         plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
                     else if (roll < (t += g.tall)) plantSingle(grid, face, u, v, sl, treeRng.pick(g.talls));
@@ -402,20 +461,10 @@ export async function generateSphereTerrain(
                     // and wind-killed snags standing alone on the slopes.
                     const zone = zoneOf(sl - SEA_LAYER);
                     const onRockP = zone === 'highland' ? 0.01 : zone === 'treeline' ? 0.005 : 0.0025;
-                    if (roll < onRockP)
-                        plantZoneTree(
-                            grid,
-                            face,
-                            u,
-                            v,
-                            sl,
-                            treeRng,
-                            zone === 'treeline' ? 'treeline' : 'highland',
-                            LEAF_ROLE,
-                        );
+                    if (roll < onRockP) tree(face, u, v, sl, zone === 'treeline' ? 'treeline' : 'highland');
                     else if (roll < onRockP + DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
                     else if (roll < 0.018)
-                        plantSphereBush(grid, face, u, v, sl, treeRng, treeRng.chance(0.7) ? SCRUB_BLOCK : BUSH_MAUVE);
+                        bush(face, u, v, sl, treeRng.pick([SCRUB_BLOCK, SHRUB_OLIVE, SHRUB_BLUEGREEN, SHRUB_RUSSET]));
                     else if (roll < 0.055)
                         // Moss on the lower, damper rock; pale lichen takes over with height.
                         plantSingle(
@@ -622,23 +671,35 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
  * tall shrubs mid-slope, then thin grey scrub and moss toward the treeline.
  */
 const GROUND: Record<Zone, { bush: number; fern: number; tall: number; bushes: any[]; talls: any[] }> = {
-    coast: { bush: 0.015, fern: 0.03, tall: 0.03, bushes: [BUSH_CREAM, BUSH_ROSE], talls: [GRASS_TALL] },
+    coast: {
+        bush: 0.015,
+        fern: 0.03,
+        tall: 0.03,
+        bushes: [SHRUB_SAGE, SHRUB_BLUEGREEN, SHRUB_LIME, BUSH_CREAM],
+        talls: [GRASS_TALL],
+    },
     lowland: { bush: 0.035, fern: 0.03, tall: 0.02, bushes: BUSH_PALETTE, talls: [GRASS_TALL, SHRUB_TALL] },
     midland: {
         bush: 0.03,
         fern: 0.015,
         tall: 0.02,
-        bushes: [BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK],
+        bushes: [SHRUB_FOREST, SHRUB_DEEP, SHRUB_OLIVE, SHRUB_RUSSET, BUSH_MAUVE],
         talls: [SHRUB_TALL],
     },
     highland: {
         bush: 0.02,
         fern: 0.006,
         tall: 0.012,
-        bushes: [SCRUB_BLOCK, SCRUB_BLOCK, BUSH_MAUVE],
+        bushes: [SHRUB_DEEP, SHRUB_BLUEGREEN, SCRUB_BLOCK, SHRUB_OLIVE],
         talls: [SHRUB_TALL, MOSS_THICK],
     },
-    treeline: { bush: 0.012, fern: 0, tall: 0.02, bushes: [SCRUB_BLOCK], talls: [MOSS_THICK, LICHEN_PALE] },
+    treeline: {
+        bush: 0.012,
+        fern: 0,
+        tall: 0.02,
+        bushes: [SHRUB_BLUEGREEN, SCRUB_BLOCK, SHRUB_RUSSET],
+        talls: [MOSS_THICK, LICHEN_PALE],
+    },
 };
 
 function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
@@ -822,9 +883,12 @@ function plantZoneTree(
             for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
             const r = Math.max(2, Math.round(2 + size * 2));
             const [a, b] = LEAF_MAPLE;
-            for (let l = -1; l <= r; l++) {
-                const rr = Math.round(r * Math.sqrt(Math.max(0, 1 - ((l - r / 2) / (r / 2 + 1)) ** 2)));
-                disc(0, h + l, 0, Math.max(1, rr), rng() < 0.5 ? a.id : b.id, 0.18);
+            // A tall ellipsoid crown (about 1.5x as tall as wide), not a squat ball.
+            const H = Math.round(r * 3);
+            for (let l = 0; l <= H; l++) {
+                const t = (l - H / 2) / (H / 2 + 0.5);
+                const rr = Math.round(r * Math.sqrt(Math.max(0, 1 - t * t)));
+                disc(0, h - 1 + l, 0, Math.max(1, rr), rng() < 0.5 ? a.id : b.id, 0.18);
             }
             return;
         }
@@ -835,9 +899,18 @@ function plantZoneTree(
             for (let l = 0; l < h; l++) set(l > h - 2 ? lu : 0, l, l > h - 2 ? lv : 0, BARK_SMOOTH.id);
             const r = Math.round(3 + size * 3);
             const [a, b] = LEAF_CHERRY;
-            disc(lu, h, lv, r, a.id, 0.3);
-            disc(lu, h + 1, lv, Math.max(1, r - 1), b.id, 0.35);
-            disc(lu, h + 2, lv, Math.max(1, r - 3), a.id, 0.4);
+            // Spreading but domed: a broad base tapering over 4-6 layers to a
+            // rounded top, not a flat disc.
+            const tiers = 4 + Math.round(size * 2);
+            for (let k = 0; k < tiers; k++)
+                disc(
+                    lu,
+                    h + k,
+                    lv,
+                    Math.max(1, Math.round(r * (1 - (k / tiers) ** 1.6))),
+                    k & 1 ? b.id : a.id,
+                    0.3 + k * 0.03,
+                );
             return;
         }
         case 'redwood': {
@@ -952,6 +1025,19 @@ const FORM_TRUNK: Partial<Record<TreeForm, [number, number]>> = {
     baobab: [3, 4],
     juniper: [1, 2],
 };
+/** Forms that get a tapering dome on top (not the ones meant to be flat or spired). */
+const DOMED = new Set<TreeForm>([
+    'round',
+    'broad',
+    'twin',
+    'weeping',
+    'stack',
+    'nub',
+    'tall',
+    'oak',
+    'mangrove',
+    'baobab',
+]);
 /** Forms whose silhouette the foliage tufts would blur. */
 const NO_TUFTS = new Set<TreeForm>(['spire', 'palm', 'pine', 'cypress', 'willow', 'layered']);
 
@@ -1313,6 +1399,20 @@ function plantSphereTree(
                 fill(dx, 1, 0, 2, 1, 2, li);
                 fill(-dx, 2, dz, 1, 1, 1, li);
             }
+    }
+
+    // Domed crown: many forms are wide but only 1-2 layers deep, so a forest read
+    // as a sea of flat tops. Over half the trees of the forms that aren't meant to
+    // be flat raise a tapering dome on their crown — 2-5 layers, each narrower —
+    // so canopies gain real vertical height and rounded tops.
+    if (DOMED.has(form) && rng() < 0.55) {
+        const base = _topDl - bare + 1; // the layer just above the current crown top
+        const layers = large ? rng.int(3, 5) : unit === 2 ? rng.int(2, 4) : rng.int(1, 3);
+        const w0 = large ? 5 : unit === 2 ? 4 : 3;
+        for (let k = 0; k < layers; k++) {
+            const w = Math.max(1, Math.round(w0 * (1 - k / (layers + 0.5))));
+            fill(k & 1 ? dx : 0, base + k, k & 1 ? dz : 0, w, 1, w, k === layers - 1 ? li : leaf.id);
+        }
     }
 
     // Extra foliage tufts across the crown to break up the box silhouette (voxel-world).
