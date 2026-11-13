@@ -1650,6 +1650,7 @@ const FRAG_DECL = /* glsl */ `
   uniform float uSeaLevelRadius;
   uniform vec3  uAoTint;
   uniform float uShadowTintStrength;
+  uniform float uShadowDeepen;
   uniform vec3  uShadowHue;
   uniform sampler2D uWaterMap;
   uniform float uWaterLevel, uWaterRange, uWorldSize;
@@ -2492,6 +2493,8 @@ export function makeVoxelMaterial() {
         uAoTint: { value: new THREE.Color(0.6, 0.55, 0.5) },
         uShadowHue: { value: new THREE.Vector3(0.98, 0.97, 1.03) },
         uShadowTintStrength: { value: 0.82 },
+        /** Extra darkening inside cast shadows (0 = hue shift only). */
+        uShadowDeepen: { value: 0.22 },
         uSunDir: { value: LIGHT.sunDir.clone() },
         uSunAmbient: { value: 0.14 }, // diffuse lift on sun-facing sides
         uFillAmbient: { value: 0.06 }, // flat lift on shadow sides
@@ -2543,12 +2546,16 @@ export function makeVoxelMaterial() {
           // canopy and cliff to the same lilac, so all palettes looked alike in shade.
           vec3 petalCool = mix(vec3(petalLum), outgoingLight, 0.7) * uShadowHue;
           outgoingLight = mix(outgoingLight, petalCool, petalShade * 0.6);
+          // Deepen what's in shadow, not just recolour it: cast shadows (tree
+          // canopies above all — thin casters that a soft VSM washes out) read
+          // stronger and darker on the terrain and objects beneath them.
+          outgoingLight *= 1.0 - uShadowDeepen * (1.0 - petalVisibility);
         #endif`,
             );
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v23' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v24' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 

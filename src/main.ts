@@ -195,7 +195,7 @@ async function start(): Promise<void> {
     const clouds = createClouds(scene, ts.clouds, SEED ^ 0xc10d);
     const critters = createCritters(
         scene,
-        ts.critters,
+        Math.round(ts.critters * 0.8), // 20% fewer butterflies
         {
             groundAt: (d) => {
                 const { face, u, v } = dirToFaceUV(d, FACE_RES);
@@ -212,6 +212,7 @@ async function start(): Promise<void> {
             },
         },
         SEED ^ 0xb077,
+        ts.critters * 2, // fireflies unchanged
     );
 
     const sphereMap = createSphereMap(world.grid);

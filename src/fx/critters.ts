@@ -266,7 +266,14 @@ export interface GroundSampler {
 /** Candidate spots tried per anchor; the highest habitat score is kept. */
 const CANDIDATES = 4;
 
-export function createCritters(scene: THREE.Scene, count: number, sampler: GroundSampler, seed = 3) {
+export function createCritters(
+    scene: THREE.Scene,
+    count: number,
+    sampler: GroundSampler,
+    seed = 3,
+    /** Fireflies (default 2 per butterfly); separate so either can be tuned alone. */
+    fireflies = count * 2,
+) {
     if (count <= 0) return { update() {}, dispose() {} };
     let s = seed >>> 0 || 1;
     const rnd = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
@@ -306,7 +313,7 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
     scene.add(bMesh);
 
     // ---- fireflies ----------------------------------------------------------
-    const fCount = count * 2;
+    const fCount = fireflies;
     const fGeo = new THREE.BufferGeometry();
     const fAnchor = new Float32Array(fCount * 3);
     const fSeed = new Float32Array(fCount * 3);

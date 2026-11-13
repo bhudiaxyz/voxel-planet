@@ -180,8 +180,9 @@ export class Atmosphere {
         // with enough samples that the penumbra is smooth rather than speckled.
         sun.shadow.radius = 2.25;
         sun.shadow.blurSamples = ts.shadowBlurSamples ?? 12;
-        // 0.48 → 0.552 (+15%) → 0.64: shadows were still too faint for depth.
-        sun.shadow.intensity = 0.64;
+        // 0.48 → 0.552 (+15%) → 0.64 → 0.72: stronger, darker cast shadows (trees
+        // especially); the voxel shader also deepens shaded areas (uShadowDeepen).
+        sun.shadow.intensity = 0.72;
         // Keep this fully dynamic. A day/night system can animate the sun every
         // frame and both terrain and player shadows will respond immediately.
         sun.shadow.autoUpdate = true;
