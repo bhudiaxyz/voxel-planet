@@ -2,7 +2,11 @@ import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 import { BLOCK_BY_ID, WATER, SKY } from '../core/palette';
-import { LandmarkRecord } from '../world/landmarks';
+
+/** Player marker: bright orange fill, dark rim (easy to spot on any terrain). */
+const PLAYER_ORANGE = '#ff8c1a';
+const PLAYER_RIM = '#3a1a00';
+import { LandmarkRecord, LANDMARK_COLOR } from '../world/landmarks';
 
 const SEA_LAYER = 11; // must match world/terrain.ts and world/landmarks.ts
 
@@ -136,7 +140,7 @@ function iconArch(ctx: CanvasRenderingContext2D) {
     ctx.stroke();
 }
 
-const ICON_FNS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) => void> = {
+const GLYPHS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) => void> = {
     spire: iconSpire,
     obelisk: iconObelisk,
     ring: iconRing,
@@ -145,6 +149,52 @@ const ICON_FNS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) =
     well: iconWell,
     arch: iconArch,
 };
+
+/** One saturated, clearly different colour per landmark kind (badge fill). */
+const BADGE = Object.fromEntries(
+    Object.entries(LANDMARK_COLOR).map(([k, hex]) => [k, '#' + hex.toString(16).padStart(6, '0')]),
+) as Record<LandmarkRecord['kind'], string>;
+const BADGE_R = ICON_R * 1.35;
+
+/**
+ * Landmark marker: a bright coloured badge with a dark rim and a soft glow,
+ * the kind's glyph drawn in white on top. The glyph functions pick their own
+ * pastel colours; those are forced to white here so every glyph reads on its
+ * badge, and the badges carry the colour coding instead.
+ */
+function drawBadge(ctx: CanvasRenderingContext2D, kind: LandmarkRecord['kind']) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+    ctx.shadowBlur = 5;
+    ctx.beginPath();
+    ctx.arc(0, 0, BADGE_R, 0, Math.PI * 2);
+    ctx.fillStyle = BADGE[kind];
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#1b1424';
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(0, 0, BADGE_R - 1.6, 0, Math.PI * 2);
+    ctx.stroke();
+    // Glyph in white: lock fill/stroke colour while the glyph draws.
+    ctx.scale(0.78, 0.78);
+    const white = '#ffffff';
+    ctx.fillStyle = white;
+    ctx.strokeStyle = white;
+    Object.defineProperty(ctx, 'fillStyle', { configurable: true, get: () => white, set: () => {} });
+    Object.defineProperty(ctx, 'strokeStyle', { configurable: true, get: () => white, set: () => {} });
+    try {
+        GLYPHS[kind](ctx);
+    } finally {
+        // Remove the own-property overrides; the prototype accessors come back.
+        delete (ctx as any).fillStyle;
+        delete (ctx as any).strokeStyle;
+    }
+    ctx.restore();
+}
 
 export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
     const canvas = document.createElement('canvas');
@@ -270,20 +320,28 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
             ctx.lineTo(0, R * 0.1);
             ctx.lineTo(-HEAD * 0.5, R * 0.3);
             ctx.closePath();
-            ctx.fillStyle = '#ff4444';
+            // Bright orange with a soft glow and a dark rim: stands out on pale sand,
+            // green land and blue sea alike.
+            ctx.shadowColor = 'rgba(255, 140, 26, 0.85)';
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = PLAYER_ORANGE;
             ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1;
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = PLAYER_RIM;
+            ctx.lineWidth = 1.6;
             ctx.stroke();
             ctx.restore();
         } else {
             // Stationary — plain dot
             ctx.beginPath();
-            ctx.arc(px, py, 3, 0, 2 * Math.PI);
-            ctx.fillStyle = '#ff4444';
+            ctx.arc(px, py, 5, 0, 2 * Math.PI);
+            ctx.shadowColor = 'rgba(255, 140, 26, 0.85)';
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = PLAYER_ORANGE;
             ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1;
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = PLAYER_RIM;
+            ctx.lineWidth = 1.6;
             ctx.stroke();
         }
 
@@ -295,10 +353,83 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
                 const lpy = ((Math.PI / 2 - llat) / Math.PI) * MAP_H;
                 ctx.save();
                 ctx.translate(lpx, lpy);
-                ICON_FNS[lm.kind](ctx);
+                drawBadge(ctx, lm.kind);
                 ctx.restore();
+                drawLabel(LANDMARK_LABELS[lm.kind], lpx, lpy);
             }
         }
+        drawCompass();
+    }
+
+    /**
+     * N / E / S / W rose in the top-right corner. The map is equirectangular with
+     * latitude up, so north is always the top edge and the rose never rotates.
+     */
+    function drawCompass() {
+        const R = 26,
+            cx = MAP_W - R - 14,
+            cy = R + 14;
+        ctx.save();
+        ctx.translate(cx, cy);
+        // Backing disc
+        ctx.beginPath();
+        ctx.arc(0, 0, R + 6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(20, 16, 28, 0.62)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 248, 236, 0.55)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // Four points: north in orange to match the player arrow, the rest pale.
+        const point = (a: number, len: number, fill: string) => {
+            ctx.save();
+            ctx.rotate(a);
+            ctx.beginPath();
+            ctx.moveTo(0, -len);
+            ctx.lineTo(4.5, 0);
+            ctx.lineTo(0, 3);
+            ctx.lineTo(-4.5, 0);
+            ctx.closePath();
+            ctx.fillStyle = fill;
+            ctx.fill();
+            ctx.restore();
+        };
+        point(Math.PI / 2, R * 0.55, '#d8d0c4');
+        point(Math.PI, R * 0.55, '#d8d0c4');
+        point(-Math.PI / 2, R * 0.55, '#d8d0c4');
+        point(0, R * 0.62, PLAYER_ORANGE);
+        // Letters
+        ctx.font = '700 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#fff8ec';
+        ctx.fillText('N', 0, -R + 1);
+        ctx.fillText('S', 0, R - 1);
+        ctx.fillText('E', R - 2, 0);
+        ctx.fillText('W', -R + 2, 0);
+        ctx.restore();
+    }
+
+    /**
+     * Always-visible name under a landmark icon, on a dark pill so it reads on
+     * sand, grass and sea. Flips above the icon near the bottom edge and is kept
+     * inside the map horizontally.
+     */
+    function drawLabel(text: string, x: number, y: number) {
+        ctx.save();
+        ctx.font = '600 11px sans-serif';
+        const w = ctx.measureText(text).width + 8,
+            h = 15;
+        const below = y + 14 + h < MAP_H;
+        const lx = Math.max(2, Math.min(MAP_W - w - 2, x - w / 2));
+        const ly = below ? y + 14 : y - 14 - h;
+        ctx.fillStyle = 'rgba(20, 16, 28, 0.72)';
+        ctx.beginPath();
+        ctx.roundRect(lx, ly, w, h, 4);
+        ctx.fill();
+        ctx.fillStyle = '#fff8ec';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, lx + 4, ly + h / 2 + 0.5);
+        ctx.restore();
     }
 
     const LANDMARK_LABELS: Record<LandmarkRecord['kind'], string> = {

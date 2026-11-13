@@ -344,7 +344,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             /** how much residual chroma distance eats, on top of the fog mix */
             uDesat: { value: 0.32 }, // distance desaturation: depth, not bleach
             /** how far a fogged pixel is pulled toward its true directional sky colour */
-            uSkyBlend: { value: 0.5 },
+            uSkyBlend: { value: 0.4 }, // 0.5 → 0.4: distance reads less milky
 
             /* ---- valley mist ---- */
             uMistColor: { value: new THREE.Color(0.8, 0.79, 0.9) },

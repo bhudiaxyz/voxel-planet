@@ -501,7 +501,9 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
         // slots: blossom, pale, accent, cream, LEAF GREEN, deep accent
         foliage: [0x3e6e34, 0x7aa850, 0xc87a8e, 0xb4c878, 0x4e8a3c, 0x2a5228],
         water: { shoal: 0x8cc4b0, shallow: 0x2e7a8c, deep: 0x123a5a },
-        sky: { zenith: 0x5c90d0, horizon: 0xc4dcea, ground: 0x86a868, haze: 0xd2e2ee, sunTint: 0xfff4e4 },
+        // Bluer, less white: the near-white horizon/haze washed the whole sky (and every
+        // distant thing that fades into the haze) toward white.
+        sky: { zenith: 0x3f7fd6, horizon: 0x9cc4ec, ground: 0x86a868, haze: 0xaecbea, sunTint: 0xfff4e4 },
         light: {
             sunColor: 0xfff0d6,
             sunIntensity: 2.1,
