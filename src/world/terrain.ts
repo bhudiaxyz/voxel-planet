@@ -196,7 +196,46 @@ const BIRCH = registerBlock('BIRCH', {
     bottom: c(0xa8a092),
     tint: c(0x5a5248),
     pattern: PATTERN.BARK,
+    barkStyle: 1, // papery: lenticel dashes, peeling curls
     rough: 0.5,
+    isTrunk: true,
+});
+/*
+ * Bark variety. Every trunk used one furrowed-bark texture, so a palm, a pine and
+ * a birch differed only in colour. `barkStyle` picks a distinct texture in the
+ * voxel shader (0 furrowed, 1 papery, 2 scaly, 3 ringed, 4 smooth).
+ */
+/** Conifer bark: scaly reddish plates (pine, fir, spruce, krummholz, juniper). */
+const BARK_SCALY = registerBlock('BARK_SCALY', {
+    top: c(0x5a3424),
+    side: c(0x4a2a1c),
+    bottom: c(0x3a2014),
+    tint: c(0x2a1610),
+    pattern: PATTERN.BARK,
+    barkStyle: 2,
+    rough: 0.7,
+    isTrunk: true,
+});
+/** Palm bark: ringed leaf scars on a fibrous tan trunk. */
+const BARK_RINGED = registerBlock('BARK_RINGED', {
+    top: c(0x9a8462),
+    side: c(0x8a7454),
+    bottom: c(0x6e5c42),
+    tint: c(0x4a3c2a),
+    pattern: PATTERN.BARK,
+    barkStyle: 3,
+    rough: 0.75,
+    isTrunk: true,
+});
+/** Smooth grey-green bark (cypress, mangrove, willow, acacia). */
+const BARK_SMOOTH = registerBlock('BARK_SMOOTH', {
+    top: c(0x6e6a5a),
+    side: c(0x5e5a4c),
+    bottom: c(0x4a463a),
+    tint: c(0x3a3a2e),
+    pattern: PATTERN.BARK,
+    barkStyle: 4,
+    rough: 0.55,
     isTrunk: true,
 });
 
@@ -615,11 +654,11 @@ function plantZoneTree(
                 ov = 0;
             for (let l = 0; l < h; l++) {
                 if (l > h * 0.45 && l % 3 === 0) {
-                    set(ou + lu, l - 1, ov + lv, BLOCKS.TRUNK_PALE.id); // joint, so the bend reads as one trunk
+                    set(ou + lu, l - 1, ov + lv, BARK_RINGED.id); // joint, so the bend reads as one trunk
                     ou += lu;
                     ov += lv;
                 }
-                set(ou, l, ov, BLOCKS.TRUNK_PALE.id);
+                set(ou, l, ov, BARK_RINGED.id);
             }
             const leaf = pick(roles.broad);
             const len = Math.round(2 + size * 3);
@@ -672,7 +711,7 @@ function plantZoneTree(
             const fir = species === 'fir';
             const h = Math.round((fir ? 8 : 6) + size * (fir ? 10 : 7));
             const base = fir ? 2 : 1; // bare trunk below the lowest tier
-            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
             const leaf = pick(roles.conifer);
             const maxR = Math.max(1, Math.round((fir ? 2 : 3) * (0.5 + size * 0.6)));
             for (let l = base; l <= h; l++) {
@@ -689,7 +728,7 @@ function plantZoneTree(
             // Treeline pine: short, gnarled, crown swept to one side by the wind.
             const h = Math.round(2 + size * 3);
             const [wu, wv] = dirs[Math.floor(rng() * 4)];
-            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
             const leaf = pick(roles.conifer);
             for (let l = 1; l <= h; l++) {
                 set(0, l, 0, leaf);
@@ -764,12 +803,20 @@ function plantSphereTree(
     const pale = leaves[(leaves.indexOf(leaf) + 1) % leaves.length] as any;
     const scale = sizeIn ?? rng.range(0.4, 1.0);
     const form = formIn ?? pickTreeForm(scale, rng);
+    // Bark by species: conifers scaly, palms ringed, wetland and savanna trees
+    // smooth; the broadleaf blossom forms keep the furrowed browns.
     const trunk =
-        form === 'baobab' || form === 'juniper' || form === 'oak'
-            ? BLOCKS.TRUNK
-            : rng.chance(0.55)
-              ? BLOCKS.TRUNK
-              : BLOCKS.TRUNK_PALE;
+        form === 'pine' || form === 'juniper' || form === 'spire' || form === 'layered'
+            ? BARK_SCALY
+            : form === 'palm'
+              ? BARK_RINGED
+              : form === 'cypress' || form === 'mangrove' || form === 'willow' || form === 'acacia'
+                ? BARK_SMOOTH
+                : form === 'baobab' || form === 'oak'
+                  ? BLOCKS.TRUNK
+                  : rng.chance(0.55)
+                    ? BLOCKS.TRUNK
+                    : BLOCKS.TRUNK_PALE;
     const twoTone = rng.chance(0.62);
     const li = twoTone ? pale.id : leaf.id;
     const dx = rng.chance(0.5) ? 1 : -1;

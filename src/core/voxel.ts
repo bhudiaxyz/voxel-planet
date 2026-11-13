@@ -956,7 +956,14 @@ export function meshSphereFaceRegion(
                         patternPacked,
                         // Carved landmark stone signals itself with fringe = -1 (fringe
                         // is otherwise >= 0), picked up by patMasonry in the shader.
-                        (block as any).carved ? -1 : (block as any).fringe || 0,
+                        // Negative fringe values are flags (fringe is otherwise >= 0):
+                        //   -1          carved landmark masonry (patMasonry)
+                        //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
+                        (block as any).carved
+                            ? -1
+                            : (block as any).barkStyle !== undefined
+                              ? -(2 + (block as any).barkStyle)
+                              : (block as any).fringe || 0,
                         [localV[3], localV[2], localV[1], localV[0]],
                     );
                 }
@@ -1668,6 +1675,26 @@ const FRAG_DECL = /* glsl */ `
   }
 
   /**
+   * Jittered cellular noise: distance to the nearest and second-nearest random
+   * feature point. Cells are irregular polygons of varied size — organic plates
+   * and scales with no rows or grid, unlike the brick/tile patterns.
+   * Returns (F1, F2, cell id hash).
+   */
+  vec3 _cells(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    float d1 = 8.0, d2 = 8.0, id = 0.0;
+    for (int y = -1; y <= 1; y++)
+      for (int x = -1; x <= 1; x++) {
+        vec2 g = vec2(float(x), float(y));
+        vec2 o = vec2(vxHash(i + g), vxHash(i + g + 17.3));
+        float d = length(g + o - f);
+        if (d < d1) { d2 = d1; d1 = d; id = vxHash(i + g + 5.1); }
+        else if (d < d2) d2 = d;
+      }
+    return vec3(d1, d2, id);
+  }
+
+  /**
    * Bark on trunk side faces: vertical furrows wandering a little as they
    * climb, raised plates between them broken by short horizontal cracks, and a
    * lighter worn edge on the plates. uv.x runs around the trunk, uv.y up it.
@@ -1678,11 +1705,13 @@ const FRAG_DECL = /* glsl */ `
     float u = uv.x * 4.5 + wob;                       // ~4–5 furrows per block width
     float f = abs(fract(u) - 0.5) * 2.0;              // 0 at a furrow, 1 mid-plate
     float furrow = 1.0 - smoothstep(0.0, 0.32, f);
-    // Plates break into segments up the trunk.
+    // Plates break up the trunk along wavy, irregular cracks drawn from noise —
+    // never straight lines at a fixed spacing, which stacked into brick courses.
     float plateId = floor(u);
-    float crackY = fract(uv.y * 1.6 + vxHash(vec2(plateId, 3.0)));
-    float crack = 1.0 - smoothstep(0.0, 0.06, min(crackY, 1.0 - crackY));
-    float plateTone = 0.92 + 0.16 * vxHash(vec2(plateId, floor(uv.y * 1.6 + vxHash(vec2(plateId, 3.0)))));
+    float cn = vxNoise(vec2(uv.x * 2.6 + plateId * 3.7, uv.y * 1.1 + wob * 2.0));
+    float crack = (1.0 - smoothstep(0.0, 0.045, abs(cn - 0.5))) * step(0.4, vxNoise(vec2(plateId * 1.9, uv.y * 0.7)));
+    // Plate tone drifts smoothly along each plate instead of in blocky steps.
+    float plateTone = 0.92 + 0.16 * vxNoise(vec2(plateId * 3.1 + 0.5, uv.y * 0.9));
     float grain = vxNoise(vec2(uv.x * 14.0, uv.y * 2.5)) * 0.5 + vxNoise(vec2(uv.x * 30.0, uv.y * 5.0)) * 0.5;
     // The authored bark is ~0.05 linear — pure black on screen once shaded and
     // occluded. Lift it to a readable mid-brown so the relief can show, then carve.
@@ -1695,6 +1724,80 @@ const FRAG_DECL = /* glsl */ `
     float moss = (1.0 - smoothstep(0.0, 0.35, heightT)) * (0.35 + 0.65 * furrow)
                * smoothstep(0.35, 0.65, vxNoise(uv * 3.0 + 8.0));
     col = mix(col, vec3(0.27, 0.36, 0.17), moss * 0.6);
+    return col;
+  }
+
+  /**
+   * Birch: pale smooth bark with short horizontal dark lenticel dashes, darker
+   * rough patches near the base, and the odd peeling curl catching the light.
+   */
+  vec3 patBarkPapery(vec2 uv, vec3 base, vec3 tint) {
+    vec3 bark = max(base, vec3(0.55, 0.52, 0.46));
+    vec3 col = bark * (0.94 + 0.08 * vxNoise(uv * vec2(3.0, 1.2)));
+    // Lenticels: thin dashes across the trunk, a few per block, staggered.
+    float row = floor(uv.y * 5.0);
+    float dash = (1.0 - smoothstep(0.0, 0.09, abs(fract(uv.y * 5.0) - 0.5) - 0.38))
+               * step(0.45, vxNoise(vec2(uv.x * 3.0 + row * 7.1, row)));
+    col = mix(col, tint * 0.6, dash * 0.8);
+    // Dark rough blotches.
+    float blot = smoothstep(0.62, 0.78, vxNoise(uv * vec2(2.2, 0.9) + 5.0));
+    col = mix(col, tint * 0.55, blot * 0.7);
+    // Peeling curls: small bright slivers.
+    float peel = smoothstep(0.82, 0.9, vxNoise(uv * vec2(6.0, 2.0) + 11.0));
+    col = mix(col, vec3(0.86, 0.8, 0.72), peel * 0.5);
+    return col;
+  }
+
+  /**
+   * Conifer: irregular overlapping scales (pine/fir) — jittered cells of varied
+   * size, a little taller than wide, separated by dark crevices, each with its
+   * own tone and a warm reddish cast. No rows or grid (that read as brickwork).
+   */
+  vec3 patBarkScaly(vec2 uv, vec3 base, vec3 tint, float heightT) {
+    vec3 bark = max(base * 3.4, vec3(0.2, 0.11, 0.07));
+    // Domain-warp so cell edges curve; stretch vertically so scales are elongated.
+    vec2 p = uv * vec2(3.4, 2.0);
+    p += vec2(vxNoise(uv * 1.7), vxNoise(uv * 1.7 + 9.0)) * 0.6;
+    vec3 c = _cells(p);
+    float edge = c.y - c.x;                              // ~0 on a crevice
+    float crevice = 1.0 - smoothstep(0.02, 0.16, edge);
+    float tone = 0.84 + 0.3 * c.z;
+    vec3 col = bark * tone * (0.92 + 0.12 * vxNoise(uv * 9.0));
+    // Each scale domes: brighter at its centre, falling off toward its rim.
+    col *= 0.86 + 0.24 * (1.0 - smoothstep(0.0, 0.7, c.x));
+    col = mix(col, bark * 0.28, crevice * 0.85);
+    // Slight orange flush on mature trunks.
+    col = mix(col, col * vec3(1.18, 0.95, 0.82), 0.35 * smoothstep(0.2, 0.8, heightT));
+    return col;
+  }
+
+  /** Palm: horizontal leaf-scar rings stacked up the trunk, fibrous between them. */
+  vec3 patBarkRinged(vec2 uv, vec3 base, vec3 tint) {
+    vec3 bark = max(base * 1.4, vec3(0.32, 0.26, 0.18));
+    float y = uv.y * 3.0 + vxNoise(vec2(uv.x * 2.0, uv.y)) * 0.25;
+    float f = fract(y);
+    float ring = 1.0 - smoothstep(0.0, 0.14, min(f, 1.0 - f));
+    float fiber = vxNoise(vec2(uv.x * 26.0, uv.y * 3.0));
+    vec3 col = bark * (0.9 + 0.16 * fiber);
+    // Each band bulges a little: lighter in the middle.
+    col *= 0.92 + 0.12 * sin(f * 3.14159);
+    col = mix(col, tint * 0.5, ring * 0.75);
+    return col;
+  }
+
+  /**
+   * Smooth grey-green bark (cypress, mangrove, willow, acacia): faint vertical
+   * streaks, soft mottling and pale lichen, moss low down.
+   */
+  vec3 patBarkSmooth(vec2 uv, vec3 base, vec3 tint, float heightT) {
+    vec3 bark = max(base * 2.4, vec3(0.2, 0.19, 0.15));
+    float streak = vxNoise(vec2(uv.x * 7.0, uv.y * 0.5));
+    float mott = vxNoise(uv * 1.8) * 0.6 + vxNoise(uv * 4.4 + 3.0) * 0.4;
+    vec3 col = bark * (0.88 + 0.14 * streak) * (0.93 + 0.12 * mott);
+    float lichen = smoothstep(0.7, 0.82, vxNoise(uv * vec2(3.5, 2.5) + 17.0));
+    col = mix(col, vec3(0.62, 0.66, 0.52), lichen * 0.45);
+    float moss = (1.0 - smoothstep(0.0, 0.3, heightT)) * smoothstep(0.4, 0.65, vxNoise(uv * 2.6 + 8.0));
+    col = mix(col, vec3(0.27, 0.36, 0.17), moss * 0.55);
     return col;
   }
 
@@ -1907,7 +2010,15 @@ const FRAG_BODY = /* glsl */ `
     if (pat > 3.5 && pat < 4.5) {
       if (isSide) {
         float heightT = clamp((length(vPosW) - uSeaLevelRadius) / 10.0, 0.0, 1.0);
-        col = patBarkDetail(_trunkUV(_geoN), diffuseColor.rgb, vTintV, heightT);
+        // Bark style from the fringe flag (see the mesher): -2 furrowed, -3 papery,
+        // -4 scaly, -5 ringed, -6 smooth. Unflagged trunks are furrowed.
+        float barkStyle = fringe < -1.5 ? -fringe - 2.0 : 0.0;
+        vec2 tuv = _trunkUV(_geoN);
+        if (barkStyle > 3.5)      col = patBarkSmooth(tuv, diffuseColor.rgb, vTintV, heightT);
+        else if (barkStyle > 2.5) col = patBarkRinged(tuv, diffuseColor.rgb, vTintV);
+        else if (barkStyle > 1.5) col = patBarkScaly(tuv, diffuseColor.rgb, vTintV, heightT);
+        else if (barkStyle > 0.5) col = patBarkPapery(tuv, diffuseColor.rgb, vTintV);
+        else                      col = patBarkDetail(tuv, diffuseColor.rgb, vTintV, heightT);
       } else {
         col = patBarkEnd(vUvW, diffuseColor.rgb, vTintV);
       }
@@ -2296,7 +2407,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v16' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v18' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 

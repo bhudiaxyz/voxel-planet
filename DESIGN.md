@@ -53,6 +53,8 @@ scripts/
   check-sky-frame.ts          JS mirror of the sky _toSky rotation
   check-trees.ts              Generates a planet; fails if vegetation volume collapses
   check-rivers.ts             Generates a planet; fails if fresh water stands above its bank
+  check-islands.ts            Ground under every sky island is the real terrain, not the island
+  check-names.ts              Every landmark kind has a name pool; every landmark name is distinct
   ts-resolve.mjs              Node module hook: resolves extensionless './x' imports to './x.ts'
 src/
   main.ts                     Startup, wiring, frame loop, key bindings, palette live-switch, window.__game
@@ -63,11 +65,13 @@ src/
     palette.ts                Block library, PATTERN ids, VoxelPalette themes, setVoxelPalette, NATURAL filter
     rng.ts                    Seed words, mulberry32 makeRng, hash/value-noise helpers
     noise3.ts                 Perlin Noise3 with fbm (terrain)
+    names.ts                  Landmark name pools per kind (ported from planet-explorer)
     geoutil.ts                basisFromCode, columnDir, dirToFaceUV
   world/
     world.ts                  buildSphereWorld: generation order, streamer, vegetation, water
     terrain.ts                Elevation, terracing, surface/rock, desert, trees, cacti, dead trunks, ground cover
     rivers.ts                 Fresh water: rivers, streams, lakes, ponds carved into the land (RIVER_WATER)
+    wet-map.ts                Distance-to-water per column (critters, waterside plants)
     vegetation.ts             Lazy per-patch grass/flowers/plants/ground detail meshes
     water.ts                  Sea sphere shader
     shore-map.ts              Distance-to-land atlas bake + SHORE_GLSL
@@ -98,6 +102,7 @@ src/
     pause.ts                  Esc pause menu with binding list
     settings.ts               Settings panel, persistence, palette select
     touch-controls.ts         nipplejs joystick, swipe-look, action buttons
+    locations.ts              Locations panel: teleport to landmarks and sky islands
 ```
 
 ---
@@ -132,7 +137,7 @@ A column centre direction is `normalize(n + tu*(2(u+0.5)/FACE_RES - 1) + tv*(2(v
 | `isSolid` | Non-air and not a water block |
 | `isSolidGlobal` | Like `isSolid`, but out-of-range `u/v` is translated through `crossFaceUV` (used by the mesher for neighbour lookups and AO across seams) |
 | `columnTop` | `surfaceLayer`, or -1 out of range. Includes trunks and leaves |
-| `groundColumnTop` | Walks down from `surfaceLayer` skipping air, `sway` blocks (leaves), `isTrunk` blocks and `isWater` blocks. This is the walkable ground, so the player wades through river water onto the bed |
+| `groundColumnTop` | Walkable ground connected to the planet. Walks **up** from layer 0 through contiguous blocks to the first air gap (so floating islands above are ignored), then down past `sway`, `isTrunk` and `isWater` blocks. Walking down from the column top instead read a sky island's grass as ground and snapped the player up onto it. The player wades through river water onto the bed |
 | `surfaceRadius` | `PLANET_RADIUS + groundColumnTop + 1` (just `PLANET_RADIUS` if the column is empty). Used by the player, dog, critters |
 
 ### `crossFaceUV(face, u, v)`
@@ -197,7 +202,7 @@ For every column, layers `0..surfaceLayer`:
 | Land, top 2 layers below surface | Desert: `SAND` ("dunes are sand to rock"); otherwise `SOIL` |
 | Land, deeper | `selectRock`: 3D noise at `dir*12` offset by `layer*0.3`; `> 0.2` -> `STONE_PALE`, else `STONE` |
 
-`selectSurface` uses a temperature proxy `temp = 1 - 1.1*dir.y^2 - 1.2*max(e, 0)` (colder near the poles and at altitude): `temp > 0.6` -> `GRASS`; `> 0.2` -> `GRASS_LIGHT`; else `STONE_PALE`.
+`selectSurface` uses a temperature proxy `temp = 1 - 1.1*dir.y^2 - 1.2*max(e, 0)` (colder near the poles and at altitude): `temp > 0.6` -> `GRASS`; `> -0.05` -> `GRASS_LIGHT`; else `STONE_PALE`. The light-grass cutoff was lowered from 0.2 to -0.05 to grow grassland by ~31% (46.7% to 61.4% of land, over three seeds) at the expense of cold pale rock.
 
 ### Desert band
 
@@ -236,13 +241,14 @@ Ground-cover and shrub blocks are registered at module load with `registerBlock`
 
 ### Cacti (`plantCactus`)
 
-Block `CACTUS`: `PATTERN.CACTUS`, `isTrunk: true` (solid; the player and dog treat it as an obstacle). Kinds, picked from `['saguaro' x3, 'barrel', 'columns']`:
+Blocks: `CACTUS` (`PATTERN.CACTUS`, ribbed), `CACTUS_CROWN` (pale woolly tip), `CACTUS_FLOWER` / `CACTUS_FLOWER_PINK`, `CACTUS_FRUIT`; all `isTrunk` (solid obstacles for player and dog). Kinds, picked from `[saguaro x3, barrel x2, pear x2, organ]`, each only on level ground:
 
 | Kind | Shape |
 | --- | --- |
-| saguaro | Column 4-9 high; if height >= 5, 0 to `min(3, height-3)` arms. Each arm steps out 1 (or 2 with p 0.3) at height 2..height-2, then climbs 1..(height-at-1). Arm directions come from a shuffled list |
-| barrel | 1-2 high, 1x1 or (p 0.4) 2x2; skipped unless all cells' `columnTop` equals the surface layer |
-| columns | 2-4 slim columns at offsets `(0,0),(1,0),(-1,0),(0,1),(0,-1),(1,1)`, heights 2-5 for the first, 2-4 for the rest; each only on level ground |
+| saguaro | Column 5-11 high, 2x2 for the lower third when >= 8 tall; a crown (flower 30%) on top. 1 to `min(4, height-4)` arms leave at staggered heights, run out 1-2 (clearing the thick base), turn up 2+ blocks and end in a crown |
+| barrel | Plus-shaped body (centre plus four sides one layer shorter) so it bulges and rounds over; a ring of yellow or pink flowers on the rim and crown |
+| pear | 3-6 flat paddles (2 wide, 2 tall, 1 thick); each grows from a top corner of the last, turned 90 degrees, so the clump zig-zags; red fruit on the rims |
+| organ | A shared low base with 4-7 slim stems of 3-7, some leaning outward partway up, each with a crown |
 
 ### Dead trunks (`plantDeadTrunk`)
 
@@ -294,13 +300,13 @@ Foliage blocks `LEAF_PINK, LEAF_BLUSH, LEAF_LILAC, LEAF_CREAM, LEAF_MINT, LEAF_R
 `carveFreshWater(grid, seaLayer, seed)` runs after the column fill and before the scatter pass. It is voxel-world's river carve adapted to the sphere: every neighbour lookup goes through `step(f, u, v, du, dv)`, which crosses face seams with `crossFaceUV`, so a river or lake straddling a seam carves on both sides.
 
 1. **Channels.** `half: Map<columnKey, weight>` records each channel column with a depth weight (1 at the centre, ~0 at the rim), max-merged so the wider reach wins where streams join.
-2. **Rivers and streams** (`RIVERS = 70`). Sources are random grass columns at least 9 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - heading x 0.35 + jitter x 0.3`; the inertia term makes it meander instead of zig-zagging. Width grows downstream from 0.6 to 2.6 columns, so headwaters are 1-block streams and lower reaches are rivers. A trace ends at the sea, or after 6 consecutive uphill-everywhere steps (a pit), which becomes a lake seed. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
-3. **Lakes and ponds** (`LAKES = 300`). Seeds are spread round-robin over the six faces, on gentle grass ground (no point 3 columns away differs by more than 2 layers), at least `MIN_GAP = 18` columns from another seed on that face. 60% are ponds (radius 1.6-3.2 plus one extra disc); the rest are lakes (radius 4-8, four overlapping discs for a lumpy outline). River pits add lakes too.
+2. **Rivers and streams** (`RIVERS = 110`). Sources are random grass columns at least 6 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - heading x 0.35 + jitter x 0.3`; the inertia term makes it meander instead of zig-zagging. Width grows downstream from 0.6 to 2.6 columns, so headwaters are 1-block streams and lower reaches are rivers. A trace ends at the sea, or after 6 consecutive uphill-everywhere steps (a pit), which becomes a lake seed. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
+3. **Lakes and ponds** (`LAKES = 450`). Seeds are spread round-robin over the six faces, on gentle grass ground (no point 3 columns away differs by more than 2 layers), at least `MIN_GAP = 14` columns from another seed on that face. 60% are ponds (radius 1.6-3.2 plus one extra disc); the rest are lakes (radius 4-8, four overlapping discs for a lumpy outline). River pits add lakes too.
 4. **Water surface: the "never above ground" rule.** For each channel column above the sea, the surface is `min(own height, lowest dry ground within BANK_R = 3) - 1`. Every dry neighbour counts as a bank, low beaches included. A relaxation then runs to a fixed point: no surface may exceed a neighbour's surface + 1 or a dry 4-neighbour's ground, and a neighbour whose water is the sea (surface at or below sea level, or a channel column already in the sea) caps it at sea level. That last rule is what stops a one-layer water ledge hanging over open sea floor at river mouths.
 5. **Carve and fill.** The bed is cut to `surface - depth` (depth 1 at the rim, up to `RIVER_DEPTH = 3` at the centre), clearing everything above it including trees, and laid with `SAND`. `RIVER_WATER` fills from `max(bed + 1, sea + 1)` up to the surface; at or below sea level the sea sphere is the water.
 6. **Puddle cleanup.** Connected water bodies under `MIN_BODY = 4` columns (strays the relaxation leaves) are drained; their hollow stays as a dip. The flood fill always completes the whole body, so part of a large lake is never mistaken for a puddle.
 
-`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~15k water columns in ~270 bodies (about 140 ponds, 70 lakes and a few large river systems) across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
+`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~21k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
 
 **Rendering.** The mesher emits a water block's faces only where they meet air: the surface, plus side faces where a reach steps down a layer or ends. Faces against other water or solid ground, and bottoms, are skipped, so a channel never draws stacked internal walls and a step-down never reads as a floating sheet. Water quads carry `patternPacked = 16`; the fragment shader treats `vDataV.y > 15.5` as fresh water (no terrain or foliage detail; drifting three-plane ripples toward the block tint, timed by `uWindTime`), and the vertex sway test is `8 <= aData.y < 15.5`, so water never sways.
 
@@ -369,11 +375,13 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 
 ## 6. Voxel material shader (`core/voxel.ts`)
 
-`makeVoxelMaterial()` is a `MeshLambertMaterial` (vertex colours, no dithering) patched in `onBeforeCompile` (`customProgramCacheKey` `'VoxelWorld-voxel-v14'`; bump it whenever the shader text changes, with `-fol` appended when `FOLIAGE_DETAIL` is defined). Uniforms live in `material.userData.uniforms` and are updated by `DayNight`, the streamer and main.
+`makeVoxelMaterial()` is a `MeshLambertMaterial` (vertex colours, no dithering) patched in `onBeforeCompile` (`customProgramCacheKey` `'VoxelWorld-voxel-v17'`; bump it whenever the shader text changes, with `-fol` appended when `FOLIAGE_DETAIL` is defined). Uniforms live in `material.userData.uniforms` and are updated by `DayNight`, the streamer and main.
 
 ### Patterns
 
-`PATTERN` ids (`core/palette.ts`): `NONE 0, BRICK 1, STONE 2, PLANK 3, BARK 4, GRASS 5, TILE 6, CACTUS 7`. The fragment shader takes `pat = mod(aData.y, 8.0)`; bit 3 (value 8) is the sway flag (leaf blocks), and the value 16 marks fresh water (`isFresh`). All eight 3-bit pattern slots are taken, so a new surface type needs a flag value like water's rather than a new `PATTERN` id. Per-pattern functions:
+`PATTERN` ids (`core/palette.ts`): `NONE 0, BRICK 1, STONE 2, PLANK 3, BARK 4, GRASS 5, TILE 6, CACTUS 7`. The fragment shader takes `pat = mod(aData.y, 8.0)`; bit 3 (value 8) is the sway flag (leaf blocks), and the value 16 marks fresh water (`isFresh`). All eight 3-bit pattern slots are taken, so a new surface type needs a flag value like water's rather than a new `PATTERN` id.
+
+**Fringe-channel flags.** `aData.z` (fringe) is >= 0 for real grass fringes, so negative values carry per-block style flags without a new attribute: `-1` = carved landmark masonry (`patMasonry`), `-(2 + s)` = bark style `s` from the block's `barkStyle` (0 furrowed, 1 papery, 2 scaly, 3 ringed, 4 smooth). The grass-fringe code only runs for `fringe > 0.001`, so flags never draw a fringe. Per-pattern functions:
 
 | Function | Used for |
 | --- | --- |
@@ -381,8 +389,13 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 | `patCactus(uv, base, tint, side)` | `PATTERN.CACTUS` (always on): side faces get 5 vertical ribs per block (light crests, dark grooves via `tint*0.78`) with pale spine dots; tops a radiating-rib crown. Side UVs come from `_trunkUV()` |
 | `patTerrain` | Only under `FOLIAGE_DETAIL`, for blocks with no pattern, no sway flag and not water. Aim: textured but soft, so everything is smooth value noise, never cells or hard lines. Per-block tone jitter and tint drift. **Tops:** domain-warped clumpy mottle; patches drifting toward the tint; *soft relief*, the difference of a two-octave height field `_tH` sampled at two slightly offset points (an emboss, x0.8), reading as gentle lumps (turf clods, sand ripples, gravel); fine grain. **Sides:** strata that wander across the face and blend at band edges; grain stretched along the strata; soft relief x0.75; a shallow groove between strata in places. **All faces:** a wide, soft edge darkening plus a faint inner lift, so each cube reads slightly pillowed. Fine detail is scaled by `near = 1 - smoothstep(0.08, 0.35, length(fwidth(uv)))`, so it melts into soft colour with distance instead of shimmering |
 | `patFoliage(uv, base, tint, faceLight)` | Only under `FOLIAGE_DETAIL`, for sway-flagged blocks (canopy): domain-warped clump field (lit tops vs shadowed pockets), elongated leaf speckle, hue drift toward the tint, sun-catching highlights on lit faces. Underside UVs are scaled 1.8x. Colour lift after: tops 1.05, sides 1.28, undersides 1.15 |
-| `patBarkDetail(uv, base, tint, heightT)` | Only under `FOLIAGE_DETAIL`, trunk (`pat == BARK`) side faces: furrows with a wandering offset, plates broken by cracks, worn ridges, moss at the base (`heightT` from radius above `uSeaLevelRadius` over 10 units). The authored bark colour is near black, so it is lifted with `max(base*3.6, (0.16, 0.10, 0.06))` |
+| `patBarkDetail(uv, base, tint, heightT)` | Bark style 0 (furrowed; oak, broadleaf, emergent, baobab). Only under `FOLIAGE_DETAIL`, trunk (`pat == BARK`) side faces: furrows with a wandering offset, plates broken by wavy noise cracks (not fixed-spacing lines, which stacked into brick courses), worn ridges, moss at the base (`heightT` from radius above `uSeaLevelRadius` over 10 units). The authored bark colour is near black, so it is lifted with `max(base*3.6, (0.16, 0.10, 0.06))` |
+| `patBarkPapery` | Bark style 1 (birch): pale, horizontal dark lenticel dashes, rough blotches, peeling slivers |
+| `patBarkScaly` | Bark style 2 (pine, fir, spruce, krummholz, juniper, spire/layered forms): irregular domed scales from jittered cellular noise (`_cells`, domain-warped, stretched vertically), dark crevices, an orange flush higher up. Deliberately no rows or grid: a running bond read as brickwork |
+| `patBarkRinged` | Bark style 3 (palm): stacked leaf-scar rings, fibrous bands that bulge slightly |
+| `patBarkSmooth` | Bark style 4 (cypress, mangrove, willow, acacia): grey-green, faint streaks, mottling, pale lichen, moss at the foot |
 | `patBarkEnd` | Same condition, trunk top/bottom faces: growth rings with a bark rim |
+| `patMasonry` | Landmark blocks (`carved: true`): coursed stones with a soft mortar line, per-stone tone, weathering, chipped corners; tops are offset dressed slabs |
 
 `FOLIAGE_DETAIL` is a `#define` set on the material by `main.ts` when the tier's `foliageDetail` is true (`voxMat.defines.FOLIAGE_DETAIL = 1`, `needsUpdate`); tiers without it pay nothing and render canopy and terrain as flat colour.
 
@@ -422,7 +435,7 @@ p += normalize(windTang) * sway * heightT
 ### Outlines and glow
 
 - Edge outlines: `LineSegments2` runs built from edge entries, merged into long runs (`mergeEdgeRuns`) with dark/light ink chosen by face luminance (`LIGHT_FACE_LUMA = 0.61`; grass tops force the light ink; concave edges are always dark). They live on `EDGE_LAYER = 2` and are drawn only by `EdgeMaskPass` (section 12), which composites them in the grade shader. On tiers with `edgeMask: false` the pass is not added and the grade opacities are zeroed.
-- `makeGlowMaterial()`: unlit `MeshBasicMaterial` for emissive blocks (`LANTERN`, `CRYSTAL`), brightened by 1.5x with a crude `normal.y` face ramp.
+- `makeGlowMaterial()`: unlit `MeshBasicMaterial` for emissive blocks (`LANTERN`, `CRYSTAL`, landmark gems), brightened by 1.5x. Faces are shaded by the radial up (not world Y, which mis-shaded gems on the planet's flanks), and get a faceted-crystal surface from `aUv`/`aTint`: a bright core toward the paler tint, two faint diagonal facet ridges and a darker rim.
 
 ---
 
@@ -483,9 +496,24 @@ Colour: tip = block `topTint ?? top`; base = `side` lerped 45% toward the tip (t
 
 `nearTrunk` checks the four neighbours at `layer+1` for a block with `isTrunk` *and* `pattern == PATTERN.BARK`, so living and dead wood qualify but cacti (solid trunks with `PATTERN.CACTUS`) do not.
 
+### Waterside, canopy floor and hanging growth
+
+`createSphereVegetation(..., wet)` takes the distance-to-water map (`world/wet-map.ts`: 4-way BFS per face from every sea or fresh-water column, capped at `WET_MAX = 4`, one byte per column).
+
+| Item | Where | Drawn |
+| --- | --- | --- |
+| Lily pads (`LILY_P = 0.09` x ground detail) | Fresh-water columns that are *still* (no 4-neighbour water surface lower, i.e. a lake, not a rapid) | 1-3 pads: two overlapping rotated flat quads (rim + face), low sway; 22% carry a pale flower |
+| Reed clumps (`REED_P = 0.75` x density) | Dry columns exactly 1 from water, inside a reed-noise stand (`field(reedNoise) > 0.55`) | 5-9 tall reeds; 30% carry a dark cattail head. Replaces the column's grass |
+| Leaf litter | Ground under a canopy column (`sway` top) | 2-5 flat flecks in the canopy's colour, dulled and browned |
+| Hanging growth (`HANG_P = 0.12`) | Canopy undersides with >= 3 layers of air below, coast and lowland zones (x0.35 midland) | 1-3 vines or moss strands, tufts grown downward, swaying at the tips |
+
+**Contact shadows.** Every blade's root vertices use `dark x ROOT_SHADE (0.72)`, so tufts sit in their own shade and read as rooted rather than pasted on.
+
+`bloomAt(dir)` and `lushAt(dir)` expose the flower and meadow fields so critters can use the same drifts.
+
 ### Material and wind
 
-`makeVegMaterial`: `MeshLambertMaterial`, vertex colours, `DoubleSide`, `depthWrite: false` (thousands of overlapping blades writing depth gave the outline pass a scratchy edge; they still depth-test). Normals are the surface up vector, not the blade facing, so blades are lit like the ground they grow from. Because `DoubleSide` flips normals on back faces, which would point blades into the ground and render them black, the fragment shader replaces `float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;` with `1.0`. Per-vertex `aDetail = (sway, phase)`; vertex shader displaces tips along the local tangent frame: two sine waves, amplitude `sway^2 * uWindAmp` along `t1 + 0.55*t2`, with a slight downward bow `-up*|w|*a*0.18`. Program cache key `'VoxelWorld-sphereveg-v2'`.
+`makeVegMaterial`: `MeshLambertMaterial`, vertex colours, `DoubleSide`, `depthWrite: false` (thousands of overlapping blades writing depth gave the outline pass a scratchy edge; they still depth-test). Normals are the surface up vector, not the blade facing, so blades are lit like the ground they grow from. Because `DoubleSide` flips normals on back faces, which would point blades into the ground and render them black, the fragment shader replaces `float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;` with `1.0`. Per-vertex `aDetail = (sway, phase)`; vertex shader displaces tips along the local tangent frame: two sine waves, amplitude `sway^2 * uWindAmp` along `t1 + 0.55*t2`, with a slight downward bow `-up*|w|*a*0.18`. Program cache key `'VoxelWorld-sphereveg-v3'`.
 
 ---
 
@@ -512,6 +540,8 @@ A `SphereGeometry` at radius `PLANET_RADIUS + 11 - 0.5` (just under layer-11 vox
 - Reflection: fresnel `pow(1 - N.V, 5)`; the sky term is `mix(uHorizon, uSky, max(dot(N, up), 0))` keyed on the local up (not world Y), mixed at `fresnel*0.6`; sun specular `pow(N.H, 80)*2`.
 - Alpha: `mix(opacity*0.55, opacity, smoothstep(0, 0.5, shore)) + fresnel*0.3` (clear shallows, opaque offshore).
 - Shore foam (`USE_SHORE_FOAM`, defined only if `foam && shoreMap`, i.e. tier `shoreFoam`): two bands roll toward the coast (phase `fract(0.22t + i/2)`, position `0.42*(1 - phase)` in `shoreDist` units), a steady lip at `sd < 0.06`, noise-masked into patches, faded out between 60 and 140 units from the camera, mixed at 0.85 into colour and 0.7 into alpha.
+
+**Night.** The sea is unlit and its colours are the palette's daytime ones, so `update(dt, night)` sets `uNight` and the shader dims it to a deep blue-black with a cool tint and a faint sheen on the brightest crests. Fresh water darkens via the voxel shader (night recovered from `uAmbientTint.b`).
 
 `update(dt)` advances `uTime` and re-copies the palette colours (`WATER.shoal/shallow/deep`, `SKY.horizon/zenith`) and the sun direction each frame, so palette switches and the day cycle apply without rebuilding. `main.ts` also pushes `dayNight.sunDir` into `uSunDir`.
 
@@ -576,7 +606,7 @@ Bracketed passes depend on tier flags. Everything before Grade is linear HDR.
 - Atmosphere pass (`haze`): one fullscreen shader off a single depth fetch: large-scale AO (rosette taps, `uAOTaps` from tier, radius 2.4, strength 0.24), voxel-cloud shadows (tier; section 13), distance desaturation (`uDesat 0.32`), per-pixel pull toward the true directional sky colour (`uSkyBlend 0.5`, uses `skyRadiance` with `uSkyUp`), analytic exponential height-fog ground mist (`uMistBase 8`, `uMistH 9`, `uMistDens 0.012`, `uMistMax 0.2`; the mist path starts at `0.75 x uFogNear`), sun in-scatter (0.28), four-tap defocus (`uDof` 1.2 px at full haze, 0 when tier `dof` is false). `uAerialD` mirrors the scene fog; `uFogNear = FOG_NEAR`.
 - Bloom: runs after the atmosphere on purpose (haze acts as a light source). Overridden at construction to `threshold 1.25, strength 0.22, radius 0.9` because the palette's bloom numbers are display-space intuitions and the pass sees linear HDR. Added only if tier `bloom`. (The palette's `GRADE.bloom` is still copied onto the pass by `onPaletteChange`, which overrides these constants after the first palette switch. See section 18.)
 - Crepuscular rays: 8-tap radial blur toward the sun's screen position, `uTaps` from tier (0/4/8), active only when `uSunVisible > 0.01`. `main.ts` computes the sun NDC position and visibility each frame.
-- Grade (`GradeShader`): ACES tone mapping and sRGB conversion performed inside the shader (`material.toneMapped = false`; replaces a separate OutputPass), then lift/gamma/gain, saturation, contrast, vignette, grain (0.006), chromatic aberration (0.0008), a faint "milk" lilac lift (0.01), a highlight knee (0.8), and the edge ink composite (`tEdges` mask, `uEdgeDark (0.39, 0.32, 0.43)`, `uEdgeLight (0.94, 0.91, 0.93)`, opacities mixed in display space after tone mapping so pale ink cannot become an emitter). Grade values come from `GRADE` (palette). `B` toggles the opacities between 0 and (0.64 dark, 0.30 light).
+- Grade (`GradeShader`): ACES tone mapping and sRGB conversion performed inside the shader (`material.toneMapped = false`; replaces a separate OutputPass), then lift/gamma/gain, saturation, contrast, vignette, grain (0.006), chromatic aberration (0.0008), a faint "milk" lilac lift (0.01), a highlight knee (0.8), and the edge ink composite (`tEdges` mask, `uEdgeDark (0.39, 0.32, 0.43)`, `uEdgeLight (0.94, 0.91, 0.93)`, opacities mixed in display space after tone mapping so pale ink cannot become an emitter). Grade values come from `GRADE` (palette). `B` toggles the opacities between 0 and (0.64 dark, 0.30 light). At night (`uNight`) both inks are scaled down: they are fixed display colours applied after tone mapping, so on the dark night scene even the dark ink read as a bright outline. The light ink dims to ~12% and mostly fades; the dark ink drops below the terrain to read as a shadow line.
 - AA: SMAA (`high`, `mobile-high`, `mid`), FXAA (`low`), none (`very-low`). `needsSwap = false` on these passes avoids the composer ping-pong that caused a depth-texture mismatch and a full-screen flash.
 
 `render(dt)` per frame updates times, inverse projection/view, camera position, `uSkyUp`, fog sync (`uAerialD`, `uMistMax` zeroed when fog is disabled) and calls `composer.render`. `setSize` resizes all targets; `setSunScreenPos` feeds the crepuscular pass.
@@ -607,6 +637,8 @@ interface VoxelPalette {
   grade: { exposure, lift[3], gamma[3], gain[3], saturation, contrast, vignette, bloom{strength,radius,threshold} };
 }
 ```
+
+The Spring sky is deliberately blue: zenith `#3f7fd6`, horizon `#9cc4ec`, haze `#aecbea`. The earlier near-white horizon and haze washed the whole sky, and everything that fades into the haze, toward white. The haze pass's `uSkyBlend` is 0.4 for the same reason.
 
 ### Foliage slot-role convention
 
@@ -720,7 +752,7 @@ Trees are kept at every tier; only grass and ground clutter scale.
 
 ### Particles (`particles.ts`)
 
-`createParticles(worldSize, rng, maxCount)` builds four instanced layers (hero petals 90, mid petals 140, glowing motes 300, near-camera pollen 130, a base total of 660) each scaled by `maxCount/1110`. `main.ts` passes `Math.min(300, tier.particleCount)`: 300 is the authored look (more reads as confetti), and tiers only ever lower it (so `very-low` with 0 draws none). Everything is GPU-animated in the vertex shader (tumble, fall with sway, wrap into a box around the camera, fade at the loop ends). Petal colours are baked from `PETAL_COLORS` at creation; motes use `MOTE_COLORS`.
+`createParticles(worldSize, rng, maxCount)` builds four instanced layers (hero petals 90, mid petals 140, glowing motes 300, near-camera pollen 130, a base total of 660) each scaled by `maxCount/1110`. `main.ts` passes `round(min(300, tier.particleCount) x 0.8)` (20% fewer than the authored 300, which read as too busy); tiers only ever lower it (so `very-low` with 0 draws none). Everything is GPU-animated in the vertex shader (tumble, fall with sway, wrap into a box around the camera, fade at the loop ends). Petal colours are baked from `PETAL_COLORS` at creation; motes use `MOTE_COLORS`.
 
 Caveat: the particle field wraps in `xz` around `uOrigin` and falls along world Y, i.e. it is the flat-world implementation; `uPlanetRadius` is declared but unused in the vertex shader. Away from the planet's top the "fall" direction is not radial.
 
@@ -732,11 +764,15 @@ One instanced draw (3 triangles per bird). Every 20-60 s (first flock after 4-12
 
 Instanced voxel-box clusters on a disc of radius 180 in the tangent plane above the player, at heights 70-110, wrapped (torus wrap of the containing square) and faded near the rim; the disc follows the player and is oriented by the local up. Drift accumulates `windDir * dt * 2.2`. One merged geometry per shape variant, shaded top 1.0 / side 0.88 / underside 0.74. `setColors(lit, shade, opacity)` is called each frame from main.ts to tint by time of day (lit = white x1.35 lerped toward the horizon colour, dimmed by night; shade = zenith lerped toward white).
 
+**Texture.** The fragment shader samples two-octave value noise in cloud-local space (`vLocal` = box position plus a per-instance offset), so the pattern rides with each cloud: soft billows lift and sink the per-face shade, tops catch extra light, and alpha thins where the billow field is low (wispy rims instead of a plastic slab).
+
+**Night.** Clouds are unlit and write no depth (the haze pass skips them), so `main.ts` authors their night colour directly: lit tops fall to ~3% of the day value and lean toward a dim moonlit blue-grey, undersides to ~2%.
+
 **Cloud shadows.** Cloud positions are computed in the vertex shader (a wrapped disc in a tangent frame), so the sun's shadow map cannot see them, and its frustum only spans ~120 units anyway. Instead `renderShadow(renderer)` redraws the same instances with a coverage-only material (same vertex shader, MAX blending) into a 256x256 target, from an orthographic camera looking straight down on the disc with `uE2` as screen-up, so texture (x, y) equals disc (e1, e2). The haze pass (`postfx.ts`) casts each surface pixel's world position along the sun direction up to the mean cloud height (`CLOUD_LAYER_H = 90` above the disc centre), converts the hit to disc coordinates and samples coverage with two soft taps. The darkening is `uCloudShadowStr (0.32) x coverage x sunFade x (1 - fog)`, where `sunFade` weakens shadows at low sun. Because it runs on the final image it shades terrain, vegetation and water alike; the shadows have the real clouds' shapes and drift with them. `main.ts` binds the live frame vectors once (they update in place) and calls `renderShadow` each frame while the tier's `cloudShadow` is on. This replaced an earlier world-`xz` noise shadow that was unrelated to the clouds and striped on the planet's flanks.
 
 ### Critters (`critters.ts`)
 
-`createCritters(scene, count, sampler, seed)`: `count` butterflies (day) and `2*count` fireflies (night), each with a ground *anchor*. Anchors are placed within `SPREAD = 14` units (minimum radius 3) of the player on walkable ground using `GroundSampler.groundAt(dir)` (main supplies: `-1` where `columnTop <= SEA_LAYER`, else `grid.surfaceRadius`; up to 4 retries per anchor), and re-sampled on the CPU in a rolling slice so the whole set turns over every `RESAMPLE = 1.1` s. Around its anchor each critter follows a Lissajous wander in the vertex shader (butterflies 1.9-3.1 above ground, bursts of flapping with glides, banked into turns). Butterflies are a body plus forewing/hindwing panels hinged at the body, coloured from `PETAL_COLORS` (assigned at anchor time, so they follow palette switches as anchors refresh); fireflies are additive blinking points that the bloom pass catches. Butterfly alpha is `1 - smoothstep(night, 0.35, 0.6)`; fireflies `smoothstep(night, 0.45, 0.75)`.
+`createCritters(scene, count, sampler, seed)`: `count` butterflies (day) and `2*count` fireflies (night), each with a ground *anchor*. Anchors are placed within `SPREAD = 14` units (minimum radius 3) of the player on walkable ground using `GroundSampler.groundAt(dir)` (main supplies: `-1` where `columnTop <= SEA_LAYER`, else `grid.surfaceRadius`; up to 4 retries per anchor), and re-sampled on the CPU in a rolling slice so the whole set turns over every `RESAMPLE = 1.1` s. Around its anchor each critter follows a Lissajous wander in the vertex shader (butterflies 1.9-3.1 above ground, bursts of flapping with glides, banked into turns). Butterflies are a body plus forewing/hindwing panels hinged at the body, coloured from `PETAL_COLORS` (assigned at anchor time, so they follow palette switches as anchors refresh); fireflies are additive blinking points that the bloom pass catches. Butterfly alpha is `1 - smoothstep(night, 0.25, 0.5)`; fireflies `smoothstep(night, 0.12, 0.45)`, so fireflies come out at dusk and briefly overlap the last butterflies. Anchors are habitat-weighted: four candidates are scored and the best kept: butterflies by `veg.bloomAt` (flower drifts), fireflies by `0.7 x (1 - wet/WET_MAX) + 0.3 x lushAt` (damp, lush ground by water).
 
 ---
 
@@ -843,7 +879,7 @@ Wiring that works at runtime: seed field (reload with new seed), palette select 
 
 ### Map (`render/map.ts`)
 
-`createSphereMap(grid)` bakes a 1024x512 equirectangular image (longitude `atan2(z, x)`, latitude `asin(y)`) by sampling the grid per pixel: ocean (`columnTop <= SEA_LAYER`) coloured `shoal`/`shallow`/`deep` by depth below sea level (<2, <6, else), land by the top block's `mapColor ?? top ?? side`. `rebake()` is called after palette switches. Each frame it draws the player arrow (forward direction projected onto the local east/north axes) and landmark icons (one drawing function per kind) with hover tooltips (`LANDMARK_LABELS`). Displayed at 971x486 CSS px, max 90vw/90vh; on touch the map closes on tap.
+`createSphereMap(grid)` bakes a 1024x512 equirectangular image (longitude `atan2(z, x)`, latitude `asin(y)`) by sampling the grid per pixel: ocean (`columnTop <= SEA_LAYER`) coloured `shoal`/`shallow`/`deep` by depth below sea level (<2, <6, else), land by the top block's `mapColor ?? top ?? side`. `rebake()` is called after palette switches. Each frame it draws, in order: landmark badges (a circle in the kind's `LANDMARK_COLOR` with a dark rim and glow; the kind's glyph forced to white by temporarily overriding `fillStyle`/`strokeStyle`), always-on name labels on dark pills (each tries below then above its badge and is skipped if it would overlap an earlier label or the reserved box around the player), the player marker **last** so it is always on top (bright orange `#ff8c1a` arrow, 20 px, with a glow and a dark rim; an 8 px dot when stationary), and an N/E/S/W compass in the top-right corner (fixed: the equirectangular map is always north-up). Hover tooltips show `name · kind`. Displayed at 971x486 CSS px, max 90vw/90vh; on touch the map closes on tap.
 
 ### HUD (`ui/hud.ts`)
 
@@ -855,7 +891,23 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 
 ### Landmarks (`world/landmarks.ts`)
 
-`buildSphereLandmarks(grid, rng)` runs after terrain: for each of the 6 faces it picks up to `LANDMARKS_PER_FACE = 2` random land columns (margin 10 from face edges; land = `columnTop > SEA_LAYER + 1`; at least `MIN_SEP = 20` apart in both `u` and `v`; up to 400 attempts per face), and builds the next structure from a rotating list: twisted spire, obelisk, monolith ring, tombstone field, floating biosphere, ancient well, ruined arch. Builders write blocks with a non-overwriting `put` (footings use `overwrite`) in face-local coordinates. Returns `LandmarkRecord[]` (`kind` and unit `dir`) for the map. Landmark structures are placed after terrain/trees but are not given a clearing, so overlaps with trees resolve by first-writer (`put` skips occupied cells).
+`buildSphereLandmarks(grid, rng)` runs after terrain and returns `LandmarkRecord[]` (`kind`, unit `dir`, `name`, optional `sky`).
+
+**Kinds (11):** twisted spire, obelisk, monolith ring, tombstone field, floating biosphere, ancient well, ruined arch, stepped ziggurat, ruined watchtower, crystal grove, old aqueduct.
+
+**Placement.** `LANDMARK_TOTAL = 27` are dealt round-robin to the faces (4-5 each) at random land columns (margin 10, not water, >= `MIN_SEP = 20` apart on a face, up to 1,200 attempts per face). Kinds come from shuffled decks across the whole planet, so every kind appears before any repeats: two full decks plus five, i.e. each kind 2-3 times. Before building, `clearAround` removes trees, bushes, cacti and ground cover within a per-kind radius (`CLEAR_R`), which also keeps structures off the canopy.
+
+**Materials.** Landmarks don't use terrain stone (they read as boulders). Each kind has a colour (`LANDMARK_COLOR`, shared with the map badges) and gets three registered blocks: `LANDMARK_MASONRY` (carved cream masonry, `patMasonry`), `LANDMARK_ACCENT_<KIND>` (masonry in the kind colour) and `LANDMARK_GEM_<KIND>` (emissive, faceted, catches bloom). Gems cap spires and obelisks, sit at the ring's altar and tomb field's memorial, glow in the well, key the arch, light the tower's window and crown, and tip the biosphere's drips; the crystal grove is made of them.
+
+**Sky islands.** `SKY_ISLANDS = 10` extra floating islands are placed anywhere (over land or sea), >= 60 columns apart per face, at cap layers 46-78 (above every peak, below `SHELL_DEPTH` with their trees): an inverted cone of masonry under soil and grass with a lumpy 12-sector outline, glowing drips, and 1-3 trees. Recorded as `kind: 'biosphere', sky: true`. `groundColumnTop` ignores them (section 2); `scripts/check-islands.ts` asserts it.
+
+**Names** (`core/names.ts`, ported from planet-explorer). One themed pool of 18 per kind plus `island` for sky islands (12 pools, 216 names, none shared). Each pool is shuffled once per planet with the landmark RNG and dealt in order, so every name is distinct and stable for a seed. `scripts/check-names.ts` asserts every kind has a pool, no name repeats across pools, and every landmark on two real seeds has a distinct name from its own pool.
+
+### Locations panel (`ui/locations.ts`)
+
+Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM here, so no new dependency). A `<details>` pill at top left (z-index 19, under the boot overlay, so it appears after entry); open, it is 200 px wide with a collapsible section per kind (colour swatch, count) and one 22 px row per named place (34 px on coarse pointers). Panel events don't propagate to the canvas, so clicks never grab pointer lock; buttons blur after use so WASD isn't captured. G / ☰ toggles it with the HUD; hidden by default on touch.
+
+`teleportTo(record)` in `main.ts`: leaves fly/drone mode, snaps the walker a few columns off the structure (6 for ground landmarks, 14 for sky islands) along a tangent, and sets yaw to face it (`-atan2(dot(toTarget, rgt), dot(toTarget, fwd))` on `tangentBasis`). Sky islands can't be reached on foot, so the player arrives in drone mode, pitched up. The streamer is filled synchronously so the first frame isn't empty; the dog reappears at heel by itself (it runs in when beyond `TELEPORT_DIST`).
 
 ---
 
@@ -869,7 +921,7 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 | `build` | `tsc --noEmit && vite build` | Typecheck then production bundle (`target es2020`, `three` split into its own chunk) |
 | `typecheck` | `tsc --noEmit` | |
 | `preview` | `vite preview --port 5161` | |
-| `check` | six node scripts (below) | Sanity checks |
+| `check` | eight node scripts (below) | Sanity checks |
 | `format` | `prettier --write "src/**/*.{ts,css}" "scripts/**/*.ts" vite.config.ts index.html` | Prettier config: 4-space tabs, single quotes, trailing commas, 120 columns |
 
 `npm run check` runs, in order:
@@ -877,11 +929,13 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 1. `node scripts/check-controls.ts`: for 500 random up vectors and yaws, `tangentBasis`'s `fwd`/`rgt` match a real `PerspectiveCamera.lookAt` frame (W = view-forward, D = screen-right).
 2. `node scripts/check-tiers.ts`: `classifyGpu` over a table of ~25 real renderer strings (desktop discrete/iGPU/Arc, SwiftShader, Adreno/Mali/Xclipse/Apple mobile, low-memory phones, no WebGL2).
 3. `node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts`: pathfinder scenarios on a hand-built patch (wall, water, trunk, terrace, cliff, incremental search).
-4. `check-trees.ts`: generates seed 1337 and fails if leaf or trunk voxel counts collapse (guards the tree forms and scatter bands).
+4. `check-trees.ts`: generates seed 1337 and fails if leaf or bark voxel counts collapse, or if any of the five bark styles is missing from the planet.
 5. `check-rivers.ts`: generates seed 1337; asserts at least 2,000 fresh-water columns and that no water column's top is above a dry neighbour's ground (the "carved, never floating" rule).
-6. `node scripts/check-sky-frame.ts`: JS replica of `_toSky` maps `up` to +Y and keeps horizontal directions on the horizon; also greps `sky.ts` for the exact axis line so a shader change forces an update here.
+6. `check-islands.ts`: under all ten sky islands the walkable ground is the terrain, not the island.
+7. `check-names.ts`: name pools cover every kind, no shared names, and every landmark name is distinct.
+8. `node scripts/check-sky-frame.ts`: JS replica of `_toSky` maps `up` to +Y and keeps horizontal directions on the horizon; also greps `sky.ts` for the exact axis line so a shader change forces an update here.
 
-`scripts/ts-resolve.mjs` registers a `node:module` resolve hook that retries extensionless relative specifiers (`'./palette'`, as Vite allows) with `.ts`. `check-dog-path.ts`, `check-trees.ts` and `check-rivers.ts` need it because it imports `src/core/voxel.ts` and `src/player/path.ts`, which import siblings without extensions; the other checks import files whose own imports are fully resolvable (or only external modules). Deployment: `.github/workflows/deploy-pages.yml` builds with Node 20 and publishes to GitHub Pages on push to `main`.
+`scripts/ts-resolve.mjs` registers a `node:module` resolve hook that retries extensionless relative specifiers (`'./palette'`, as Vite allows) with `.ts`. `check-dog-path.ts`, `check-trees.ts`, `check-rivers.ts`, `check-islands.ts` and `check-names.ts` need it because it imports `src/core/voxel.ts` and `src/player/path.ts`, which import siblings without extensions; the other checks import files whose own imports are fully resolvable (or only external modules). Deployment: `.github/workflows/deploy-pages.yml` builds with Node 20 and publishes to GitHub Pages on push to `main`.
 
 ---
 

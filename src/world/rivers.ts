@@ -78,7 +78,7 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
     };
 
     /* ---- 2. rivers & streams: steepest descent with inertia ------------- */
-    const RIVERS = 70;
+    const RIVERS = 110; // was 70
     const D8: Array<[number, number]> = [
         [1, 0],
         [-1, 0],
@@ -96,7 +96,8 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
             v = rng.int(4, N - 5);
         const h0 = grid.columnTop(f, u, v);
         // Sources in the uplands, on grass (springs, snowmelt below the bare rock).
-        if (h0 < seaLayer + 9 || !grassIds.has(grid.get(f, u, v, h0))) continue;
+        // Sources from 6 layers up (was 9), so lower hills get their own streams too.
+        if (h0 < seaLayer + 6 || !grassIds.has(grid.get(f, u, v, h0))) continue;
         r++;
         let k = key(f, u, v);
         let hu = 0,
@@ -152,8 +153,8 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
     /* ---- 3. lakes & ponds: rounded basins on gentle land ----------------- */
     // Spread evenly: each face gets its share, and a seed too close to an earlier
     // one is rejected, so lakes scatter over the land instead of clumping.
-    const LAKES = 300;
-    const MIN_GAP = 18;
+    const LAKES = 450; // was 300
+    const MIN_GAP = 14; // was 18: room for the extra lakes
     const placed: Array<[number, number, number]> = [];
     for (let n = 0, tries = 0; n < LAKES && tries < LAKES * 60; tries++) {
         const f = n % 6,

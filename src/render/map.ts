@@ -1,9 +1,12 @@
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
-import { BLOCK_BY_ID, WATER, SKY } from '../core/palette';
+import { BLOCK_BY_ID, WATER } from '../core/palette';
 
 /** Player marker: bright orange fill, dark rim (easy to spot on any terrain). */
+/** Map colour grading vs raw block tops (linear): a little darker and richer, like in-game. */
+const MAP_EXPOSURE = 0.82;
+const MAP_SATURATION = 1.15;
 const PLAYER_ORANGE = '#ff8c1a';
 const PLAYER_RIM = '#3a1a00';
 import { LandmarkRecord, LANDMARK_COLOR } from '../world/landmarks';
@@ -278,7 +281,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
                     const depth = SEA_LAYER - top; // bed depth below the surface
                     _c.copy(WATER.shoal).lerp(WATER.shallow, Math.min(1, depth / 3));
                     if (depth > 3) _c.lerp(WATER.deep, Math.min(1, (depth - 3) / 8) * 0.7);
-                    _c.lerp(SKY.haze, 0.2);
+                    // (No haze lerp: with the bluer sky it washed the whole sea pale.)
                     heights[k] = SEA_LAYER;
                     water[k] = 1;
                 } else {
@@ -311,6 +314,17 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
                     const lift = 0.94 + Math.min(0.12, (heights[k] - SEA_LAYER) * 0.006);
                     _c.multiplyScalar(shade * lift);
                 }
+                // Match the palette as it reads in the world: raw block tops are the
+                // colour at full, flat light, but in-game every surface is shaded by
+                // sun, AO and haze, so the map looked white-washed beside it. Darken
+                // and re-saturate a little, in linear space, before encoding.
+                _c.multiplyScalar(MAP_EXPOSURE);
+                const lum = 0.2126 * _c.r + 0.7152 * _c.g + 0.0722 * _c.b;
+                _c.setRGB(
+                    lum + (_c.r - lum) * MAP_SATURATION,
+                    lum + (_c.g - lum) * MAP_SATURATION,
+                    lum + (_c.b - lum) * MAP_SATURATION,
+                );
                 _c.convertLinearToSRGB();
                 const i = k * 4;
                 baked.data[i] = Math.round(Math.min(1, _c.r) * 255);
