@@ -28,7 +28,7 @@ const css = `
 #locs { position: fixed; top: 78px; left: 10px; z-index: 19; font: 12px/1.25 var(--font-body);
   color: var(--ink); background: rgba(14, 11, 18, 0.72); border: 1px solid var(--line);
   border-radius: 7px; backdrop-filter: blur(6px); user-select: none; }
-#locs[open] { width: 168px; max-height: calc(100dvh - 160px); overflow-y: auto; }
+#locs[open] { width: 200px; max-height: calc(100dvh - 160px); overflow-y: auto; }
 #locs > summary { cursor: pointer; padding: 4px 8px; list-style: none; font-size: 14px; }
 #locs > summary::-webkit-details-marker, #locs details > summary::-webkit-details-marker { display: none; }
 #locs details details { border-top: 1px solid rgba(232,220,193,0.08); }
@@ -38,13 +38,13 @@ const css = `
 #locs details details[open] > summary::after { transform: rotate(90deg); }
 #locs .sw { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1.5px rgba(0,0,0,0.5); }
 #locs .n { opacity: 0.5; font-size: 10px; }
-#locs .chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 8px 6px 22px; }
-#locs button { min-width: 24px; height: 22px; padding: 0 6px; border: 1px solid rgba(232,220,193,0.18);
-  border-radius: 5px; background: rgba(255,255,255,0.04); color: var(--ink); font: 600 11px var(--font-body);
-  cursor: pointer; }
+#locs .chips { display: flex; flex-direction: column; gap: 1px; padding: 0 6px 5px 18px; }
+#locs button { height: 22px; padding: 0 6px; text-align: left; border: 1px solid transparent;
+  border-radius: 5px; background: none; color: var(--ink); font: 600 11px var(--font-body);
+  cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #locs button:hover, #locs button:focus-visible { background: rgba(223, 112, 56, 0.3); border-color: var(--gold-bright);
   color: #fff; outline: none; }
-@media (pointer: coarse) { #locs button { min-width: 34px; height: 34px; } }
+@media (pointer: coarse) { #locs button { height: 34px; } }
 `;
 
 export function createLocations(records: LandmarkRecord[], go: (r: LandmarkRecord) => void) {
@@ -67,15 +67,16 @@ export function createLocations(records: LandmarkRecord[], go: (r: LandmarkRecor
         const hex = '#' + g.color.toString(16).padStart(6, '0');
         sec.innerHTML = `<summary><span class="sw" style="background:${hex}"></span>${name} <span class="n">${g.items.length}</span></summary>`;
         const singular = name.replace(/s$/, '').replace(/ie$/, 'y');
-        // Numbered chips in a wrapping row: a group of three is one line, not three.
+        // Compact 22px rows of named places under each group.
         const chips = document.createElement('div');
         chips.className = 'chips';
         sec.appendChild(chips);
         g.items.forEach((r, i) => {
             const b = document.createElement('button');
-            b.textContent = String(i + 1);
-            b.title = `${singular} ${i + 1}`; // full name on hover / for screen readers
-            b.setAttribute('aria-label', `Teleport to ${singular} ${i + 1}`);
+            // One compact row per place, showing its name (long names clip with an ellipsis).
+            b.textContent = r.name;
+            b.title = `${r.name} — ${singular}`;
+            b.setAttribute('aria-label', `Teleport to ${r.name}`);
             b.addEventListener('click', (e) => {
                 e.stopPropagation();
                 go(r);

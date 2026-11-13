@@ -331,6 +331,24 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
         const px = ((lon + Math.PI) / (2 * Math.PI)) * MAP_W;
         const py = ((Math.PI / 2 - lat) / Math.PI) * MAP_H;
 
+        // Landmarks first, the player marker last: the player must always be
+        // visible on top of any badge or label near it.
+        if (landmarks) {
+            labelBoxes.length = 0;
+            // Reserve the player's spot so no landmark label is placed over it.
+            labelBoxes.push([px - 22, py - 22, 44, 44]);
+            for (const lm of landmarks) {
+                const llon = Math.atan2(lm.dir.z, lm.dir.x);
+                const llat = Math.asin(Math.max(-1, Math.min(1, lm.dir.y)));
+                const lpx = ((llon + Math.PI) / (2 * Math.PI)) * MAP_W;
+                const lpy = ((Math.PI / 2 - llat) / Math.PI) * MAP_H;
+                ctx.save();
+                ctx.translate(lpx, lpy);
+                drawBadge(ctx, lm.kind);
+                ctx.restore();
+                drawLabel(lm.name, lpx, lpy);
+            }
+        }
         if (forwardDir && forwardDir.lengthSq() > 0.001) {
             // Project forward direction onto equirectangular map to get arrow angle
             // Tangent east (+lon) and north (-lat) axes at player position
@@ -389,20 +407,6 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
             ctx.stroke();
         }
 
-        if (landmarks) {
-            labelBoxes.length = 0;
-            for (const lm of landmarks) {
-                const llon = Math.atan2(lm.dir.z, lm.dir.x);
-                const llat = Math.asin(Math.max(-1, Math.min(1, lm.dir.y)));
-                const lpx = ((llon + Math.PI) / (2 * Math.PI)) * MAP_W;
-                const lpy = ((Math.PI / 2 - llat) / Math.PI) * MAP_H;
-                ctx.save();
-                ctx.translate(lpx, lpy);
-                drawBadge(ctx, lm.kind);
-                ctx.restore();
-                drawLabel(lm.sky ? 'Sky Island' : LANDMARK_LABELS[lm.kind], lpx, lpy);
-            }
-        }
         drawCompass();
     }
 
@@ -534,7 +538,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
             }
         }
         if (found) {
-            tip.textContent = found.sky ? 'Sky Island' : LANDMARK_LABELS[found.kind];
+            tip.textContent = `${found.name} · ${found.sky ? 'Sky Island' : LANDMARK_LABELS[found.kind]}`;
             tip.style.left = e.clientX + 12 + 'px';
             tip.style.top = e.clientY - 4 + 'px';
             tip.style.display = 'block';

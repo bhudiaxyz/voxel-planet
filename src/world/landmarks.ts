@@ -6,6 +6,7 @@ import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/v
 import { BLOCKS, BLOCK_BY_ID, PATTERN, registerBlock } from '../core/palette';
 import { makeRng } from '../core/rng';
 import { columnDir } from '../core/geoutil';
+import { LANDMARK_NAMES_BY_KIND } from '../core/names';
 
 export interface LandmarkRecord {
     kind:
@@ -23,6 +24,8 @@ export interface LandmarkRecord {
     dir: THREE.Vector3; // world-space unit direction from planet centre
     /** A floating sky island (drawn on the map, but not a ground landmark). */
     sky?: boolean;
+    /** Procedural name from core/names.ts, unique per planet. */
+    name: string;
 }
 
 const _tmp = new THREE.Vector3();
@@ -126,8 +129,9 @@ function clearAround(grid: SphereVoxelGrid, face: number, cu: number, cv: number
 }
 
 const SEA_LAYER = 11;
-/** Landmarks across the planet: 16 (was 12, i.e. +33%), dealt round-robin to the faces. */
-const LANDMARK_TOTAL = 16;
+/** Ground landmarks across the planet, dealt round-robin to the faces. */
+// 27 = 2 full decks of the 11 kinds + 5 more, so every kind appears 2-3 times.
+const LANDMARK_TOTAL = 27;
 const MIN_SEP = 20; // minimum u/v distance between two landmarks on same face
 
 // Safe block setter — clips to grid bounds, never overwrites non-air
@@ -613,6 +617,22 @@ const KINDS: LandmarkRecord['kind'][] = [
 
 export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<typeof makeRng>): LandmarkRecord[] {
     const records: LandmarkRecord[] = [];
+    // Names: per pool, a seeded shuffle dealt in order, so each name is unique on
+    // this planet and the same for the same seed. Pools hold 18; no kind places
+    // more than 3, and there are 10 sky islands, so a pool never runs out.
+    const nameDecks = new Map<string, string[]>();
+    const nameFor = (pool: string) => {
+        let d = nameDecks.get(pool);
+        if (!d) {
+            d = [...(LANDMARK_NAMES_BY_KIND[pool] ?? [])];
+            for (let i = d.length - 1; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [d[i], d[j]] = [d[j], d[i]];
+            }
+            nameDecks.set(pool, d);
+        }
+        return d.pop() ?? pool;
+    };
     // Deal kinds from shuffled decks across the whole planet, so all eleven
     // appear before any repeats (a random start per face gave five tombstone
     // fields on one seed and no ziggurat at all).
@@ -634,7 +654,7 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
         // 16 over 6 faces: faces 0-3 get 3, faces 4-5 get 2.
         const quota = Math.floor(LANDMARK_TOTAL / 6) + (face < LANDMARK_TOTAL % 6 ? 1 : 0);
 
-        while (placed.length < quota && attempts < 400) {
+        while (placed.length < quota && attempts < 1200) {
             attempts++;
             const u = 10 + Math.floor(rng() * (FACE_RES - 20));
             const v = 10 + Math.floor(rng() * (FACE_RES - 20));
@@ -654,7 +674,7 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
             placed.push([u, v]);
 
             columnDir(face, u, v, FACE_RES, _tmp);
-            records.push({ kind, dir: _tmp.clone() });
+            records.push({ kind, dir: _tmp.clone(), name: nameFor(kind) });
         }
     }
 
@@ -670,7 +690,7 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
         sky.push([face, u, v]);
         n++;
         columnDir(face, u, v, FACE_RES, _tmp);
-        records.push({ kind: 'biosphere', dir: _tmp.clone(), sky: true });
+        records.push({ kind: 'biosphere', dir: _tmp.clone(), sky: true, name: nameFor('island') });
     }
 
     return records;
