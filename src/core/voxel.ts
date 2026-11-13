@@ -1886,6 +1886,10 @@ const FRAG_BODY = /* glsl */ `
       float fine = vxNoise(vPosW.xz * 3.1 + t * 1.7) * 0.5 + vxNoise(vPosW.yz * 2.7 - t * 1.3) * 0.5;
       col = mix(diffuseColor.rgb * 0.88, vTintV, smoothstep(0.45, 0.85, rip) * 0.55);
       col += vTintV * 0.12 * smoothstep(0.7, 0.95, fine);
+      // Night: water has no sky to reflect, so it goes darker than the land
+      // around it (uAmbientTint's blue shift tracks night: b - 1 ≈ 0.12 × night).
+      float wNight = clamp((uAmbientTint.b - 1.0) / 0.12, 0.0, 1.0);
+      col *= mix(1.0, 0.35, wNight);
     }
 
     // --- grass spilling over the lip of the block --------------------
@@ -2244,7 +2248,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v14' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v15' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 

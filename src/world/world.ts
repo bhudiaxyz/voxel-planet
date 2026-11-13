@@ -8,6 +8,7 @@ import { createSphereChunkStreamer } from '../core/voxel';
 import { makeRng } from '../core/rng';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { generateSphereTerrain } from './terrain';
+import { bakeWetMap } from './wet-map';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
 import { createSphereVegetation } from './vegetation';
@@ -26,6 +27,9 @@ export interface SphereWorld {
     animated: any[];
     sphereWater: ReturnType<typeof createSphereWater>;
     landmarks: LandmarkRecord[];
+    /** Distance to water per column (see wet-map.ts). */
+    wet: Uint8Array;
+    veg: ReturnType<typeof createSphereVegetation>;
 }
 
 export async function buildSphereWorld(
@@ -56,6 +60,9 @@ export async function buildSphereWorld(
     const landmarks = buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f));
     await yieldFrame();
 
+    // Distance-to-water per column: wet ground, waterside plants, firefly habitat.
+    const wet = bakeWetMap(grid, SEA_LAYER);
+
     onProgress(0.73, 'building terrain meshes');
     const streaming = createSphereChunkStreamer(grid, { loadRadius: streamRadius });
 
@@ -72,7 +79,7 @@ export async function buildSphereWorld(
 
     // Vegetation follows the streamer: a patch builds when terrain under it loads.
     // Hooked up before the first fill so the opening view has grass.
-    const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity, 0.1, groundDetail);
+    const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity, 0.1, groundDetail, wet);
     streaming.setListener(veg);
     // Fill the whole view before the first frame; streaming after this is budgeted per frame.
     streaming.update(spawnDir, Infinity);
@@ -92,5 +99,5 @@ export async function buildSphereWorld(
     const animated = [veg];
 
     onProgress(1.0, 'ready');
-    return { grid, streaming, group, spawnDir, animated, sphereWater, landmarks };
+    return { grid, streaming, group, spawnDir, animated, sphereWater, landmarks, wet, veg };
 }

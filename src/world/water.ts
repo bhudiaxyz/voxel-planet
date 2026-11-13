@@ -102,6 +102,8 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
                 uSeaDepth: { value: SEA_LAYER_SPHERE },
                 uShoreMap: { value: shoreMap },
                 uFoamColor: { value: new THREE.Color(0xf4f1ea) },
+                /** 0 day .. 1 midnight (DayNight.getNightFactor). */
+                uNight: { value: 0 },
             },
         ]),
         defines: { ...(shoreMap ? { USE_SHORE_MAP: 1 } : {}), ...(foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {}) },
@@ -135,6 +137,7 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
       #include <fog_pars_fragment>
       uniform float uTime, uOpacity, uDensity, uSaturation, uCellTone, uCaustic, uReflect, uSeaDepth;
       uniform vec3 uShoal, uShallow, uDeep, uWarm, uSheen, uHorizon, uSky, uSunDir, uSunColor;
+      uniform float uNight;
       uniform vec3 uExtinction;
       varying vec3 vWorld;
       varying vec3 vNrm;
@@ -223,6 +226,14 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
         }
         #endif
 
+        // Night: the sea is unlit (its colours are the palette's daytime ones), so
+        // dim it with the sky — deep blue-black, a cool tint, and a faint sheen
+        // left on the brightest wave crests so it still reads as water.
+        {
+          float nightDim = mix(1.0, 0.07, uNight);
+          float sheen = smoothstep(0.55, 1.0, fresnel + spec * 0.5) * 0.06 * uNight;
+          waterCol = waterCol * nightDim * mix(vec3(1.0), vec3(0.75, 0.85, 1.15), uNight) + vec3(0.55, 0.65, 0.85) * sheen;
+        }
         gl_FragColor = vec4(waterCol, alpha);
         #include <fog_fragment>
       }
@@ -237,8 +248,9 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
         mesh,
         material: mat,
         planetUnis,
-        update(_dt: number) {
+        update(_dt: number, night = 0) {
             mat.uniforms.uTime.value += _dt;
+            mat.uniforms.uNight.value = night;
             mat.uniforms.uShoal.value.copy(WATER.shoal);
             mat.uniforms.uShallow.value.copy(WATER.shallow);
             mat.uniforms.uDeep.value.copy(WATER.deep);

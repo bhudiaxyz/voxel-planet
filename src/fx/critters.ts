@@ -258,7 +258,13 @@ const FIREFLY_FRAG = /* glsl */ `
 export interface GroundSampler {
     /** World radius of the walkable ground under a direction, or -1 for water. */
     groundAt(dir: THREE.Vector3): number;
+    /** Optional 0..1 habitat scores: the best of a few candidate spots wins. */
+    butterflyPref?(dir: THREE.Vector3): number;
+    fireflyPref?(dir: THREE.Vector3): number;
 }
+
+/** Candidate spots tried per anchor; the highest habitat score is kept. */
+const CANDIDATES = 4;
 
 export function createCritters(scene: THREE.Scene, count: number, sampler: GroundSampler, seed = 3) {
     if (count <= 0) return { update() {}, dispose() {} };
@@ -344,7 +350,13 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
     const total = count + fCount;
     let seeded = false;
 
-    /** Put anchor i on walkable ground near the player; water spots retry a few times. */
+    const _best = new THREE.Vector3();
+    /**
+     * Put anchor i on walkable ground near the player. Several candidates are
+     * scored by habitat (butterflies: flower drifts; fireflies: damp, lush ground
+     * near water) and the best kept, so critters gather where they belong
+     * without ever leaving the player's surroundings empty.
+     */
     function place(i: number, playerPos: THREE.Vector3) {
         _up.copy(playerPos).normalize();
         _t1.set(0, 1, 0);
@@ -352,7 +364,10 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
         _t1.addScaledVector(_up, -_t1.dot(_up)).normalize();
         _t2.crossVectors(_up, _t1);
         const R = playerPos.length();
-        for (let tries = 0; tries < 4; tries++) {
+        const pref = i < count ? sampler.butterflyPref : sampler.fireflyPref;
+        let bestG = -1,
+            bestScore = -1;
+        for (let tries = 0; tries < CANDIDATES; tries++) {
             const a = rnd() * Math.PI * 2,
                 r = 3 + Math.sqrt(rnd()) * SPREAD;
             _d.copy(_up)
@@ -362,18 +377,26 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
                 .normalize();
             const g = sampler.groundAt(_d);
             if (g < 0) continue;
-            const arr = i < count ? bAnchor : fAnchor;
-            const j = i < count ? i : i - count;
-            arr[j * 3] = _d.x * g;
-            arr[j * 3 + 1] = _d.y * g;
-            arr[j * 3 + 2] = _d.z * g;
-            if (i < count) {
-                const c = flowerCols[(rnd() * flowerCols.length) | 0];
-                bCol[j * 3] = c.r;
-                bCol[j * 3 + 1] = c.g;
-                bCol[j * 3 + 2] = c.b;
+            // A little jitter so a uniform field still spreads them out.
+            const score = (pref ? pref(_d) : 0) + rnd() * 0.15;
+            if (score > bestScore) {
+                bestScore = score;
+                bestG = g;
+                _best.copy(_d);
             }
-            return;
+            if (!pref) break; // no habitat: first dry spot is fine
+        }
+        if (bestG < 0) return;
+        const arr = i < count ? bAnchor : fAnchor;
+        const j = i < count ? i : i - count;
+        arr[j * 3] = _best.x * bestG;
+        arr[j * 3 + 1] = _best.y * bestG;
+        arr[j * 3 + 2] = _best.z * bestG;
+        if (i < count) {
+            const c = flowerCols[(rnd() * flowerCols.length) | 0];
+            bCol[j * 3] = c.r;
+            bCol[j * 3 + 1] = c.g;
+            bCol[j * 3 + 2] = c.b;
         }
     }
 
@@ -386,9 +409,11 @@ export function createCritters(scene: THREE.Scene, count: number, sampler: Groun
             bUni.uTime.value += dt;
             fUni.uTime.value += dt;
             fUni.uPixelRatio.value = pixelRatio;
-            const day = 1 - THREE.MathUtils.smoothstep(night, 0.35, 0.6);
+            // Butterflies settle as the light goes; fireflies come out at dusk (the
+            // night factor starts rising around sunset) and overlap them briefly.
+            const day = 1 - THREE.MathUtils.smoothstep(night, 0.25, 0.5);
             bUni.uAlpha.value = day;
-            fUni.uAlpha.value = THREE.MathUtils.smoothstep(night, 0.45, 0.75);
+            fUni.uAlpha.value = THREE.MathUtils.smoothstep(night, 0.12, 0.45);
             bMesh.visible = day > 0.01;
             fMesh.visible = fUni.uAlpha.value > 0.01;
 

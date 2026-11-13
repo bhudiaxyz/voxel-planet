@@ -17,6 +17,7 @@ import { createParticles } from './fx/particles';
 import { createBirds } from './fx/birds';
 import { createClouds } from './fx/clouds';
 import { createCritters } from './fx/critters';
+import { wetIdx, WET_MAX } from './world/wet-map';
 import { dirToFaceUV } from './core/geoutil';
 import { createSphereMap } from './render/map';
 import { createSphereDroneMode } from './player/drone';
@@ -42,6 +43,8 @@ const _dogFwd = new THREE.Vector3();
 const _cloudLit = new THREE.Color();
 const _cloudShade = new THREE.Color();
 const _white = new THREE.Color(1, 1, 1);
+/** Moonlit cloud tops at midnight (linear): a dim cool blue-grey. */
+const _cloudNight = new THREE.Color(0.035, 0.045, 0.07);
 /** Sea surface layer on the sphere (matches sphere-terrain). */
 const SEA_LAYER = 11;
 
@@ -178,6 +181,14 @@ async function start(): Promise<void> {
                 const { face, u, v } = dirToFaceUV(d, FACE_RES);
                 const top = world.grid.columnTop(face, u, v);
                 return top <= SEA_LAYER ? -1 : world.grid.surfaceRadius(face, u, v);
+            },
+            // Butterflies follow the flower drifts.
+            butterflyPref: (d) => world.veg.bloomAt(d),
+            // Fireflies gather over damp, lush ground by the water.
+            fireflyPref: (d) => {
+                const { face, u, v } = dirToFaceUV(d, FACE_RES);
+                const near = 1 - world.wet[wetIdx(face, u, v)] / WET_MAX;
+                return near * 0.7 + world.veg.lushAt(d) * 0.3;
             },
         },
         SEED ^ 0xb077,
@@ -428,7 +439,7 @@ async function start(): Promise<void> {
         dayNight.update(dt);
 
         if (world.sphereWater) {
-            world.sphereWater.update(dt);
+            world.sphereWater.update(dt, dayNight.getNightFactor());
             world.sphereWater.material.uniforms.uSunDir.value.copy(dayNight.sunDir);
         }
 
@@ -467,16 +478,22 @@ async function start(): Promise<void> {
             clouds.update(dt, at, windDir);
             // Sunlit tops brighter than the sky (so they read against pale haze as well
             // as blue), cool shaded undersides; both dim and cool at night.
+            // Clouds are unlit and write no depth (the haze pass skips them), so
+            // their night colour must be authored dark here: a dim moonlit blue-grey
+            // (~3% of the day value) over near-black undersides. The old ×0.25 floor
+            // left them glowing light grey against the night sky.
+            const moon = 1 - night;
             _cloudLit
                 .copy(_white)
                 .multiplyScalar(1.35)
                 .lerp(SKY.horizon, 0.15)
-                .multiplyScalar(1 - night * 0.75);
+                .multiplyScalar(0.03 + 0.97 * moon * moon)
+                .lerp(_cloudNight, night * 0.6);
             _cloudShade
                 .copy(SKY.zenith)
                 .lerp(_white, 0.35)
-                .multiplyScalar(0.78 * (1 - night * 0.6));
-            clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.4);
+                .multiplyScalar(0.78 * (0.02 + 0.98 * moon * moon));
+            clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.35);
             if (post.haze.uniforms.uCloudShadow.value > 0.5) clouds.renderShadow(renderer);
             critters.update(dt, at, night, renderer.getPixelRatio());
         }

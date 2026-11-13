@@ -23,6 +23,12 @@ const BLADE_P = 0.12;
 const FLOWER_EDGE = 0.58;
 const FLOWER_P = 0.55;
 const PEBBLE_P = 0.008;
+/** Per still fresh-water column: a few lily pads. */
+const LILY_P = 0.09;
+/** Per bank column (1 from water) inside a reed stand: a dense reed clump. */
+const REED_P = 0.75;
+/** Per canopy column in warm zones: vines / moss strands from the underside. */
+const HANG_P = 0.12;
 /** Noise frequencies are per world unit, sampled in 3D so patches cross cube seams. */
 const MEADOW_FREQ = 0.026;
 const FLOWER_FREQ = 0.055;
@@ -80,7 +86,7 @@ function makeVegMaterial(windAmp: number) {
                 }`,
             );
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-sphereveg-v2';
+    mat.customProgramCacheKey = () => 'VoxelWorld-sphereveg-v3';
     return { mat, uniforms };
 }
 
@@ -136,6 +142,9 @@ const _base2 = new THREE.Vector3();
 const _centre = new THREE.Vector3();
 const _dark = new THREE.Color();
 const _light = new THREE.Color();
+const _root = new THREE.Color();
+/** Blade root brightness relative to its authored base colour (contact shadow). */
+const ROOT_SHADE = 0.72;
 
 /**
  * A crossed pair of blades rooted at `base`, standing along `up`.
@@ -157,6 +166,9 @@ function tuft(
     const hw = w * 0.5;
     const c = Math.cos(rot),
         s = Math.sin(rot);
+    // Contact shadow: the root sits in its own shade (the blades around it block
+    // the sky), so it is darker than the tip — grass reads rooted, not pasted on.
+    _root.copy(dark).multiplyScalar(ROOT_SHADE);
     for (let k = 0; k < 2; k++) {
         // Blade direction in the tangent plane; the second blade is perpendicular.
         const bx = k === 0 ? c : -s,
@@ -167,8 +179,8 @@ function tuft(
         const tx = base.x + up.x * h + _ta.x * leanA + _tb.x * leanB,
             ty = base.y + up.y * h + _ta.y * leanA + _tb.y * leanB,
             tz = base.z + up.z * h + _ta.z * leanA + _tb.z * leanB;
-        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, dark, 0, rot);
-        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, dark, 0, rot);
+        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, _root, 0, rot);
+        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, rot);
         buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, rot);
         buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, rot);
     }
@@ -319,6 +331,13 @@ interface DetailColours {
     caps: THREE.Color[];
     stem: THREE.Color;
     moss: THREE.Color;
+    lily: THREE.Color;
+    lilyFlower: THREE.Color;
+    reedBase: THREE.Color;
+    reedTip: THREE.Color;
+    cattail: THREE.Color;
+    vine: THREE.Color;
+    vineTip: THREE.Color;
 }
 const readColours = (): DetailColours => ({
     // Flowers use the theme's petal colours, not its leaves: canopies are mostly
@@ -330,6 +349,14 @@ const readColours = (): DetailColours => ({
     caps: [PETAL_COLORS[0], PETAL_COLORS[2], PETAL_COLORS[3], BLOCKS.STONE_WARM.top] as THREE.Color[],
     stem: BLOCKS.STONE_PALE.top as THREE.Color,
     moss: BLOCKS.GRASS_DEEP.top as THREE.Color,
+    // Waterside colours come off the theme's own greens and petals.
+    lily: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.5),
+    lilyFlower: (PETAL_COLORS[3] as THREE.Color).clone().lerp(new THREE.Color(1, 1, 1), 0.4),
+    reedBase: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.8),
+    reedTip: (BLOCKS.GRASS_LIGHT.top as THREE.Color).clone().lerp(BLOCKS.SAND.top, 0.35),
+    cattail: new THREE.Color(0.22, 0.13, 0.07),
+    vine: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.75),
+    vineTip: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.4),
 });
 
 /* ---- ground details: boulders, fallen logs, mushrooms -------------------
@@ -432,6 +459,115 @@ function scatterGroundDetail(
         }
     }
 }
+
+/* ---- waterside, canopy floor and hanging growth -------------------------- */
+
+const _flat = new THREE.Color();
+const _pad = new THREE.Color();
+const _padRim = new THREE.Color();
+
+/**
+ * A flat surface-aligned quad (a leaf on the ground, a lily pad on the water),
+ * rotated by `yaw` in the tangent plane. `sway` lets pads bob a little.
+ */
+function flatQuad(
+    buf: QuadBuffer,
+    base: THREE.Vector3,
+    up: THREE.Vector3,
+    w: number,
+    l: number,
+    color: THREE.Color,
+    yaw: number,
+    sway: number,
+) {
+    const c = Math.cos(yaw),
+        s = Math.sin(yaw);
+    const ax = (_ta.x * c + _tb.x * s) * w * 0.5,
+        ay = (_ta.y * c + _tb.y * s) * w * 0.5,
+        az = (_ta.z * c + _tb.z * s) * w * 0.5;
+    const bx = (_tb.x * c - _ta.x * s) * l * 0.5,
+        by = (_tb.y * c - _ta.y * s) * l * 0.5,
+        bz = (_tb.z * c - _ta.z * s) * l * 0.5;
+    buf.vert(base.x - ax - bx, base.y - ay - by, base.z - az - bz, up, color, sway, yaw);
+    buf.vert(base.x + ax - bx, base.y + ay - by, base.z + az - bz, up, color, sway, yaw);
+    buf.vert(base.x + ax + bx, base.y + ay + by, base.z + az + bz, up, color, sway, yaw);
+    buf.vert(base.x - ax + bx, base.y - ay + by, base.z - az + bz, up, color, sway, yaw);
+}
+
+/**
+ * Lily pads on still fresh water: a few round-ish pads (an octagon of two quads
+ * crossed would be heavier; two overlapping rotated squares read as round at
+ * this size), a darker rim, and now and then a pale flower.
+ */
+function drawLilyPads(buf: QuadBuffer, surface: THREE.Vector3, rng: Rng, cols: DetailColours) {
+    _pad.copy(cols.lily);
+    _padRim.copy(cols.lily).multiplyScalar(0.78);
+    const n = rng.int(1, 3);
+    for (let k = 0; k < n; k++) {
+        const r = root(surface, rng.range(-0.3, 0.3), rng.range(-0.3, 0.3)).addScaledVector(_up, 0.02 + k * 0.004);
+        const sz = rng.range(0.32, 0.55),
+            yaw = rng() * 6.28;
+        flatQuad(buf, r, _up, sz, sz, _padRim, yaw, 0.12);
+        flatQuad(buf, _base2.copy(r).addScaledVector(_up, 0.003), _up, sz * 0.9, sz * 0.9, _pad, yaw + 0.785, 0.12);
+        if (rng() < 0.22) {
+            const f = _base2.copy(r).addScaledVector(_up, 0.02);
+            box(buf, f, _up, 0.13, 0.08, cols.lilyFlower, 0.1, rng() * 6.28);
+        }
+    }
+}
+
+/** Dense waterside reed clump (taller and thicker than the lone REED plant). */
+function drawReedClump(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, cols: DetailColours) {
+    const n = rng.int(5, 9);
+    for (let k = 0; k < n; k++) {
+        const r = root(centre, rng.range(-0.42, 0.42), rng.range(-0.42, 0.42));
+        tuft(
+            buf,
+            r,
+            _up,
+            rng.range(0.05, 0.09),
+            rng.range(1.0, 1.8),
+            cols.reedBase,
+            cols.reedTip,
+            rng() * 6.28,
+            rng.range(-0.1, 0.1),
+            rng.range(-0.1, 0.1),
+            0.75,
+        );
+        // Cattail heads on some stems.
+        if (rng() < 0.3) {
+            const h = rng.range(1.1, 1.6);
+            box(buf, _base2.copy(r).addScaledVector(_up, h), _up, 0.08, 0.22, cols.cattail, 0.7, rng() * 6.28);
+        }
+    }
+}
+
+/** Leaf litter: flat flecks in the canopy's own colour on the ground beneath it. */
+function drawLeafLitter(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, leaf: THREE.Color, n: number) {
+    for (let k = 0; k < n; k++) {
+        const r = root(centre, rng.range(-0.45, 0.45), rng.range(-0.45, 0.45)).addScaledVector(_up, 0.012 + k * 0.002);
+        // Fallen leaves are a touch duller and browner than the living canopy.
+        _flat.copy(leaf).multiplyScalar(rng.range(0.7, 0.92)).lerp(LITTER_BROWN, rng.range(0.15, 0.45));
+        flatQuad(buf, r, _up, rng.range(0.1, 0.18), rng.range(0.14, 0.24), _flat, rng() * 6.28, 0);
+    }
+}
+const LITTER_BROWN = new THREE.Color(0.32, 0.22, 0.12);
+
+/**
+ * Hanging growth under a canopy block: vines and moss strands drooping from the
+ * leaf underside (`under` = the bottom face centre), swaying at the tips.
+ */
+function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: DetailColours) {
+    const n = rng.int(1, 3);
+    for (let k = 0; k < n; k++) {
+        const len = rng.range(0.6, 1.8);
+        // A tuft grown DOWN: base at the leaf underside, tip below it.
+        const r = root(under, rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
+        _down.copy(_up).negate();
+        tuft(buf, r, _down, rng.range(0.05, 0.1), len, cols.vine, cols.vineTip, rng() * 6.28, 0, 0, 0.9);
+    }
+}
+const _down = new THREE.Vector3();
 
 /**
  * @param lush   0..1 meadow field: lush shelves vs close-cropped ones
@@ -550,7 +686,10 @@ export function createSphereVegetation(
     windAmp = 0.1,
     /** Ground clutter multiplier (boulders, logs, mushrooms), 0 = none. */
     groundDetail = 1,
+    /** Distance-to-water per column (wet-map.ts); null = no waterside growth. */
+    wet: Uint8Array | null = null,
 ) {
+    const reedNoise = makeNoise3D(seed ^ 0x2eed);
     const { mat, uniforms } = makeVegMaterial(windAmp);
     const meadowNoise = makeNoise3D(seed ^ 0x51ed);
     const flowerNoise = makeNoise3D(seed ^ 0xf10e);
@@ -584,6 +723,19 @@ export function createSphereVegetation(
             }
             return false;
         };
+        /** Tangent frame (_ta, _tb) for the current _up. */
+        const frame = () => {
+            _ta.crossVectors(_up, Math.abs(_up.y) < 0.95 ? THREE.Object3D.DEFAULT_UP : _tb.set(1, 0, 0)).normalize();
+            _tb.crossVectors(_up, _ta);
+        };
+        /** Still water: no 4-neighbour water surface lower than this one (a lake, not a rapid). */
+        const isStill = (u: number, v: number, layer: number) => {
+            for (const [du, dv] of NEIGHBOURS4) {
+                const t = grid.columnTop(face, u + du, v + dv);
+                if (t < layer && (BLOCK_BY_ID[grid.get(face, u + du, v + dv, t)] as any)?.isWater) return false;
+            }
+            return true;
+        };
         const u1 = Math.min((pu + 1) * VEG_PATCH, FACE_RES),
             v1 = Math.min((pv + 1) * VEG_PATCH, FACE_RES);
         for (let v = pv * VEG_PATCH; v < v1; v++) {
@@ -592,6 +744,39 @@ export function createSphereVegetation(
                 const plant = grid.plantAt(face, u, v);
                 if (layer < 0 || (!plant && layer <= SEA_LAYER)) continue;
                 const block = BLOCK_BY_ID[grid.get(face, u, v, layer)] as any;
+
+                // Fresh water: lily pads on still lake/pond surfaces.
+                if (block?.isWater) {
+                    if (groundDetail > 0 && isStill(u, v, layer) && drng() < LILY_P * groundDetail) {
+                        columnDir(face, u, v, FACE_RES, _up);
+                        frame();
+                        drawLilyPads(buf, _centre.copy(_up).multiplyScalar(PLANET_RADIUS + layer + 1), drng, cols);
+                    }
+                    continue;
+                }
+
+                // Under a canopy: the ground beneath gets leaf litter, and the
+                // canopy's underside gets hanging growth in warm, damp zones.
+                if (block?.sway) {
+                    const g = grid.groundColumnTop(face, u, v);
+                    if (g > SEA_LAYER && groundDetail > 0) {
+                        columnDir(face, u, v, FACE_RES, _up);
+                        frame();
+                        const gb = BLOCK_BY_ID[grid.get(face, u, v, g)] as any;
+                        if (gb?.grassCap || gb?.id === BLOCKS.SOIL.id || gb?.id === BLOCKS.SAND.id) {
+                            const ground = _centre.copy(_up).multiplyScalar(PLANET_RADIUS + g + 1);
+                            drawLeafLitter(buf, ground, drng, block.top, drng.int(2, 5));
+                        }
+                        // Lowest leaf block over open air (the canopy's underside).
+                        let low = g + 1;
+                        while (low < layer && !(BLOCK_BY_ID[grid.get(face, u, v, low)] as any)?.sway) low++;
+                        const rise = g - SEA_LAYER;
+                        const hangP = HANG_P * groundDetail * (rise <= 7 ? 1 : rise <= 11 ? 0.35 : 0);
+                        if (low - g >= 3 && drng() < hangP)
+                            drawHanging(buf, _base.copy(_up).multiplyScalar(PLANET_RADIUS + low), drng, cols);
+                    }
+                    continue;
+                }
                 const onStone = !!block && STONE_IDS.has(block.id);
                 if (!plant && !block?.grassCap && !onStone) continue;
                 columnDir(face, u, v, FACE_RES, _up);
@@ -607,6 +792,13 @@ export function createSphereVegetation(
                     continue;
                 }
                 const lush = field(meadowNoise, centre, MEADOW_FREQ);
+                // Reed clumps on the bank right beside water, gathered by noise
+                // into stands rather than a uniform fringe.
+                const wd = wet ? wet[(face * FACE_RES + v) * FACE_RES + u] : 99;
+                if (wd === 1 && !onStone && field(reedNoise, centre, 0.09) > 0.55 && rng() < REED_P * density) {
+                    drawReedClump(buf, centre, rng, cols);
+                    continue;
+                }
                 if (groundDetail > 0)
                     scatterGroundDetail(buf, centre, drng, groundDetail, onStone, nearTrunk(u, v, layer), lush, cols);
                 if (onStone) continue; // bare rock: boulders only, no grass
@@ -659,8 +851,17 @@ export function createSphereVegetation(
         patches.delete(key);
     }
 
+    const _fp = new THREE.Vector3();
     return {
         group,
+        /** Flower-drift density 0..1 at a unit direction (same field the flowers use). */
+        bloomAt(dir: THREE.Vector3): number {
+            return field(flowerNoise, _fp.copy(dir).multiplyScalar(PLANET_RADIUS + 20), FLOWER_FREQ);
+        },
+        /** Meadow lushness 0..1 at a unit direction. */
+        lushAt(dir: THREE.Vector3): number {
+            return field(meadowNoise, _fp.copy(dir).multiplyScalar(PLANET_RADIUS + 20), MEADOW_FREQ);
+        },
         get patchCount() {
             return group.children.length;
         },
