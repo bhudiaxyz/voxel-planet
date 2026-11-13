@@ -4,7 +4,7 @@
  */
 
 import * as THREE from 'three';
-import { createSphereChunkStreamer } from '../core/voxel';
+import { createSphereChunkStreamer, NEAR_FILL, CHUNK_ANGLE } from '../core/voxel';
 import { makeRng } from '../core/rng';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { generateSphereTerrain } from './terrain';
@@ -45,6 +45,8 @@ export async function buildSphereWorld(
         groundDetail?: number;
         /** Animated foam along coasts. */
         shoreFoam?: boolean;
+        /** Build outline edges (tier edgeMask): skipped entirely where nothing draws them. */
+        edges?: boolean;
         tier?: string;
     } = {},
 ): Promise<SphereWorld> {
@@ -64,7 +66,7 @@ export async function buildSphereWorld(
     const wet = bakeWetMap(grid, SEA_LAYER);
 
     onProgress(0.73, 'building terrain meshes');
-    const streaming = createSphereChunkStreamer(grid, { loadRadius: streamRadius });
+    const streaming = createSphereChunkStreamer(grid, { loadRadius: streamRadius, edges: opts.edges ?? true });
 
     const spawnDir = new THREE.Vector3();
     const _n = new THREE.Vector3(),
@@ -81,13 +83,17 @@ export async function buildSphereWorld(
     // Hooked up before the first fill so the opening view has grass.
     const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity, 0.1, groundDetail, wet);
     streaming.setListener(veg);
-    // Fill the whole view before the first frame, in budgeted slices with a paint
-    // between them. One synchronous Infinity fill meshed ~800-1,500 chunks in a
-    // single block — seconds of frozen screen on older phones and iPads.
-    const total = Math.max(1, (streaming.update(spawnDir, 0), streaming.pendingCount));
-    while (streaming.pendingCount > 0) {
-        streaming.update(spawnDir, 24);
-        onProgress(0.73 + 0.17 * (1 - streaming.pendingCount / total), 'building terrain meshes');
+    // Fill only the near view before the first frame (NEAR_FILL ~9 chunks), in
+    // slices with a paint between them; everything beyond streams in on the
+    // per-frame budget after entry, inside the fog. Filling the whole radius here
+    // meant meshing 1,400-2,200 chunks before the player could see anything.
+    streaming.update(spawnDir, 0); // scan → queue
+    const nearDot = Math.cos(NEAR_FILL * CHUNK_ANGLE);
+    const queued = () => streaming.pendingNear(nearDot);
+    const total = Math.max(1, queued());
+    while (queued() > 0) {
+        streaming.fillNearSlice(nearDot, 24);
+        onProgress(0.73 + 0.17 * (1 - queued() / total), 'building terrain meshes');
         await yieldFrame();
     }
 

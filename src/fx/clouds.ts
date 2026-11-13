@@ -218,6 +218,7 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
     scene.add(group);
 
     const frameRef = new THREE.Vector3();
+    const _prevClear = new THREE.Color();
     /** Live references the post pass binds once (values update in place). */
     const shadow = {
         map: shadowTarget.texture,
@@ -259,7 +260,7 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
             shadowCam.lookAt(c);
             shadowCam.updateMatrixWorld();
             const prevTarget = renderer.getRenderTarget();
-            const prevClear = renderer.getClearColor(new THREE.Color());
+            const prevClear = renderer.getClearColor(_prevClear);
             const prevAlpha = renderer.getClearAlpha();
             renderer.setRenderTarget(shadowTarget);
             renderer.setClearColor(0x000000, 1);

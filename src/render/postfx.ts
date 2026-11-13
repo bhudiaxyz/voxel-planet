@@ -537,8 +537,9 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         col = mix(col, vec3(lum), min(fog * uDesat, 0.95));
 
         // ---- melt into the sky --------------------------------------------
-        vec3 sky = skyRadiance(wdir);
-        col = mix(col, sky, fog * uSkyBlend);
+        // skyRadiance is costly (at night it evaluates the Milky Way), and inside the
+        // clear radius fog ≈ 0, so only call it where the blend is visible.
+        if (fog * uSkyBlend > 0.003) col = mix(col, skyRadiance(wdir), fog * uSkyBlend);
 
         // ---- mist on top ----------------------------------------------------
         col = mix(col, uMistColor, mist * (1.0 - fog * 0.5));
@@ -728,6 +729,8 @@ export function createPostFX(
         setSunScreenPos(x: number, y: number, visible: number): void {
             crepPass.uniforms['uSunScreen'].value.set(x, y);
             crepPass.uniforms['uSunVisible'].value = visible;
+            // Off-screen / night: the pass would just copy the frame. Skip it.
+            crepPass.enabled = visible > 0.01;
         },
         render(dt: number) {
             grade.uniforms.uTime.value += dt;

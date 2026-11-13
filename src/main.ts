@@ -44,6 +44,8 @@ const _dogFwd = new THREE.Vector3();
 const _cloudLit = new THREE.Color();
 const _cloudShade = new THREE.Color();
 const _white = new THREE.Color(1, 1, 1);
+const _mapFwd = new THREE.Vector3();
+const _upNow = new THREE.Vector3();
 /** Moonlit cloud tops at midnight (linear): a dim cool blue-grey. */
 const _cloudNight = new THREE.Color(0.035, 0.045, 0.07);
 /** Sea surface layer on the sphere (matches sphere-terrain). */
@@ -140,6 +142,7 @@ async function start(): Promise<void> {
         grassDensity: ts.grassDensity,
         groundDetail: ts.groundDetail,
         shoreFoam: ts.shoreFoam,
+        edges: ts.edgeMask,
         tier,
     });
 
@@ -296,7 +299,7 @@ async function start(): Promise<void> {
         if (mode === 'drone') enterDrone();
         else if (mode === 'fly') enterFly();
         const at = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
-        world.streaming.update(at, Infinity); // no empty first frame
+        world.streaming.fillNear(at); // near view now; the rest streams in on budget
     };
     const locations = createLocations(world.landmarks, teleportTo);
     if (isTouchDevice) locations.hide(); // touch: opened from the ☰ panels button, as in planet-explorer
@@ -462,8 +465,14 @@ async function start(): Promise<void> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).__fps = 0;
 
-    function frame(): void {
+    // Mobile tiers: hold ~60 fps. A 120 Hz phone (e.g. S22 Ultra) otherwise renders
+    // everything — including a VSM update — twice as often, and heats and throttles.
+    const minFrameMs = tier === 'mobile-high' || (isTouchDevice && tier !== 'high') ? 15.5 : 0;
+    let lastFrameAt = 0;
+    function frame(now = performance.now()): void {
         requestAnimationFrame(frame);
+        if (minFrameMs && now - lastFrameAt < minFrameMs) return;
+        lastFrameAt = now;
         clock.update();
         const rawDt = clock.getDelta();
         const dt = Math.min(rawDt, 1 / 20);
@@ -558,14 +567,20 @@ async function start(): Promise<void> {
                 .lerp(_white, 0.35)
                 .multiplyScalar(0.78 * (0.02 + 0.98 * moon * moon));
             clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.35);
-            if (post.haze.uniforms.uCloudShadow.value > 0.5) clouds.renderShadow(renderer);
+            // The haze pass ignores cloud shadows when the sun is low (sunUp <= 0.05),
+            // so skip the extra render-target pass then — costly on tile GPUs.
+            if (post.haze.uniforms.uCloudShadow.value > 0.5 && dayNight.sunDir.dot(_upNow.copy(at).normalize()) > 0.05)
+                clouds.renderShadow(renderer);
             critters.update(dt, at, night, renderer.getPixelRatio());
         }
-        const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
-        const mapFwd = drone.active
-            ? drone.heading
-            : controller.forwardInPlane(fpCam.camera.getWorldDirection(new THREE.Vector3()));
-        sphereMap.update(mapDir, mapFwd, world.landmarks);
+        // The map redraw is a 2 MB putImageData plus labels — only while it's open.
+        if (sphereMap.el.style.display !== 'none') {
+            const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
+            const mapFwd = drone.active
+                ? drone.heading
+                : controller.forwardInPlane(fpCam.camera.getWorldDirection(_mapFwd));
+            sphereMap.update(mapDir, mapFwd, world.landmarks);
+        }
         if (drone.active) {
             const droneInput = {
                 yaw: fpCam.drainDroneMX() * 0.0015,

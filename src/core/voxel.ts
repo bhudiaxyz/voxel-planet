@@ -455,6 +455,8 @@ function buildSphereMeshChunk(
     ci: number,
     ck: number,
     meshes: ReturnType<typeof createMeshRoots>,
+    /** Collect outline edges (costly: ~40% of build time). Only near chunks on tiers that draw outlines. */
+    wantEdges = true,
 ) {
     const u0 = ci * CHUNK,
         v0 = ck * CHUNK;
@@ -462,7 +464,7 @@ function buildSphereMeshChunk(
     const v1 = Math.min(v0 + CHUNK, FACE_RES);
     const solid = new MeshBuffer(),
         glow = new MeshBuffer(),
-        edgeMap = new Map();
+        edgeMap = wantEdges ? new Map() : null;
     meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1);
     const record: any = { solid: null, glow: null, edges: null };
     if (!solid.empty) {
@@ -479,7 +481,7 @@ function buildSphereMeshChunk(
         record.glow.matrixAutoUpdate = false;
         meshes.glow.add(record.glow);
     }
-    if (edgeMap.size > 0) {
+    if (edgeMap && edgeMap.size > 0) {
         record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial);
         record.edges.name = `voxel-edges-${face}-${ci}-${ck}`;
         meshes.edges.add(record.edges);
@@ -489,7 +491,9 @@ function buildSphereMeshChunk(
 
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
 /** Angle one chunk spans at a cube-face centre (columns shrink slightly toward the corners). */
-const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
+export const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
+/** Chunks filled synchronously around the viewer on boot/teleport/rebuild (~250 units). */
+export const NEAR_FILL = 9;
 /** Unload a little past the load edge so walking along the boundary doesn't thrash. */
 const UNLOAD_MARGIN = 1.5;
 /** Rescan the planet only after moving this far (radians) — about a third of a chunk. */
@@ -513,7 +517,8 @@ export interface ChunkListener {
     chunkUnloaded(face: number, u0: number, v0: number): void;
 }
 
-export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number } = {}) {
+export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number; edges?: boolean } = {}) {
+    const tierEdges = opts.edges ?? true;
     const meshes = createMeshRoots();
     const loaded = new Map<string, any>();
     const fadingMeshes = new Set<any>();
@@ -594,9 +599,10 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
     const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
         const key = keyOf(face, ci, ck);
         if (loaded.has(key) || disposed) return;
-        const record = buildSphereMeshChunk(grid, face, ci, ck, meshes);
-        if (fade) initFade(record);
         const near = dot >= detailCos;
+        const record = buildSphereMeshChunk(grid, face, ci, ck, meshes, tierEdges && near);
+        record.hasEdges = tierEdges && near;
+        if (fade) initFade(record);
         setDetail(record, near);
         detailed.set(key, near);
         loaded.set(key, record);
@@ -634,6 +640,13 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
                     const record = loaded.get(key);
                     if (record) {
                         const near = dot >= detailCos;
+                        if (near && tierEdges && !record.hasEdges) {
+                            // Built far (no outlines) and now near: re-mesh it with
+                            // edges through the normal budgeted queue.
+                            unloadChunk(key);
+                            loadQueue.push({ face, ci, ck, dot });
+                            continue;
+                        }
                         if (detailed.get(key) !== near) {
                             setDetail(record, near);
                             detailed.set(key, near);
@@ -693,6 +706,37 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
             } while (performance.now() - t0 < budgetMs);
         },
 
+        /**
+         * Build, synchronously and without fade, every queued chunk within
+         * `radiusChunks` of `playerDir` (closest first); the rest stream in on the
+         * normal per-frame budget. Used for the first view, teleports and palette
+         * rebuilds — a full-radius synchronous fill was 1,400-2,200 chunks there.
+         */
+        fillNear(playerDir: THREE.Vector3, radiusChunks = NEAR_FILL) {
+            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
+            const minDot = Math.cos(radiusChunks * CHUNK_ANGLE);
+            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
+                const next = loadQueue.pop()!;
+                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+            }
+        },
+
+        /** Queued chunks with dot >= minDot (i.e. within a radius), for boot progress. */
+        pendingNear(minDot: number) {
+            let n = 0;
+            for (let i = loadQueue.length - 1; i >= 0 && loadQueue[i].dot >= minDot; i--) n++;
+            return n;
+        },
+        /** Build near chunks (dot >= minDot, closest first) for up to budgetMs, no fade. */
+        fillNearSlice(minDot: number, budgetMs: number) {
+            const t0 = performance.now();
+            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
+                const next = loadQueue.pop()!;
+                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+                if (performance.now() - t0 >= budgetMs) break;
+            }
+        },
+
         tick(dt: number) {
             for (const mesh of fadingMeshes) {
                 mesh.userData.lodAlpha = Math.min(1, mesh.userData.lodAlpha + dt * 3);
@@ -710,7 +754,7 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
         rebuildAll(playerDir: THREE.Vector3) {
             for (const key of [...loaded.keys()]) unloadChunk(key);
             forceScan = true;
-            this.update(playerDir, Infinity);
+            this.fillNear(playerDir);
         },
 
         dispose() {
@@ -866,7 +910,7 @@ export function meshSphereFaceRegion(
 
                     let convexMask = 0,
                         concaveMask = 0;
-                    {
+                    if (edgeMap) {
                         const dirs: [number, number, number, number][] = [
                             [-uA[0], -uA[1], -uA[2], 1],
                             [uA[0], uA[1], uA[2], 2],
@@ -886,34 +930,36 @@ export function meshSphereFaceRegion(
                     }
 
                     const forceLightEdge = isTop && (block as any).lightEdge === true;
-                    _collectSphereFaceEdges(
-                        edgeMap,
-                        face,
-                        u,
-                        v,
-                        layer,
-                        F,
-                        nrm,
-                        convexMask,
-                        baseCol,
-                        false,
-                        forceLightEdge,
-                        cornerPos,
-                    );
-                    _collectSphereFaceEdges(
-                        edgeMap,
-                        face,
-                        u,
-                        v,
-                        layer,
-                        F,
-                        nrm,
-                        concaveMask,
-                        baseCol,
-                        true,
-                        forceLightEdge,
-                        cornerPos,
-                    );
+                    if (edgeMap)
+                        _collectSphereFaceEdges(
+                            edgeMap,
+                            face,
+                            u,
+                            v,
+                            layer,
+                            F,
+                            nrm,
+                            convexMask,
+                            baseCol,
+                            false,
+                            forceLightEdge,
+                            cornerPos,
+                        );
+                    if (edgeMap)
+                        _collectSphereFaceEdges(
+                            edgeMap,
+                            face,
+                            u,
+                            v,
+                            layer,
+                            F,
+                            nrm,
+                            concaveMask,
+                            baseCol,
+                            true,
+                            forceLightEdge,
+                            cornerPos,
+                        );
 
                     if (!emitGeometry) continue;
 
