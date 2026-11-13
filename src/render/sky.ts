@@ -241,7 +241,11 @@ export const SKY_FN_GLSL = /* glsl */ `
     // Below the skyline we keep going, very slightly cooler and darker, so the
     // underside of the floating island reads as "more of the same air" rather
     // than as a wall.
-    col = mix(uSkyNadir, col, smoothstep(-0.42, -0.01, y));
+    // On a planet, below the skyline is the deep air past the limb: from any
+    // height it filled the lower view, and fading to the nadir only 0.42 down left
+    // a pale horizon-coloured wall there. Deepen sooner, toward a bluer nadir.
+    vec3 deep = mix(uSkyNadir, uSkyZenith * 0.72, 0.55);
+    col = mix(deep, col, smoothstep(-0.16, 0.0, y));
 
     // Broad forward-scatter halo. Two lobes: a tight core and a very wide
     // wash. This is what stops the gradient reading as a dead linear ramp and

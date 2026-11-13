@@ -479,6 +479,10 @@ function buildSphereMeshChunk(
         record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
         record.glow.name = `glow-${face}-${ci}-${ck}`;
         record.glow.matrixAutoUpdate = false;
+        // Gems cast too: spire/obelisk caps, and the crystal grove (almost all gem),
+        // which otherwise threw no shadow at all. They are lit by their own glow, so
+        // they don't receive.
+        record.glow.castShadow = true;
         meshes.glow.add(record.glow);
     }
     if (edgeMap && edgeMap.size > 0) {
@@ -492,6 +496,13 @@ function buildSphereMeshChunk(
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
 /** Angle one chunk spans at a cube-face centre (columns shrink slightly toward the corners). */
 export const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
+/**
+ * Canopy sway by bark style (aFringe.r on leaf vertices, 0..1; the shader maps it
+ * to 0.35..1.6x the wind): scaly conifers are stiff, papery birch and ringed palm
+ * flutter, smooth willows/mangroves/cypress move most, furrowed oaks in between.
+ */
+const SWAY_BY_BARK: Record<number, number> = { 0: 0.5, 1: 0.8, 2: 0.18, 3: 0.75, 4: 0.9 };
+const _swayCol = new THREE.Color();
 /** Chunks filled synchronously around the viewer on boot/teleport/rebuild (~250 units). */
 export const NEAR_FILL = 9;
 /** Unload a little past the load edge so walking along the boundary doesn't thrash. */
@@ -594,6 +605,7 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
     const setDetail = (record: any, on: boolean) => {
         if (record.edges) record.edges.visible = on;
         if (record.solid) record.solid.castShadow = on;
+        if (record.glow) record.glow.castShadow = on;
     };
 
     const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
@@ -825,6 +837,17 @@ export function meshSphereFaceRegion(
         return [cx / len, cy / len, cz / len];
     }
 
+    /** Sway multiplier 0..1 for a leaf block, from the nearest bark below it (≤ 12 layers). */
+    const swayOfColumn = (g: SphereVoxelGrid, f: number, cu: number, cv: number, layer: number) => {
+        for (let l = layer - 1; l >= Math.max(0, layer - 12); l--) {
+            const b = BLOCK_BY_ID[g.get(f, cu, cv, l)] as any;
+            if (b?.isTrunk) return SWAY_BY_BARK[b.barkStyle ?? 0] ?? 0.55;
+            if (b && !b.sway) break; // reached ground with no trunk under this leaf
+        }
+        // A side branch of canopy with no trunk directly below: use the default.
+        return 0.55;
+    };
+
     const aoOf = (occ: boolean[]) => {
         if (occ[0] && occ[1]) return 0;
         return (3 - (+occ[0] + +occ[1] + +occ[2])) / 3;
@@ -897,7 +920,12 @@ export function meshSphereFaceRegion(
                         : (block as any).pattern;
                     const tintCol =
                         (isTop ? (block as any).topTint || (block as any).tint : (block as any).tint) || baseCol;
-                    const fringeCol = (block as any).fringeColor || (block as any).top || baseCol;
+                    // Leaves carry their tree's sway stiffness in aFringe.r (leaves have no
+                    // grass fringe, so the channel is free): soft for willow/palm/birch,
+                    // stiff for scaly conifers. Read from the bark under the canopy.
+                    const fringeCol = (block as any).sway
+                        ? _swayCol.setRGB(swayOfColumn(grid, face, u, v, layer), 0, 0)
+                        : (block as any).fringeColor || (block as any).top || baseCol;
 
                     let nrm: [number, number, number];
                     if (isTop) nrm = [rdx, rdy, rdz];
@@ -1000,18 +1028,14 @@ export function meshSphereFaceRegion(
                         [uvs[3], uvs[2], uvs[1], uvs[0]],
                         [ao[3], ao[2], ao[1], ao[0]],
                         patternPacked,
-                        // Carved landmark stone signals itself with fringe = -1 (fringe
-                        // is otherwise >= 0):
                         // Negative fringe values are flags (fringe is otherwise >= 0):
                         //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
                         //   -(10 + s)   natural stone style s for patRock (0 marble .. 6 quartzite)
                         (block as any).rockStyle !== undefined
                             ? -(10 + (block as any).rockStyle)
-                            : (block as any).carved
-                              ? -1
-                              : (block as any).barkStyle !== undefined
-                                ? -(2 + (block as any).barkStyle)
-                                : (block as any).fringe || 0,
+                            : (block as any).barkStyle !== undefined
+                              ? -(2 + (block as any).barkStyle)
+                              : (block as any).fringe || 0,
                         [localV[3], localV[2], localV[1], localV[0]],
                     );
                 }
@@ -1593,9 +1617,14 @@ const VERT_BODY = /* glsl */ `
   // Height factor (aData.w) keeps the base stationary.
   if (aData.y >= 8.0 && aData.y < 15.5 && uWindStrength > 0.0) {
     float phase = transformed.x * 0.31 + transformed.z * 0.27;
-    float sway  = (sin(uWindTime * 1.1 + phase) * 0.6
-                 + sin(uWindTime * 0.47 + phase * 1.9) * 0.4)
-                 * uWindStrength;
+    // Per-tree stiffness (aFringe.r, set by the mesher from the trunk's bark):
+    // 0 → 0.35x (stiff conifers) .. 1 → 1.6x (willows); flexible trees also sway a
+    // touch faster so they flutter rather than just lean further.
+    float flex = mix(0.35, 1.6, aFringe.r);
+    float rate = mix(0.85, 1.25, aFringe.r);
+    float sway  = (sin(uWindTime * 1.1 * rate + phase) * 0.6
+                 + sin(uWindTime * 0.47 * rate + phase * 1.9) * 0.4)
+                 * uWindStrength * flex;
     float heightT = clamp((length(transformed.xyz) - uPlanetRadius) / 28.0, 0.0, 1.0);
     // Project wind onto the sphere tangent plane so sway is always lateral.
     vec3 radial    = normalize(transformed.xyz);
@@ -2519,7 +2548,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v22' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v23' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 
@@ -2555,17 +2584,21 @@ export function makeGlowMaterial() {
           // flanks world-Y shading made gem sides read as tops.
           float r = dot(normalize(vNrmW), normalize(vPosG));
           float faceShade = r > 0.5 ? 1.06 : (r < -0.5 ? 0.8 : 0.94);
-          // Faceted crystal: a bright core fading to the rim, two faint diagonal
-          // facet ridges, and a sheen toward the paler tint — so a gem face is a
-          // cut stone rather than a flat lamp.
+          // Radial sunburst: a bright core with soft rays fanning out from the face
+          // centre (like sunlight through a crystal), fading toward the rim. Rays
+          // vary in width and length by angle, so there is no regular X or grid.
           vec2 f = fract(vUvG) - 0.5;
-          float core = 1.0 - smoothstep(0.0, 0.62, length(f));
-          float facet = 1.0 - smoothstep(0.0, 0.035, abs(abs(f.x) - abs(f.y)));
+          float r = length(f);
+          float a = atan(f.y, f.x);
+          float core = 1.0 - smoothstep(0.0, 0.55, r);
+          float rays = pow(0.5 + 0.5 * cos(a * 7.0 + sin(a * 3.0) * 1.3), 3.0)
+                     * (0.6 + 0.4 * (0.5 + 0.5 * cos(a * 4.0 + 1.7)));
+          rays *= smoothstep(0.5, 0.06, r);      // strongest near the centre
           float rim = smoothstep(0.38, 0.5, max(abs(f.x), abs(f.y)));
-          vec3 c = mix(diffuseColor.rgb, vTintG, core * 0.45);
-          c *= 0.82 + 0.3 * core;
-          c += vTintG * facet * 0.18;
-          c *= 1.0 - rim * 0.22;
+          vec3 c = mix(diffuseColor.rgb, vTintG, core * 0.5);
+          c *= 0.8 + 0.34 * core;
+          c += vTintG * rays * 0.32;
+          c *= 1.0 - rim * 0.2;
           diffuseColor.rgb = c * faceShade * 1.5;
         }`,
             );
@@ -2574,6 +2607,6 @@ export function makeGlowMaterial() {
         uAoStrength: { value: 0 },
         uAoTint: { value: new THREE.Color(1, 1, 1) },
     };
-    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v5';
+    mat.customProgramCacheKey = () => 'VoxelWorld-glow-v6';
     return mat;
 }

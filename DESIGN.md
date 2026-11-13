@@ -441,7 +441,7 @@ p += normalize(windTang) * sway * heightT
 ### Outlines and glow
 
 - Edge outlines: `LineSegments2` runs built from edge entries, merged into long runs (`mergeEdgeRuns`) with dark/light ink chosen by face luminance (`LIGHT_FACE_LUMA = 0.61`; grass tops force the light ink; concave edges are always dark). They live on `EDGE_LAYER = 2` and are drawn only by `EdgeMaskPass` (section 12), which composites them in the grade shader. On tiers with `edgeMask: false` the pass is not added and the grade opacities are zeroed.
-- `makeGlowMaterial()`: unlit `MeshBasicMaterial` for emissive blocks (`LANTERN`, `CRYSTAL`, landmark gems), brightened by 1.5x. Faces are shaded by the radial up (not world Y, which mis-shaded gems on the planet's flanks), and get a faceted-crystal surface from `aUv`/`aTint`: a bright core toward the paler tint, two faint diagonal facet ridges and a darker rim.
+- `makeGlowMaterial()`: unlit `MeshBasicMaterial` for emissive blocks (`LANTERN`, `CRYSTAL`, landmark gems), brightened by 1.5x. Faces are shaded by the radial up (not world Y, which mis-shaded gems on the planet's flanks), and get a radial sunburst surface from `aUv`/`aTint`: a bright core toward the paler tint, soft rays fanning from the face centre (angle-modulated so there is no regular X), and a darker rim.
 
 ---
 
@@ -648,7 +648,7 @@ interface VoxelPalette {
 }
 ```
 
-The Spring sky is deliberately blue: zenith `#3f7fd6`, horizon `#9cc4ec`, haze `#aecbea`. The earlier near-white horizon and haze washed the whole sky, and everything that fades into the haze, toward white. The haze pass's `uSkyBlend` is 0.4 for the same reason.
+The Spring sky is deliberately blue: zenith `#3f7fd6`, horizon `#9cc4ec`, haze `#86a8cf`. The haze is both the fog colour and the sky's nadir, so from altitude it is what fills the view below the horizon. A pale haze read there as a white wall. The earlier near-white horizon and haze washed the whole sky, and everything that fades into the haze, toward white. The haze pass's `uSkyBlend` is 0.4 for the same reason.
 
 ### Foliage slot-role convention
 

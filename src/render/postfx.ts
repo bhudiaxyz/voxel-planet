@@ -354,6 +354,8 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             uFogNear: { value: FOG_NEAR },
             /** how much residual chroma distance eats, on top of the fog mix */
             uDesat: { value: 0.32 }, // distance desaturation: depth, not bleach
+            /** how much the midground darkens with distance before the haze (depth) */
+            uDepthDim: { value: 0.22 },
             /** how far a fogged pixel is pulled toward its true directional sky colour */
             uSkyBlend: { value: 0.4 }, // 0.5 → 0.4: distance reads less milky
 
@@ -393,7 +395,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         fragmentShader: /* glsl */ `
       #include <packing>
       uniform sampler2D tDiffuse, tDepth;
-      uniform float uNear, uFar, uAerialD, uFogNear, uDesat, uSkyBlend;
+      uniform float uNear, uFar, uAerialD, uFogNear, uDesat, uSkyBlend, uDepthDim;
       uniform float uMistBase, uMistH, uMistDens, uMistMax;
       uniform float uAOStrength, uAORadius, uAORange;
       uniform float uInscatter, uDof, uAOTaps, uCloud, uCloudShadow, uTime, uFocal;
@@ -531,6 +533,14 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             }
           }
         }
+
+        // ---- depth: darken the midground before the haze takes it ----------
+        // Distance alone only lightened toward the pale haze, so near, mid and far
+        // flattened into one plane. A gentle dimming that rises with distance
+        // from the clear radius and fades out where the haze dominates (fog -> 1)
+        // separates them into layers — darker midground, haze at the horizon.
+        float depthT = smoothstep(uFogNear * 0.35, uFogNear * 1.6, dist) * (1.0 - fog);
+        col *= 1.0 - uDepthDim * depthT;
 
         // ---- chroma falls faster than value ------------------------------
         float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));

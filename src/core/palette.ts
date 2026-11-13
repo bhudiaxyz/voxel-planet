@@ -517,7 +517,9 @@ export const VOXEL_PALETTES: Record<string, VoxelPalette> = {
         water: { shoal: 0x8cc4b0, shallow: 0x2e7a8c, deep: 0x123a5a },
         // Bluer, less white: the near-white horizon/haze washed the whole sky (and every
         // distant thing that fades into the haze) toward white.
-        sky: { zenith: 0x3f7fd6, horizon: 0x9cc4ec, ground: 0x86a868, haze: 0xaecbea, sunTint: 0xfff4e4 },
+        // haze 0xaecbea → 0x86a8cf: the far haze (fog colour and sky nadir) read as a
+        // white wall below the horizon from altitude; a mid blue reads as distant land.
+        sky: { zenith: 0x3f7fd6, horizon: 0x9cc4ec, ground: 0x86a868, haze: 0x86a8cf, sunTint: 0xfff4e4 },
         light: {
             sunColor: 0xfff0d6,
             sunIntensity: 2.1,
