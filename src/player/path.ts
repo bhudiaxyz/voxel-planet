@@ -140,7 +140,7 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
         const top = grid.columnTop(f, u, v);
         if (top <= seaLayer) return -1; // sea (or empty)
         const b = BLOCK_BY_ID[grid.get(f, u, v, top)] as any;
-        if (b?.isTrunk) return -1;
+        if (b?.isTrunk || b?.isWater) return -1; // rivers and lakes: the dog keeps out, like the sea
         // Canopy over the column: stand on the ground beneath it, unless a trunk is in the way.
         if (b?.sway) {
             const gl = grid.groundColumnTop(f, u, v);

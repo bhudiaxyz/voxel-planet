@@ -4,7 +4,8 @@ import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/v
 import { basisFromCode } from '../core/geoutil';
 import { Noise3 } from '../core/noise3';
 import { makeRng } from '../core/rng';
-import { BLOCKS, PATTERN, registerBlock } from '../core/palette';
+import { BLOCKS, BLOCK_BY_ID, PATTERN, registerBlock } from '../core/palette';
+import { carveFreshWater } from './rivers';
 
 // Sea level is layer 9; terrace step is 2 (same aesthetic as flat terrain)
 const SEA_LAYER = 11;
@@ -222,6 +223,9 @@ export function generateSphereTerrain(
         }
     }
 
+    // Rivers, streams, lakes and ponds — carved into the land before anything grows.
+    carveFreshWater(grid, SEA_LAYER, seed);
+
     const spawn = findSpawn(grid);
 
     // Scatter voxel trees and bushes on land columns
@@ -301,7 +305,7 @@ export function generateSphereTerrain(
                     // Desert dunes: sparse cacti, each one its own height and shape.
                     if (roll < CACTUS_P) plantCactus(grid, face, u, v, sl, treeRng);
                     else if (roll < CACTUS_P + 0.012) plantSingle(grid, face, u, v, sl, SCRUB_DRY);
-                } else if (sl >= SEA_LAYER - 1 && sl <= SEA_LAYER + 2) {
+                } else if (sl >= SEA_LAYER - 1 && sl <= SEA_LAYER + 2 && !(BLOCK_BY_ID[topId] as any)?.isWater) {
                     // Waterline: reeds and waterside ferns
                     if (roll < 0.08) plantSingle(grid, face, u, v, sl, REED_BLOCK);
                     else if (roll < 0.13) plantSingle(grid, face, u, v, sl, FERN);
@@ -1290,7 +1294,7 @@ function findSpawn(grid: SphereVoxelGrid): { face: number; u: number; v: number 
         const v = 160 + Math.floor(attempt / 20) * 4;
         if (u >= FACE_RES || v >= FACE_RES) continue;
         const top = grid.columnTop(0, u, v);
-        if (top > SEA_LAYER + 2) return { face: 0, u, v };
+        if (top > SEA_LAYER + 2 && !(BLOCK_BY_ID[grid.get(0, u, v, top)] as any)?.isWater) return { face: 0, u, v };
     }
     return { face: 0, u: 200, v: 200 };
 }

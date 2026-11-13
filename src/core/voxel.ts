@@ -190,7 +190,8 @@ export class SphereVoxelGrid {
                 continue;
             }
             const b = BLOCK_BY_ID[id] as any;
-            if (!b?.sway && !b?.isTrunk) break;
+            // River/lake water is walked through: the ground is the bed beneath it.
+            if (!b?.sway && !b?.isTrunk && !b?.isWater) break;
             l--;
         }
         return l;
@@ -804,6 +805,7 @@ export function meshSphereFaceRegion(
                 if (!block) continue;
                 const target = (block as any).emissive ? glow : solid;
                 const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
+                const isWaterBlk = !!(block as any).isWater;
 
                 const [rdx, rdy, rdz] = radialDir(u, v);
 
@@ -813,6 +815,18 @@ export function meshSphereFaceRegion(
                         nlayer = layer + F.n[1],
                         nv = v + F.n[2];
                     if (grid.isSolidGlobal(face, nu, nv, nlayer)) continue;
+                    // Water draws every face that meets AIR — the surface, and the side
+                    // faces where a river steps down a layer or ends — so it never reads
+                    // as a floating sheet. Faces against other water (internal) and
+                    // against solid ground (hidden by the bank) are skipped.
+                    if (isWaterBlk) {
+                        if (F.n[1] === -1) continue; // the bed is beneath, always
+                        const nId =
+                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
+                                ? grid.get(face, nu, nv, nlayer)
+                                : grid.get(...crossFaceUV(face, nu, nv), nlayer);
+                        if (nId === id) continue;
+                    }
 
                     const isTop = F.n[1] === 1;
                     const isBottom = F.n[1] === -1;
@@ -915,7 +929,8 @@ export function meshSphereFaceRegion(
                         localV[i] = isTop ? 1 : isBottom ? 0 : c[1];
                     }
 
-                    const patternPacked = (pattern || 0) | ((block as any).sway ? 8 : 0);
+                    // Bit 3 = sway (leaves); 16 = fresh water (shader draws ripples, skips terrain detail).
+                    const patternPacked = isWaterBlk ? 16 : (pattern || 0) | ((block as any).sway ? 8 : 0);
                     // Reverse winding: x→u, y→layer, z→v swaps two axes (det=-1), flipping face orientation
                     target.quad(
                         [verts[3], verts[2], verts[1], verts[0]],
@@ -1506,7 +1521,7 @@ const VERT_BODY = /* glsl */ `
   // Wind sway: bit 3 of aData.y flags swayable blocks (leaf blocks).
   // Phase offset from world XZ keeps adjacent trees out of sync.
   // Height factor (aData.w) keeps the base stationary.
-  if (aData.y >= 8.0 && uWindStrength > 0.0) {
+  if (aData.y >= 8.0 && aData.y < 15.5 && uWindStrength > 0.0) {
     float phase = transformed.x * 0.31 + transformed.z * 0.27;
     float sway  = (sin(uWindTime * 1.1 + phase) * 0.6
                  + sin(uWindTime * 0.47 + phase * 1.9) * 0.4)
@@ -1546,6 +1561,7 @@ const FRAG_DECL = /* glsl */ `
   uniform float uFillAmbient;  // flat ambient lift for all faces
   uniform vec3  uSunTint;      // warm tint on sun-facing surfaces
   uniform vec3  uAmbientTint;  // cool tint on all surfaces (night blue shift)
+  uniform float uWindTime;     // shared clock: drives river ripples
 
 
   /**
@@ -1672,30 +1688,61 @@ const FRAG_DECL = /* glsl */ `
    *   - tops: mottled patches plus fine speckle (turf, sand grain, gravel)
    *   - sides: horizontal strata along the layer axis, with grain inside each band
    */
+  /** Two-octave height field for the soft relief below. */
+  float _tH(vec2 p) { return vxNoise(p) * 0.65 + vxNoise(p * 2.3 + 5.1) * 0.35; }
+
   vec3 patTerrain(vec2 uv, vec3 base, vec3 tint, bool top, bool bottom) {
     vec2 cell = floor(uv);
     vec2 f = fract(uv);
+    // Fine-detail fade: ~1 near, 0 once a block covers only a few pixels, so the
+    // texture melts into soft colour with distance instead of shimmering.
+    float px = length(fwidth(uv));
+    float near = 1.0 - smoothstep(0.08, 0.35, px);
+
     float id = vxHash(cell + 0.37);
     vec3 col = base * (0.95 + 0.1 * id);
     col = mix(col, tint, 0.18 * vxHash(cell + 7.1));
+
     if (top) {
-      float mott = vxNoise(uv * 1.7) * 0.6 + vxNoise(uv * 4.1 + 3.0) * 0.4;
-      col = mix(col * 0.93, col * 1.03, smoothstep(0.3, 0.75, mott));
-      col *= 0.95 + 0.1 * vxNoise(uv * 13.0);
+      // Clumpy mottle: domain-warped so patches are lumpy, never round or cellular.
+      vec2 w = uv + vec2(vxNoise(uv * 0.8 + 2.3), vxNoise(uv * 0.8 - 6.1)) * 0.6;
+      float mott = vxNoise(w * 1.5) * 0.6 + vxNoise(w * 3.7 + 3.0) * 0.4;
+      col = mix(col * 0.9, col * 1.05, smoothstep(0.25, 0.8, mott));
+      // Patches drift toward the tint, so a field is not one hue.
+      col = mix(col, tint, 0.22 * smoothstep(0.45, 0.85, vxNoise(w * 0.6 + 13.0)));
+      // Soft relief: height difference along a fixed light-ish direction reads as
+      // gentle lumps (turf clods, sand ripples, gravel) with no edges at all.
+      vec2 rp = uv * 4.5;
+      float relief = _tH(rp) - _tH(rp + vec2(0.18, 0.12));
+      col *= 1.0 + relief * 0.8 * near;
+      // Fine grain, kept small and faded with distance.
+      col *= 1.0 + (vxNoise(uv * 15.0) - 0.5) * 0.09 * near;
     } else if (!bottom) {
       // Side faces: uv.y runs along the layer axis on every side face.
-      float band = floor(uv.y * 2.0);
+      // Strata wander a little across the face so bands are layers, not rulings.
+      float sy = uv.y * 2.0 + (vxNoise(vec2(uv.x * 1.3, uv.y * 0.4)) - 0.5) * 0.55;
+      float band = floor(sy);
       float strata = vxHash(vec2(band, cell.x * 0.13 + 1.9));
+      // Blend across each band edge so the change of tone is soft.
+      float bf = fract(sy);
+      float nextStrata = vxHash(vec2(band + 1.0, cell.x * 0.13 + 1.9));
+      strata = mix(strata, nextStrata, smoothstep(0.82, 1.0, bf) * 0.5);
       col *= 0.9 + 0.14 * strata;
-      col *= 0.94 + 0.12 * vxNoise(vec2(uv.x * 6.0, uv.y * 14.0));
-      // Thin dark seam between strata, broken by noise so it isn't a ruled line.
-      float seam = 1.0 - smoothstep(0.0, 0.05, abs(fract(uv.y * 2.0) - 0.5) - 0.45);
-      col *= 1.0 - 0.12 * seam * step(0.45, vxNoise(uv * vec2(2.0, 0.5)));
+      // Grain stretched along the strata, plus soft relief for a weathered face.
+      col *= 0.95 + 0.1 * vxNoise(vec2(uv.x * 5.0, sy * 7.0));
+      vec2 rp = vec2(uv.x * 3.5, sy * 2.2);
+      float relief = _tH(rp) - _tH(rp + vec2(0.0, 0.2));
+      col *= 1.0 + relief * 0.75 * near;
+      // Shallow soft groove between strata, only in places.
+      float seam = 1.0 - smoothstep(0.0, 0.12, min(bf, 1.0 - bf));
+      col *= 1.0 - 0.08 * seam * smoothstep(0.4, 0.6, vxNoise(uv * vec2(2.0, 0.5))) * near;
     }
-    // Soft bevel toward the face edges.
+    // Rounded edges: darken softly toward the face border over a wider band, with a
+    // faint lift just inside, so each cube reads like a slightly pillowed form.
     vec2 e = min(f, 1.0 - f);
-    float edge = 1.0 - smoothstep(0.0, 0.12, min(e.x, e.y));
-    col *= 1.0 - 0.1 * edge;
+    float d = min(e.x, e.y);
+    col *= 1.0 - 0.09 * (1.0 - smoothstep(0.0, 0.2, d));
+    col *= 1.0 + 0.025 * smoothstep(0.12, 0.3, d) * (1.0 - smoothstep(0.3, 0.5, d));
     return col;
   }
 
@@ -1784,6 +1831,7 @@ const FRAG_BODY = /* glsl */ `
   {
     vec3 col = diffuseColor.rgb;
     float pat = mod(vDataV.y, 8.0);
+    bool isFresh = vDataV.y > 15.5;   // river / lake water surface
     float fringe = vDataV.z;
     float localV = vDataV.w;
     // Classify the face from its true geometric normal. The mesher writes side
@@ -1806,7 +1854,7 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 6.5 && pat < 7.5) col = patCactus(isSide ? _trunkUV(_geoN) : vUvW, col, vTintV, isSide);
     #if defined(FOLIAGE_DETAIL) && !defined(FAR_FIELD)
     // Plain terrain blocks (no pattern, not foliage): surface detail.
-    if (pat < 0.5 && vDataV.y < 7.5) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
+    if (pat < 0.5 && vDataV.y < 7.5 && !isFresh) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
     // Trunks (the only bark-pattern blocks): furrowed bark on the sides, rings on the ends.
     if (pat > 3.5 && pat < 4.5) {
       if (isSide) {
@@ -1817,7 +1865,7 @@ const FRAG_BODY = /* glsl */ `
       }
     }
     // Leaf blocks (sway flag, bit 3) get canopy shading instead of a flat face.
-    if (vDataV.y >= 7.5) {
+    if (vDataV.y >= 7.5 && !isFresh) {
       // Tops catch the most light, sides some, undersides sit in the canopy's shade.
       float faceLight = isTopFace ? 1.0 : isSide ? 0.6 : 0.0;
       // Undersides: a finer scale reads as leaves seen from beneath rather than smears.
@@ -1827,6 +1875,18 @@ const FRAG_BODY = /* glsl */ `
       col *= isTopFace ? 1.05 : isSide ? 1.28 : 1.15;
     }
     #endif
+
+    // --- fresh water: soft drifting ripples and a sheen toward the tint ---
+    // World-space (3 planes) so ripples are continuous across blocks and faces.
+    if (isFresh) {
+      vec3 wp = vPosW * 0.9;
+      float t = uWindTime * 0.6;
+      float rip = (vxNoise(wp.xz + vec2(t, t * 0.7)) + vxNoise(wp.xy * 1.3 - vec2(t * 0.8, 0.0))
+                 + vxNoise(wp.yz * 1.1 + vec2(0.0, t))) / 3.0;
+      float fine = vxNoise(vPosW.xz * 3.1 + t * 1.7) * 0.5 + vxNoise(vPosW.yz * 2.7 - t * 1.3) * 0.5;
+      col = mix(diffuseColor.rgb * 0.88, vTintV, smoothstep(0.45, 0.85, rip) * 0.55);
+      col += vTintV * 0.12 * smoothstep(0.7, 0.95, fine);
+    }
 
     // --- grass spilling over the lip of the block --------------------
     // Keep the green cap at the authored fraction (25% for turf). A restrained
@@ -2184,7 +2244,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v12' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v14' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 
