@@ -63,6 +63,21 @@ const FRAG = /* glsl */ `
   }
 `;
 
+/**
+ * Cloud-shadow coverage: the same clouds seen straight down from above the
+ * player, written as coverage (red) into a small target. The post pass casts
+ * each ground/water pixel up along the sun to the cloud layer and samples this,
+ * so shadows match the real clouds' shapes and drift with them.
+ */
+const SHADOW_FRAG = /* glsl */ `
+  uniform float uOpacity;
+  varying float vEdge;
+  void main() { gl_FragColor = vec4(uOpacity * vEdge, 0.0, 0.0, 1.0); }
+`;
+/** Coverage map resolution, and the mean cloud-layer height the shadow pass projects to. */
+const SHADOW_RES = 256;
+export const CLOUD_LAYER_H = (HEIGHT_MIN + HEIGHT_MAX) / 2;
+
 /** A handful of flat boxes stacked into a puffy voxel cloud, centred near the origin. */
 function cloudShape(rnd: () => number) {
     const parts: THREE.BufferGeometry[] = [];
@@ -81,7 +96,16 @@ function cloudShape(rnd: () => number) {
 }
 
 export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
-    if (count <= 0) return { update() {}, setColors() {}, dispose() {} };
+    if (count <= 0)
+        return {
+            shadow: null,
+            update() {},
+            renderShadow() {
+                return null;
+            },
+            setColors() {},
+            dispose() {},
+        };
     let s = seed >>> 0 || 1;
     const rnd = () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
 
@@ -110,6 +134,29 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
         depthWrite: false,
     });
 
+    // Shadow coverage: same vertex shader, coverage-only fragment, max-blended so
+    // overlapping boxes don't over-darken.
+    const shadowMat = new THREE.ShaderMaterial({
+        vertexShader: VERT,
+        fragmentShader: SHADOW_FRAG,
+        uniforms,
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.MaxEquation,
+    });
+    const shadowTarget = new THREE.WebGLRenderTarget(SHADOW_RES, SHADOW_RES, {
+        type: THREE.UnsignedByteType,
+        magFilter: THREE.LinearFilter,
+        minFilter: THREE.LinearFilter,
+        depthBuffer: false,
+    });
+    // Looks straight down the local up from above the cloud layer; the view spans
+    // the whole wrapped disc (±RADIUS on both tangent axes).
+    const shadowCam = new THREE.OrthographicCamera(-RADIUS, RADIUS, RADIUS, -RADIUS, 1, 600);
+    const shadowScene = new THREE.Scene();
+
     const group = new THREE.Group();
     group.name = 'clouds';
     group.matrixAutoUpdate = false;
@@ -137,11 +184,26 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
         mesh.renderOrder = 1;
         mesh.matrixAutoUpdate = false;
         group.add(mesh);
+        const sm = new THREE.Mesh(geo, shadowMat);
+        sm.frustumCulled = false;
+        sm.matrixAutoUpdate = false;
+        shadowScene.add(sm);
     }
     scene.add(group);
 
     const frameRef = new THREE.Vector3();
+    /** Live references the post pass binds once (values update in place). */
+    const shadow = {
+        map: shadowTarget.texture,
+        centre: uniforms.uCentre.value,
+        e1: uniforms.uE1.value,
+        e2: uniforms.uE2.value,
+        up: uniforms.uUp.value,
+        radius: RADIUS,
+        layerH: CLOUD_LAYER_H,
+    };
     return {
+        shadow,
         /**
          * @param playerPos  player world position — the cloud disc is centred above it
          * @param windDir    2D wind direction (shared with the vegetation sway)
@@ -157,6 +219,30 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
             uniforms.uCentre.value.copy(playerPos);
             uniforms.uDrift.value.addScaledVector(windDir, dt * 2.2);
         },
+        /**
+         * Redraw the cloud-coverage map. Call once per frame after update().
+         * Returns what the post pass needs to project into it.
+         */
+        renderShadow(renderer: THREE.WebGLRenderer) {
+            const up = uniforms.uUp.value,
+                c = uniforms.uCentre.value;
+            // Camera above the disc centre, looking down -up, with e2 as screen-up so
+            // texture (x, y) maps onto disc (e1, e2) directly.
+            shadowCam.position.copy(c).addScaledVector(up, 400);
+            shadowCam.up.copy(uniforms.uE2.value);
+            shadowCam.lookAt(c);
+            shadowCam.updateMatrixWorld();
+            const prevTarget = renderer.getRenderTarget();
+            const prevClear = renderer.getClearColor(new THREE.Color());
+            const prevAlpha = renderer.getClearAlpha();
+            renderer.setRenderTarget(shadowTarget);
+            renderer.setClearColor(0x000000, 1);
+            renderer.clear(true, false, false);
+            renderer.render(shadowScene, shadowCam);
+            renderer.setRenderTarget(prevTarget);
+            renderer.setClearColor(prevClear, prevAlpha);
+            return shadow;
+        },
         /** Tint by time of day: lit colour and shadow colour (linear). */
         setColors(lit: THREE.Color, shade: THREE.Color, opacity = 0.92) {
             uniforms.uColor.value.copy(lit);
@@ -168,6 +254,8 @@ export function createClouds(scene: THREE.Scene, count: number, seed = 7) {
             for (const m of group.children as THREE.Mesh[]) m.geometry.dispose();
             for (const g of shapes) g.dispose();
             mat.dispose();
+            shadowMat.dispose();
+            shadowTarget.dispose();
         },
     };
 }

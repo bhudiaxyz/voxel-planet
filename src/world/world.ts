@@ -49,7 +49,7 @@ export async function buildSphereWorld(
 
     onProgress(0.01, 'sculpting the planet');
     await yieldFrame();
-    const { grid, spawn } = generateSphereTerrain(seed, (p) => onProgress(0.01 + p * 0.7, 'sculpting the planet'));
+    const { grid, spawn } = await generateSphereTerrain(seed, (p, stage) => onProgress(0.01 + p * 0.7, stage));
     await yieldFrame();
 
     onProgress(0.72, 'placing landmarks');

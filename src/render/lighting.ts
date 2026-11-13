@@ -74,7 +74,9 @@ const AERIAL_D = 90;
  * and its surroundings at full chroma while leaving the far falloff untouched:
  * past this radius the original curve resumes exactly as before.
  */
-const FOG_NEAR = 96;
+// 96 → 180: the clear radius now spans the extended stream radius, so the
+// mid-distance reads at full chroma instead of starting to mist at ~100 units.
+const FOG_NEAR = 180;
 
 /** Altitude fog thinning: radius of typical ground, metres per doubling, and cap (×). */
 const ALT_FOG_GROUND = 350 + 18;

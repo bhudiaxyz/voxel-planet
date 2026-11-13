@@ -14,6 +14,12 @@ import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 
 const MAX = 8; // columns; foam lives within the first few
+/**
+ * Islets this small don't count as shore. Hundreds of lone sea-floor columns
+ * poke one layer above the sea; each one ringed itself with foam, which read
+ * as random cream circles on open water.
+ */
+const MIN_ISLAND = 6;
 
 export function bakeShoreMap(grid: SphereVoxelGrid, seaLayer: number): THREE.DataTexture {
     const W = FACE_RES * 3,
@@ -22,10 +28,40 @@ export function bakeShoreMap(grid: SphereVoxelGrid, seaLayer: number): THREE.Dat
     const d = new Float32Array(FACE_RES * FACE_RES);
     const D1 = 1,
         D2 = Math.SQRT2;
+    const stack: number[] = [];
     for (let face = 0; face < 6; face++) {
         // Init: land 0, sea "far".
         for (let v = 0; v < FACE_RES; v++)
             for (let u = 0; u < FACE_RES; u++) d[v * FACE_RES + u] = grid.columnTop(face, u, v) > seaLayer ? 0 : MAX;
+        // Sink specks back into the sea: flood-fill each land body, drop the tiny ones.
+        // (Per face, like the distances; a speck straddling a seam is rare and harmless.)
+        const mark = new Uint8Array(FACE_RES * FACE_RES);
+        for (let s = 0; s < d.length; s++) {
+            if (d[s] !== 0 || mark[s]) continue;
+            const body: number[] = [s];
+            mark[s] = 1;
+            stack.length = 0;
+            stack.push(s);
+            // Always fill the whole body: an early stop leaves its remainder to be
+            // re-scanned later as a falsely 'small' fragment and sunk.
+            while (stack.length) {
+                const j = stack.pop()!;
+                const a = j % FACE_RES,
+                    b = (j / FACE_RES) | 0;
+                for (const k of [
+                    a > 0 ? j - 1 : -1,
+                    a < FACE_RES - 1 ? j + 1 : -1,
+                    b > 0 ? j - FACE_RES : -1,
+                    b < FACE_RES - 1 ? j + FACE_RES : -1,
+                ]) {
+                    if (k < 0 || mark[k] || d[k] !== 0) continue;
+                    mark[k] = 1;
+                    body.push(k);
+                    stack.push(k);
+                }
+            }
+            if (body.length < MIN_ISLAND) for (const j of body) d[j] = MAX;
+        }
         // Forward pass
         for (let v = 0; v < FACE_RES; v++)
             for (let u = 0; u < FACE_RES; u++) {

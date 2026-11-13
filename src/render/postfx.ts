@@ -364,7 +364,16 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             uDof: { value: 1.2 }, // pixels of defocus at full haze (0 = disabled)
             uAOTaps: { value: 8 }, // rosette taps (0 = skip AO)
             uCloud: { value: 0.055 },
-            uCloudShadow: { value: 1.0 }, // 1 = cloud shadow noise on, 0 = disabled
+            uCloudShadow: { value: 1.0 }, // 1 = cloud shadows on, 0 = disabled
+            /* ---- voxel-cloud shadows (coverage map from fx/clouds) ---- */
+            tCloudMap: { value: null },
+            uCloudCentre: { value: new THREE.Vector3() },
+            uCloudE1: { value: new THREE.Vector3(1, 0, 0) },
+            uCloudE2: { value: new THREE.Vector3(0, 0, 1) },
+            uCloudUp: { value: new THREE.Vector3(0, 1, 0) },
+            uCloudRadius: { value: 180 },
+            uCloudLayerH: { value: 90 },
+            uCloudShadowStr: { value: 0.32 },
         },
         vertexShader: /* glsl */ `
       varying vec2 vUv;
@@ -377,6 +386,9 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
       uniform float uMistBase, uMistH, uMistDens, uMistMax;
       uniform float uAOStrength, uAORadius, uAORange;
       uniform float uInscatter, uDof, uAOTaps, uCloud, uCloudShadow, uTime, uFocal;
+      uniform sampler2D tCloudMap;
+      uniform vec3 uCloudCentre, uCloudE1, uCloudE2, uCloudUp;
+      uniform float uCloudRadius, uCloudLayerH, uCloudShadowStr;
       uniform vec3 uCamPos, uMistColor, uAOTint;
       uniform vec2 uResolution;
       uniform mat4 uInvProj, uInvView;
@@ -441,7 +453,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         // Mist gets the same treatment for the same reason: pooled in the
         // valleys it should be, sitting on the block in front of you it should
         // not be.
-        float mistPath = max(dist - uFogNear * 0.5, 0.0);
+        float mistPath = max(dist - uFogNear * 0.75, 0.0);
         float mist = 1.0 - exp(-uMistDens * mistPath * heightAvg(uCamPos.y, world.y));
         mist = clamp(mist, 0.0, 1.0) * uMistMax;
 
@@ -486,11 +498,27 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         col *= mix(uAOTint, vec3(1.0), ao);
 
         // ---- drifting cloud shadow (tiered) --------------------------------
+        // Each surface pixel is cast up along the sun to the cloud layer and looks
+        // up the real clouds' coverage there, so shadows have the clouds' shapes,
+        // fall the right way for the sun, and drift with them — on land and water.
         if (uCloudShadow > 0.5) {
-          float cs = n2(world.xz * 0.010 + vec2(uTime * 0.011, uTime * 0.006)) * 0.65
-                   + n2(world.xz * 0.026 - vec2(uTime * 0.017, 0.0)) * 0.35;
-          cs = smoothstep(0.40, 0.78, cs);
-          col *= 1.0 - uCloud * cs * (1.0 - fog);
+          vec3 rel = world - uCloudCentre;
+          float hAbove = uCloudLayerH - dot(rel, uCloudUp);   // height left to the layer
+          float sunUp = dot(uSunDirWorld, uCloudUp);
+          if (hAbove > 0.0 && sunUp > 0.05) {
+            vec3 hit = rel + uSunDirWorld * (hAbove / sunUp);
+            vec2 d = vec2(dot(hit, uCloudE1), dot(hit, uCloudE2));
+            // The coverage map spans the wrapped disc; outside it there is no cloud.
+            vec2 uv = d / (2.0 * uCloudRadius) + 0.5;
+            if (all(greaterThan(uv, vec2(0.0))) && all(lessThan(uv, vec2(1.0)))) {
+              // Two soft taps: cloud shadows have penumbras, not cut edges.
+              float cov = texture2D(tCloudMap, uv).r * 0.6
+                        + texture2D(tCloudMap, uv + vec2(0.004, 0.003)).r * 0.4;
+              // Low sun: longer, fainter shadows.
+              float sunFade = smoothstep(0.05, 0.35, sunUp);
+              col *= 1.0 - uCloudShadowStr * cov * sunFade * (1.0 - fog);
+            }
+          }
         }
 
         // ---- chroma falls faster than value ------------------------------

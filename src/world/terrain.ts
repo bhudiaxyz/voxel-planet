@@ -167,7 +167,7 @@ const DEAD_TRUNK_P = 0.0012;
 const DEAD_TRUNK_MIN_RISE = 3;
 
 /** Desert band: the hottest land (see isDesert's temp), within this many layers of the sea. */
-const DESERT_TEMP = 0.8;
+const DESERT_TEMP = 0.815; // 0.8 → 0.815 trimmed sand cover ~10% (10.2% → 9.2% of land) in favour of grassland
 const DESERT_MAX_RISE = 6;
 /** Chance per desert sand column of a cactus — sparse, so each one stands alone. */
 const CACTUS_P = 0.006;
@@ -177,10 +177,14 @@ const BUSH_PALETTE = [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, BUSH_ROSE, BUSH_MAUVE];
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
 export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK, SCRUB_DRY };
 
-export function generateSphereTerrain(
+/** Let the browser paint the loading screen between stages (no-op cost in node). */
+const paint = () => new Promise((r) => setTimeout(r, 0));
+
+export async function generateSphereTerrain(
     seed: number,
-    onProgress?: (p: number) => void,
-): { grid: SphereVoxelGrid; spawn: { face: number; u: number; v: number } } {
+    /** p: 0..1 through terrain generation; stage: label of the step it is in. */
+    onProgress?: (p: number, stage?: string) => void,
+): Promise<{ grid: SphereVoxelGrid; spawn: { face: number; u: number; v: number } }> {
     const grid = new SphereVoxelGrid();
     const noise = new Noise3(seed);
     const noise2 = new Noise3(seed + 101);
@@ -219,12 +223,17 @@ export function generateSphereTerrain(
                     grid.set(face, u, v, layer, id);
                 }
             }
-            if (onProgress && v % 40 === 0) onProgress((face * FACE_RES + v) / (6 * FACE_RES));
+            if (onProgress && v % 40 === 0)
+                onProgress(((face * FACE_RES + v) / (6 * FACE_RES)) * 0.6, 'sculpting the planet');
         }
     }
 
     // Rivers, streams, lakes and ponds — carved into the land before anything grows.
+    onProgress?.(0.6, 'carving rivers & lakes');
+    await paint();
     carveFreshWater(grid, SEA_LAYER, seed);
+    onProgress?.(0.75, 'growing forests');
+    await paint();
 
     const spawn = findSpawn(grid);
 

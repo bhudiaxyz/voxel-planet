@@ -51,10 +51,22 @@ const barEl = bootEl.querySelector('.ls-bar span')!;
 const subEl = bootEl.querySelector('.ls-sub')!;
 const ctrlEl = bootEl.querySelector('.ls-controls') as HTMLElement;
 
+/** Startup steps in order; the boot line reads "Step i of n: …". Add new stages here. */
+const BOOT_STEPS = [
+    'sculpting the planet',
+    'carving rivers & lakes',
+    'growing forests',
+    'placing landmarks',
+    'building terrain meshes',
+    'adding ocean',
+];
 const setProgress = (p: number, s?: string): void => {
     (barEl as HTMLElement).style.width = `${Math.round(p * 100)}%`;
-    if (s && p < 1) ctrlEl.textContent = s;
     if (p >= 1) ctrlEl.textContent = '';
+    else if (s) {
+        const i = BOOT_STEPS.indexOf(s);
+        ctrlEl.textContent = i >= 0 ? `Step ${i + 1} of ${BOOT_STEPS.length}: ${s}` : s;
+    }
 };
 
 const fail = (msg: string) => {
@@ -258,6 +270,18 @@ async function start(): Promise<void> {
 
     const touch = createTouchControls(fpCam, renderer.domElement);
     const post = createPostFX(renderer, scene, fpCam.camera, (world.streaming.meshes as any).edgeMaterial, tier);
+    // Voxel-cloud shadows: bind the live cloud frame once (the vectors update in
+    // place each frame); the coverage map is redrawn in the frame loop.
+    if (clouds.shadow) {
+        const hu = post.haze.uniforms;
+        hu.tCloudMap.value = clouds.shadow.map;
+        hu.uCloudCentre.value = clouds.shadow.centre;
+        hu.uCloudE1.value = clouds.shadow.e1;
+        hu.uCloudE2.value = clouds.shadow.e2;
+        hu.uCloudUp.value = clouds.shadow.up;
+        hu.uCloudRadius.value = clouds.shadow.radius;
+        hu.uCloudLayerH.value = clouds.shadow.layerH;
+    } else post.haze.uniforms.uCloudShadow.value = 0;
 
     const settings = createSettings({
         rig: { setZoomRange: () => {} },
@@ -453,6 +477,7 @@ async function start(): Promise<void> {
                 .lerp(_white, 0.35)
                 .multiplyScalar(0.78 * (1 - night * 0.6));
             clouds.setColors(_cloudLit, _cloudShade, 0.95 - night * 0.4);
+            if (post.haze.uniforms.uCloudShadow.value > 0.5) clouds.renderShadow(renderer);
             critters.update(dt, at, night, renderer.getPixelRatio());
         }
         const mapDir = drone.active ? drone.dir : fly.active ? fly.dir : controller.dir;
