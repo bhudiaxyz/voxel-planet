@@ -88,6 +88,9 @@ function lerpScalar(arr: number[], ia: { i: number; a: number }): number {
     return arr[ia.i] * (1 - ia.a) + arr[ia.i + 1] * ia.a;
 }
 
+/** Radians the sun moves before the shadow light follows (~0.11°): stable shadow texels. */
+const SHADOW_DIR_STEP = 0.002;
+
 export class DayNight {
     timeOfDay: number; // 0–1; 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
     dayLengthSeconds: number; // default 1200
@@ -97,6 +100,8 @@ export class DayNight {
     private readonly atmo: AtmoLike;
     private readonly renderer: THREE.WebGLRenderer | null;
     private readonly _sunDir = new THREE.Vector3();
+    /** Shadow-casting light direction: the sun's, held between small steps (see update). */
+    private readonly _shadowDir = new THREE.Vector3();
     private readonly _moonDir = new THREE.Vector3();
     private readonly _col = new THREE.Color();
     private readonly _fillBase = new THREE.Color(0x8090c0);
@@ -175,8 +180,16 @@ export class DayNight {
         const S = atmo.worldSize;
 
         // Position sun relative to shadow target so followTarget() keeps working.
+        // The shadow light's direction is held until the sun has moved a small step
+        // (SHADOW_DIR_STEP). A direction that changes every frame shifts the whole
+        // shadow map by a fraction of a texel each frame — every edge crawls and
+        // shimmers even when standing still, and texel-snapping the frustum can't
+        // help because the snap grid itself rotates. The sky, sun disc and shading
+        // still use the smooth _sunDir.
+        if (this._shadowDir.lengthSq() === 0 || this._shadowDir.angleTo(this._sunDir) > SHADOW_DIR_STEP)
+            this._shadowDir.copy(this._sunDir);
         atmo.sun.position
-            .copy(this._sunDir)
+            .copy(this._shadowDir)
             .multiplyScalar(S * 1.1)
             .add(atmo.sun.target.position);
         atmo.sun.updateMatrixWorld();

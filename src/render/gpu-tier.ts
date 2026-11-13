@@ -72,7 +72,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         dprCap: 2,
         shadowRes: 3072,
         shadowBlurSamples: 12,
-        shadowExtent: 120,
+        shadowExtent: 90, // was 120: ~17 texels/unit — sharper, steadier near shadows
         cameraFar: 6000,
         bloom: true,
         aoTaps: 8,
@@ -99,7 +99,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         dprCap: 1.5,
         shadowRes: 2048,
         shadowBlurSamples: 8,
-        shadowExtent: 110,
+        shadowExtent: 80, // was 110
         cameraFar: 3000,
         bloom: true,
         aoTaps: 4,
@@ -126,7 +126,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         dprCap: 1.25,
         shadowRes: 2048,
         shadowBlurSamples: 8,
-        shadowExtent: 120,
+        shadowExtent: 85, // was 120
         cameraFar: 3000,
         bloom: true,
         aoTaps: 4,

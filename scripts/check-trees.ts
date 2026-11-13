@@ -6,7 +6,12 @@ import { FACE_RES, SHELL_DEPTH } from '../src/core/voxel.ts';
 
 const t0 = Date.now();
 const { grid } = await generateSphereTerrain(1337);
-const leafIds = new Set([30, 31, 32, 33, 34, 35]);
+// Every leaf block: the six palette slots plus species canopies (maple, cherry…).
+const leafIds = new Set(
+    Object.values(BLOCK_BY_ID)
+        .filter((b: any) => b?.sway)
+        .map((b: any) => b.id),
+);
 // Every bark block (oak/birch/scaly/ringed/smooth/deadwood), not just TRUNK and
 // TRUNK_PALE: conifers and palms have their own bark blocks now.
 const barkIds = new Set(

@@ -239,6 +239,42 @@ const BARK_SMOOTH = registerBlock('BARK_SMOOTH', {
     isTrunk: true,
 });
 
+/*
+ * Species with their own canopy colours (not the palette's foliage slots, which
+ * every broadleaf shares): sway-flagged, so wind and canopy shading apply.
+ */
+const leafBlock = (name: string, top: number, side: number) =>
+    registerBlock(name, {
+        top: c(top),
+        side: c(side),
+        bottom: c(side).multiplyScalar(0.8),
+        tint: c(top).lerp(c(0xffffff), 0.2),
+        pattern: PATTERN.NONE,
+        rough: 0.22,
+        sway: true,
+    });
+const LEAF_MAPLE = [
+    leafBlock('LEAF_MAPLE_RED', 0xc8402a, 0xa8331f),
+    leafBlock('LEAF_MAPLE_ORANGE', 0xe07a2c, 0xc06420),
+];
+const LEAF_CHERRY = [leafBlock('LEAF_CHERRY', 0xf4b6c8, 0xe39ab0), leafBlock('LEAF_CHERRY_PALE', 0xfad4de, 0xecbccb)];
+const LEAF_JACARANDA = [
+    leafBlock('LEAF_JACARANDA', 0x9b7fd8, 0x8268c0),
+    leafBlock('LEAF_JACARANDA_PALE', 0xb9a4e6, 0x9f88d2),
+];
+const LEAF_ASPEN = [leafBlock('LEAF_ASPEN', 0xd8c84a, 0xbfae3a), leafBlock('LEAF_ASPEN_GREEN', 0x9cbf52, 0x84a744)];
+/** Redwood: deep red-brown, fibrous furrowed bark. */
+const BARK_REDWOOD = registerBlock('BARK_REDWOOD', {
+    top: c(0x7a3420),
+    side: c(0x6a2a18),
+    bottom: c(0x4e1e10),
+    tint: c(0x3a140a),
+    pattern: PATTERN.BARK,
+    barkStyle: 0,
+    rough: 0.75,
+    isTrunk: true,
+});
+
 /** Per grass/stone column above the lowlands: a dead trunk, rarer than living trees. */
 const DEAD_TRUNK_P = 0.0012;
 /** Dead trunks only from the grassland/forest band upward (layers above sea). */
@@ -491,7 +527,14 @@ type Species =
     | 'acacia'
     | 'willow'
     | 'baobab'
-    | 'juniper';
+    | 'juniper'
+    // Distinct silhouettes with their own leaf colours / bark:
+    | 'maple'
+    | 'cherry'
+    | 'redwood'
+    | 'jacaranda'
+    | 'dragon'
+    | 'aspen';
 /** Species drawn by plantSphereTree (as a forced form) and which leaf role they wear. */
 const FORM_SPECIES: Partial<Record<Species, 'broad' | 'conifer'>> = {
     mangrove: 'broad',
@@ -516,6 +559,7 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
             ['broadleaf', 3],
             ['mangrove', 2],
             ['willow', 1],
+            ['dragon', 1],
         ],
         size: [0.35, 0.85],
     },
@@ -529,6 +573,8 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
             ['baobab', 1],
             ['willow', 1],
             ['palm', 1],
+            ['cherry', 2],
+            ['jacaranda', 1],
         ],
         size: [0.2, 1.0],
     },
@@ -541,6 +587,9 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
             ['cypress', 1],
             ['pine', 2],
             ['fir', 2],
+            ['maple', 3],
+            ['cherry', 1],
+            ['aspen', 2],
         ],
         size: [0.2, 0.9],
     },
@@ -551,6 +600,8 @@ const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [
             ['spruce', 4],
             ['pine', 3],
             ['birch', 1],
+            ['redwood', 2],
+            ['aspen', 2],
         ],
         size: [0.3, 1.0],
     },
@@ -598,6 +649,13 @@ function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng
     return mix[mix.length - 1][0];
 }
 
+const dirs4: Array<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+];
+
 function plantZoneTree(
     grid: SphereVoxelGrid,
     face: number,
@@ -610,7 +668,12 @@ function plantZoneTree(
 ) {
     const z = ZONE[zone];
     const species = weightedPick(z.mix, rng);
-    const size = rng.range(z.size[0], z.size[1]);
+    // Size variety: the zone range, a ±25% per-tree jitter, and a real age mix —
+    // ~10% young saplings (0.4-0.6x) and ~7% old giants (1.4-1.7x). A forest used to
+    // sit mostly in a 5-14 layer band, so stands read as uniform.
+    const age = rng();
+    const ageK = age < 0.1 ? rng.range(0.4, 0.6) : age > 0.93 ? rng.range(1.4, 1.7) : rng.range(0.75, 1.25);
+    const size = Math.min(1.7, rng.range(z.size[0], z.size[1]) * ageK);
     if (species === 'broadleaf') {
         // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
         const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;
@@ -631,8 +694,21 @@ function plantZoneTree(
         grid.set(face, nu, nv, nl, id);
         return true;
     };
+    // Crown lean (shape variety): about a third of trees drift their canopy one
+    // or two columns downwind as it rises. Trunks stay vertical; the shift grows
+    // with height, so a tall crown curves and a short one barely moves.
+    // Only open-crowned species lean: conifers (whose trunk runs up through the
+    // tiers) and the palm/dragon/aspen builders that place their own crown tops
+    // stay true, or the crown would detach from the trunk.
+    const LEANS = species === 'emergent' || species === 'maple' || species === 'cherry' || species === 'jacaranda';
+    const leaning = LEANS && rng() < 0.33;
+    const [leanU, leanV] = leaning ? dirs4[Math.floor(rng() * 4)] : [0, 0];
+    const leanK = leaning ? rng.range(0.05, 0.11) : 0; // columns of drift per layer
     /** A flat disc of leaves (radius r, Chebyshev with clipped corners) at height dl. */
     const disc = (cu: number, dl: number, cv: number, r: number, id: number, ragged = 0.0) => {
+        const drift = Math.round(Math.max(0, dl) * leanK);
+        cu += leanU * drift;
+        cv += leanV * drift;
         for (let dv = -r; dv <= r; dv++)
             for (let du = -r; du <= r; du++) {
                 const d = Math.abs(du) + Math.abs(dv);
@@ -740,6 +816,96 @@ function plantZoneTree(
             }
             return;
         }
+        case 'maple': {
+            // Dense, rounded crown in autumn reds and oranges, on a sturdy trunk.
+            const h = Math.round(4 + size * 4);
+            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            const r = Math.max(2, Math.round(2 + size * 2));
+            const [a, b] = LEAF_MAPLE;
+            for (let l = -1; l <= r; l++) {
+                const rr = Math.round(r * Math.sqrt(Math.max(0, 1 - ((l - r / 2) / (r / 2 + 1)) ** 2)));
+                disc(0, h + l, 0, Math.max(1, rr), rng() < 0.5 ? a.id : b.id, 0.18);
+            }
+            return;
+        }
+        case 'cherry': {
+            // Wide, low, spreading crown — blossom pink — on a short smooth trunk.
+            const h = Math.round(3 + size * 2);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(l > h - 2 ? lu : 0, l, l > h - 2 ? lv : 0, BARK_SMOOTH.id);
+            const r = Math.round(3 + size * 3);
+            const [a, b] = LEAF_CHERRY;
+            disc(lu, h, lv, r, a.id, 0.3);
+            disc(lu, h + 1, lv, Math.max(1, r - 1), b.id, 0.35);
+            disc(lu, h + 2, lv, Math.max(1, r - 3), a.id, 0.4);
+            return;
+        }
+        case 'redwood': {
+            // Very tall straight trunk (2x2 when big), bare most of the way, a short
+            // narrow conical crown high up.
+            const h = Math.round(16 + size * 12);
+            const thick = size > 0.5;
+            for (let l = 0; l < h; l++) {
+                set(0, l, 0, BARK_REDWOOD.id);
+                if (thick) {
+                    set(1, l, 0, BARK_REDWOOD.id);
+                    set(0, l, 1, BARK_REDWOOD.id);
+                    set(1, l, 1, BARK_REDWOOD.id);
+                }
+            }
+            const leaf = pick(roles.conifer);
+            const crown = Math.round(5 + size * 4);
+            for (let k = 0; k < crown; k++) {
+                const r = Math.max(1, Math.round((crown - k) * 0.45) + (thick ? 1 : 0));
+                disc(0, h - crown + k + 2, 0, r, leaf, 0.12);
+            }
+            set(0, h + 2, 0, leaf);
+            return;
+        }
+        case 'jacaranda': {
+            // Open umbrella crown of violet blossom on a leaning, forked trunk.
+            const h = Math.round(5 + size * 3);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(l > h / 2 ? lu : 0, l, l > h / 2 ? lv : 0, BARK_SMOOTH.id);
+            // Fork: two limbs to opposite sides of the crown.
+            set(lu + lv, h - 1, lv - lu, BARK_SMOOTH.id);
+            set(lu - lv, h - 1, lv + lu, BARK_SMOOTH.id);
+            const r = Math.round(4 + size * 3);
+            const [a, b] = LEAF_JACARANDA;
+            disc(lu, h, lv, r, a.id, 0.4);
+            disc(lu, h + 1, lv, Math.max(2, r - 2), b.id, 0.45);
+            return;
+        }
+        case 'dragon': {
+            // Dragon tree: thick trunk forking into radiating arms, each ending in a
+            // flat rosette of stiff leaves — an upturned umbrella.
+            const h = Math.round(3 + size * 3);
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_RINGED.id);
+            const leaf = pick(roles.broad);
+            const arms: Array<[number, number]> = [...dirs, [1, 1], [-1, 1], [1, -1], [-1, -1]];
+            const reach = Math.round(2 + size * 2);
+            for (const [du, dv] of arms) {
+                if (rng() < 0.25) continue;
+                for (let k = 1; k <= reach; k++) set(du * k, h + k, dv * k, BARK_RINGED.id);
+                disc(du * reach, h + reach + 1, dv * reach, 1, leaf, 0.1);
+            }
+            return;
+        }
+        case 'aspen': {
+            // Slim white trunk, small trembling crown, grown in a small clonal stand.
+            const n = 1 + Math.floor(rng() * 3);
+            for (let t = 0; t < n; t++) {
+                const ou = t === 0 ? 0 : Math.round((rng() - 0.5) * 6),
+                    ov = t === 0 ? 0 : Math.round((rng() - 0.5) * 6);
+                const h = Math.round(6 + size * 6 + (rng() - 0.5) * 3);
+                for (let l = 0; l < h; l++) set(ou, l, ov, BIRCH.id);
+                const leaf = LEAF_ASPEN[rng() < 0.6 ? 0 : 1].id;
+                for (let l = Math.round(h * 0.6); l <= h; l++)
+                    disc(ou, l, ov, l === h ? 0 : 1, leaf, l === h ? 0 : 0.3);
+                set(ou, h + 1, ov, leaf);
+            }
+            return;
+        }
     }
 }
 
@@ -826,9 +992,9 @@ function plantSphereTree(
     const dx = rng.chance(0.5) ? 1 : -1;
     const dz = rng.chance(0.5) ? 1 : -1;
 
-    // Trunk height varies by form and scale
-    // jitter adds ±1-2 blocks of variety on top of the scale-driven height
-    const jitter = Math.round(rng.range(-1.5, 1.5));
+    // Trunk height varies by form and scale. The jitter is wide (±3) and independent
+    // of crown size, so one species comes both tall-and-lanky and short-and-full.
+    const jitter = Math.round(rng.range(-3, 3));
     const ft = FORM_TRUNK[form];
     const bare = ft
         ? Math.max(ft[0], Math.round(ft[0] + scale * ft[1]) + jitter)

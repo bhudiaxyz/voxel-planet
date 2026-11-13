@@ -48,6 +48,12 @@ export const DEFAULT_SHADOW_RESOLUTION = 3072;
 // visibly stair-stepped patch. This comfortably covers the furthest camera
 // setting and nearby off-screen casters while keeping the texels dense.
 const SHADOW_EXTENT = 120;
+const _fwd = new THREE.Vector3(),
+    _rgt = new THREE.Vector3(),
+    _upv = new THREE.Vector3(),
+    _off = new THREE.Vector3(),
+    _X = new THREE.Vector3(1, 0, 0),
+    _Y = new THREE.Vector3(0, 1, 0);
 
 /**
  * Aerial-perspective density. FogExp2 is 1 - exp(-(density*d)^2), which is the
@@ -249,14 +255,31 @@ export class Atmosphere {
      * and target by the same delta instead of reconstructing the direction from
      * a constant; this preserves any live day/night rotation applied elsewhere.
      */
-    followTarget(x: any, z: any) {
+    /**
+     * Centre the shadow frustum on the viewer, in 3D. This used to move the target
+     * along world X/Z only (a flat-world holdover): on the sphere the viewer is
+     * hundreds of units off in Y almost everywhere but the equator, so the ±120
+     * shadow box sat far from them and near shadows came out soft, faint or
+     * missing. The centre is also snapped to whole shadow texels in the light's
+     * view plane, so shadow edges don't crawl/shimmer as the viewer moves.
+     */
+    followTarget(p: THREE.Vector3) {
         const s = this.sun;
-        const dx = x - s.target.position.x;
-        const dz = z - s.target.position.z;
-        s.target.position.x = x;
-        s.target.position.z = z;
-        s.position.x += dx;
-        s.position.z += dz;
+        const res = s.shadow.mapSize.x || 2048;
+        const texel = (2 * this.shadowExtent) / res;
+        // Light basis: forward = toward the target from the sun; right/up span the map.
+        _fwd.copy(s.position).sub(s.target.position);
+        if (_fwd.lengthSq() < 1e-6) _fwd.set(0, 1, 0);
+        _fwd.normalize();
+        _rgt.crossVectors(Math.abs(_fwd.y) > 0.99 ? _X : _Y, _fwd).normalize();
+        _upv.crossVectors(_fwd, _rgt);
+        // Snap the target's in-plane coordinates to the texel grid; keep its depth.
+        const a = Math.round(p.dot(_rgt) / texel) * texel;
+        const b = Math.round(p.dot(_upv) / texel) * texel;
+        const d = p.dot(_fwd);
+        const offset = _off.copy(s.position).sub(s.target.position);
+        s.target.position.copy(_rgt).multiplyScalar(a).addScaledVector(_upv, b).addScaledVector(_fwd, d);
+        s.position.copy(s.target.position).add(offset);
         s.target.updateMatrixWorld();
         s.updateMatrixWorld();
     }

@@ -441,7 +441,7 @@ async function start(): Promise<void> {
     fpCam.updateSphere(1 / 60, controller.dir, controller.groundRadius, 0, true);
     world.streaming.update(controller.dir);
     const camPos = fpCam.camera.position;
-    atmo.followTarget(camPos.x, camPos.z);
+    atmo.followTarget(camPos);
 
     scene.updateMatrixWorld(true);
     scene.matrixWorldAutoUpdate = false;
@@ -508,7 +508,7 @@ async function start(): Promise<void> {
         }
 
         const camPos2 = fpCam.camera.position;
-        atmo.followTarget(camPos2.x, camPos2.z);
+        atmo.followTarget(camPos2);
         dayNight.update(dt);
 
         if (world.sphereWater) {

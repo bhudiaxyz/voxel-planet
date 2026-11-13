@@ -576,6 +576,10 @@ The sky model is authored with +Y up. On a sphere the viewer's up is the planet-
 - Sky dome: sphere radius `worldSize*2.6` (worldSize = 800), `BackSide`, `depthWrite: false`, `renderOrder -1000`, positioned on the camera each frame. Fragment adds a very faint banded cloud (+3.5% max) on top of `skyRadiance`.
 - Lights: shadow-casting `DirectionalLight` sun (intensity `RIG.sun = 1.85`), `HemisphereLight` (`RIG.hemi = 1.08`), a camera-side lavender `DirectionalLight` fill (`RIG.fill = 0.22`), `AmbientLight` in haze colour (`RIG.amb = 0.12`). Intensities are overwritten each frame by `DayNight`.
 - Shadows: VSM; map size, blur samples and frustum half-extent from the tier (`min(worldSize*0.42, tier.shadowExtent)`); resolution capped by `MAX_TEXTURE_SIZE`, read from the live renderer (`renderer.capabilities`, not a throwaway probe context, which leaked: mobile browsers cap live contexts); `bias -0.00018`, `normalBias 0.1`, radius 2.25, intensity 0.72 (raised from 0.48 in steps: shadows read too faint); `setShadowResolution` rounds to 1024-multiples within 1024..4096 (0 disables).
+- **Shadow stability (anti-shimmer).** Three things kept shadow edges crawling, and each is fixed:
+  1. `followTarget(cameraPos)` centres the frustum on the viewer in **3D**. It used to move only along world X/Z, a flat-world holdover: away from the equator the viewer was hundreds of units off in Y, so near shadows were soft, faint or missing. At 86 degrees latitude the centre is now within one texel of the camera.
+  2. The centre is **snapped to whole shadow texels** in the light's view plane, so moving doesn't slide the map by sub-texel amounts.
+  3. The shadow light's **direction is quantised** (`SHADOW_DIR_STEP = 0.002` rad, about 0.11 degrees, in `DayNight`). A sun that moves every frame shifts the whole map by a fraction of a texel every frame, so edges shimmered even when standing still, and the snap grid itself rotated. The sky, sun disc and shading keep the smooth sun direction; only the shadow light steps.
 - Hemisphere light axis: `HemisphereLight` takes its sky axis from its position (it looks at the origin). Left at the default +Y it lit the planet by world up, so on the flanks every face got the full blue sky term and the scene read cold. `Atmosphere.update` sets `hemi.position = normalize(camera.position)` each frame so its sky axis is the viewer's local up.
 
 ### Day/night (`render/day-night.ts`)
@@ -735,7 +739,7 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 | `maxMegapixels` | 4.2 | 2.0 | 2.4 | 1.6 | 1.0 | Drawing-buffer pixel budget; DPR is lowered to fit (HiDPI laptops and large iPads otherwise meant about 8 MP of HalfFloat post targets) |
 | `shadowRes` | 3072 | 2048 | 2048 | 1024 | 512 | VSM map size |
 | `shadowBlurSamples` | 12 | 8 | 8 | 4 | 4 | VSM blur taps |
-| `shadowExtent` | 120 | 110 | 120 | 100 | 80 | Shadow frustum half-extent |
+| `shadowExtent` | 90 | 80 | 85 | 100 | 80 | Shadow frustum half-extent. Tightened on the top three tiers for texel density (high 12.8 to 17 texels/unit): sharper, steadier near shadows; beyond it shadows are small and in haze |
 | `cameraFar` | 6000 | 3000 | 3000 | 1500 | 1200 | Camera far plane |
 | `bloom` | yes | yes | yes | no | no | Bloom pass |
 | `aoTaps` | 8 | 4 | 4 | 0 | 0 | Large-scale AO taps |
@@ -969,7 +973,6 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 
 - Settings sliders for outline width, camera near/far (`rig.setZoomRange` is a stub) and planet radius are persisted but have no effect: `main.ts` passes `world: { streaming }` only, so `world.meshes`, `world.allPlanetUnis` are absent. Wind strength is read once at startup from storage; moving the slider afterwards does not change `_windBase` for the same reason.
 - `uWaterMap` is never assigned (`setVoxelWaterline` referenced in a comment does not exist), so the voxel shader's waterline ink stroke samples an unbound sampler and draws nothing. The `uWaterLevel`/`uWorldSize` constants are flat-world leftovers.
-- `Atmosphere.followTarget(x, z)` (called each frame with the camera x/z) translates the sun and its shadow target in world X/Z only, which is a flat-world holdover; the shadow target is therefore not moved radially to follow the player on the sphere (unverified at runtime). `DayNight` repositions the sun relative to `sun.target.position`.
 - `SCRUB_DRY` plants are placed in deserts but `drawPlant` has no case for them, so nothing is rendered.
 - `particles.recolorPetals()` is not called on palette switch, so petal particles keep their original colours until reload. Butterfly colours do refresh.
 - The bloom pass is constructed with hard-coded `0.22 / 0.9 / 1.25` but `onPaletteChange` overwrites them with `GRADE.bloom` values after any palette switch.
