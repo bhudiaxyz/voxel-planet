@@ -301,8 +301,12 @@ export async function generateSphereTerrain(
                     grid.set(face, u, v, layer, id);
                 }
             }
-            if (onProgress && v % 40 === 0)
-                onProgress(((face * FACE_RES + v) / (6 * FACE_RES)) * 0.6, 'sculpting the planet');
+            if (v % 40 === 0) {
+                onProgress?.(((face * FACE_RES + v) / (6 * FACE_RES)) * 0.6, 'sculpting the planet');
+                // Yield so the bar actually paints (and the tab isn't flagged as hung
+                // on slow phones): reporting progress without yielding drew nothing.
+                await paint();
+            }
         }
     }
 

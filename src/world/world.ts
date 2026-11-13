@@ -81,8 +81,15 @@ export async function buildSphereWorld(
     // Hooked up before the first fill so the opening view has grass.
     const veg = createSphereVegetation(grid, seed ^ 0x3b1e7f, scene, grassDensity, 0.1, groundDetail, wet);
     streaming.setListener(veg);
-    // Fill the whole view before the first frame; streaming after this is budgeted per frame.
-    streaming.update(spawnDir, Infinity);
+    // Fill the whole view before the first frame, in budgeted slices with a paint
+    // between them. One synchronous Infinity fill meshed ~800-1,500 chunks in a
+    // single block — seconds of frozen screen on older phones and iPads.
+    const total = Math.max(1, (streaming.update(spawnDir, 0), streaming.pendingCount));
+    while (streaming.pendingCount > 0) {
+        streaming.update(spawnDir, 24);
+        onProgress(0.73 + 0.17 * (1 - streaming.pendingCount / total), 'building terrain meshes');
+        await yieldFrame();
+    }
 
     onProgress(0.9, 'adding ocean');
     await yieldFrame();

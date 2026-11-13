@@ -128,7 +128,7 @@ export class Atmosphere {
     declare shadowResolution: any;
     declare hemi: any;
     declare fill: any;
-    constructor(scene: any, worldSize: any, tier: GpuTier = 'high') {
+    constructor(scene: any, worldSize: any, tier: GpuTier = 'high', maxTextureSize?: number) {
         this.scene = scene;
         this.worldSize = worldSize;
         this.time = 0;
@@ -166,9 +166,9 @@ export class Atmosphere {
         sun.shadow.camera.far = worldSize * 3.2;
         const requestedRes = ts.shadowRes > 0 ? ts.shadowRes : SHADOW_RES;
         // Cap to MAX_TEXTURE_SIZE so old mobile GPUs don't silently fail or clamp.
-        const gl = (document.createElement('canvas').getContext('webgl2') ||
-            document.createElement('canvas').getContext('webgl')) as WebGLRenderingContext | null;
-        const maxTex = gl ? (gl.getParameter(gl.MAX_TEXTURE_SIZE) as number) : 2048;
+        // Read from the live renderer — a throwaway probe context here was never
+        // released, and mobile browsers cap how many contexts a page may hold.
+        const maxTex = maxTextureSize ?? 2048;
         const shadowRes = Math.min(requestedRes, maxTex);
         sun.shadow.mapSize.set(shadowRes, shadowRes);
         // Voxels are 1 unit. The old normalBias of 0.5 was half a block, which

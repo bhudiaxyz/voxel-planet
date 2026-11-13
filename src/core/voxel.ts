@@ -1654,6 +1654,38 @@ const FRAG_DECL = /* glsl */ `
    * and nothing reads as paving. uv is in block units and continuous across
    * neighbouring blocks, so the canopy shades as one mass, not per cube.
    */
+  /**
+   * Shade variety across canopies, on top of patFoliage's within-tree clumps:
+   *  - per tree: a low-frequency world-space field shifts brightness, warmth and
+   *    saturation, so neighbouring trees of one leaf colour still differ (one tree
+   *    stays consistent — the field is ~6 blocks across);
+   *  - up the crown: lower canopy darker and cooler, the top sunlit and warmer;
+   *  - new growth: pale, bright young-leaf tips scattered over top faces.
+   * Reads vPosW, so only valid inside main().
+   */
+  vec3 canopyVariety(vec3 col, vec3 tint, bool top, vec2 uv) {
+    vec3 wp = vPosW * 0.16;
+    float tree = vxNoise(wp.xz + wp.y * 0.3) * 0.5 + vxNoise(wp.xy * 1.3 + 7.0) * 0.5;   // 0..1, per crown
+    float warm = vxNoise(wp.yz * 0.9 - 3.0);
+    // Brightness: about ±14% between trees.
+    col *= 0.86 + 0.28 * tree;
+    // Warmth: some crowns lean yellow-green, others blue-green.
+    col *= mix(vec3(0.94, 0.98, 1.06), vec3(1.07, 1.02, 0.9), warm);
+    // Saturation: drier crowns slightly greyer.
+    float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+    col = mix(vec3(lum), col, 0.82 + 0.3 * tree);
+    // Height: a smooth darker-below, sunlit-above gradient over the first ~20
+    // layers above the sea. (A cyclic fract() of height drew hard seams.)
+    float hh = smoothstep(2.0, 22.0, length(vPosW) - uSeaLevelRadius);
+    col *= mix(vec3(0.92, 0.94, 0.98), vec3(1.04, 1.03, 0.98), hh);
+    // Young-leaf tips: small pale bright flecks on top faces only.
+    if (top) {
+      float tip = smoothstep(0.78, 0.9, vxNoise(uv * 3.3 + vec2(wp.x, wp.z) * 2.0));
+      col = mix(col, tint * 1.25 + vec3(0.04, 0.05, 0.0), tip * 0.35);
+    }
+    return col;
+  }
+
   vec3 patFoliage(vec2 uv, vec3 base, vec3 tint, float faceLight) {
     // Clump field: large soft blobs of varying size (two octaves, domain-warped
     // so the blobs are lumpy rather than round).
@@ -2029,6 +2061,7 @@ const FRAG_BODY = /* glsl */ `
       float faceLight = isTopFace ? 1.0 : isSide ? 0.6 : 0.0;
       // Undersides: a finer scale reads as leaves seen from beneath rather than smears.
       col = patFoliage(isTopFace || isSide ? vUvW : vUvW * 1.8, col, vTintV, faceLight);
+      col = canopyVariety(col, vTintV, isTopFace, vUvW);
       // Leaves transmit and scatter light, so a canopy's shaded faces stay far
       // brighter than rock in the same shade; lift them so the palette hue reads.
       col *= isTopFace ? 1.05 : isSide ? 1.28 : 1.15;
@@ -2407,7 +2440,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v18' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
+        'VoxelWorld-voxel-v19' + (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') + (mat.defines?.FAR_FIELD ? '-far' : '');
     return mat;
 }
 

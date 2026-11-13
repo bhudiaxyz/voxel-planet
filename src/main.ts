@@ -63,6 +63,7 @@ const BOOT_STEPS = [
     'placing landmarks',
     'building terrain meshes',
     'adding ocean',
+    'preparing shaders',
 ];
 const setProgress = (p: number, s?: string): void => {
     (barEl as HTMLElement).style.width = `${Math.round(p * 100)}%`;
@@ -107,16 +108,30 @@ async function start(): Promise<void> {
     const RELOAD_KEY = 'voxel-planet.gl-reloaded';
     renderer.domElement.addEventListener('webglcontextlost', (e) => {
         e.preventDefault();
-        if (sessionStorage.getItem(RELOAD_KEY)) {
+        // Storage can throw (blocked / private modes); then just reload once.
+        const store = (fn: () => string | null | void) => {
+            try {
+                return fn();
+            } catch {
+                return null;
+            }
+        };
+        if (store(() => sessionStorage.getItem(RELOAD_KEY))) {
             fail('The graphics driver reset again. Try a lighter profile: add ?tier=low to the address.');
             return;
         }
-        sessionStorage.setItem(RELOAD_KEY, '1');
+        store(() => sessionStorage.setItem(RELOAD_KEY, '1'));
         fail('Graphics reset — reloading…');
         setTimeout(() => location.reload(), 800);
     });
     // A minute of stable running re-arms the one automatic reload.
-    setTimeout(() => sessionStorage.removeItem(RELOAD_KEY), 60_000);
+    setTimeout(() => {
+        try {
+            sessionStorage.removeItem(RELOAD_KEY);
+        } catch {
+            /* storage blocked */
+        }
+    }, 60_000);
     const scene = new THREE.Scene();
 
     const ts = TIER_SETTINGS[tier];
@@ -129,7 +144,7 @@ async function start(): Promise<void> {
     });
 
     const fpCam = new FPCamera(container.clientWidth / container.clientHeight, renderer.domElement, ts.cameraFar);
-    const atmo = new Atmosphere(scene, 800, tier);
+    const atmo = new Atmosphere(scene, 800, tier, renderer.capabilities.maxTextureSize);
     const dayNight = new DayNight(atmo, renderer);
     {
         // The day cycle has its own sky keyframes; theme them with the starting
@@ -599,6 +614,18 @@ async function start(): Promise<void> {
         }
     }
 
+    // Compile every program before the first frame. Otherwise the big voxel
+    // shader and its shadow/depth/edge variants compiled synchronously on the
+    // first render — seconds of frozen screen on Mali/Adreno after the bar read
+    // 100%. With KHR_parallel_shader_compile this runs off the main thread; without
+    // it compileAsync still front-loads the work behind the labelled step.
+    setProgress(0.95, 'preparing shaders');
+    try {
+        await renderer.compileAsync(scene, fpCam.camera);
+    } catch (err) {
+        console.warn('shader pre-compile failed; compiling on first frame', err);
+    }
+
     frame();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -619,5 +646,8 @@ async function start(): Promise<void> {
 
 start().catch((err: unknown) => {
     console.error(err);
-    fail('Unable to start');
+    // Say why: an out-of-memory RangeError, a shader error and a context failure
+    // otherwise all looked identical.
+    const why = err instanceof Error ? err.message : String(err);
+    fail(`Unable to start: ${why}. Try a lighter profile: add ?tier=low to the address.`);
 });

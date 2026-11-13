@@ -7,7 +7,14 @@ export function createRenderer(container: any, tier: GpuTier = 'high') {
     const captureMode = new URLSearchParams(location.search).get('capture') === '1';
     const dprCap = TIER_SETTINGS[tier].dprCap;
 
-    const choosePixelRatio = (_w?: any, _h?: any) => Math.min(window.devicePixelRatio || 1, dprCap);
+    // Cap by both DPR and a pixel budget: a HiDPI laptop or a large iPad at the
+    // tier's DPR cap meant ~8 MP of HalfFloat post targets on high.
+    const maxPx = TIER_SETTINGS[tier].maxMegapixels * 1e6;
+    const choosePixelRatio = (w?: number, h?: number) => {
+        const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+        const px = Math.max(1, (w || window.innerWidth) * (h || window.innerHeight));
+        return Math.max(1, Math.min(dpr, Math.sqrt(maxPx / px)));
+    };
 
     const renderer = new THREE.WebGLRenderer({
         // The scene is rendered through EffectComposer and receives post-process AA at the

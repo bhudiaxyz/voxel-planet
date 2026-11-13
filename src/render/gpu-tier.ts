@@ -62,6 +62,8 @@ export interface TierSettings {
     foliageDetail: boolean;
     /** Low-res whole-planet shell beyond the streamed terrain, so the rest of the world shows. */
     farField: boolean;
+    /** Drawing-buffer pixel budget in megapixels (DPR is lowered to fit). */
+    maxMegapixels: number;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -91,6 +93,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         shoreFoam: true,
         foliageDetail: true,
         farField: true,
+        maxMegapixels: 4.2,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -117,6 +120,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         shoreFoam: true,
         foliageDetail: true,
         farField: true,
+        maxMegapixels: 2.0,
     },
     mid: {
         dprCap: 1.25,
@@ -143,6 +147,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         shoreFoam: true,
         foliageDetail: true,
         farField: true,
+        maxMegapixels: 2.4,
     },
     low: {
         dprCap: 1,
@@ -169,6 +174,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         shoreFoam: false,
         foliageDetail: true,
         farField: true,
+        maxMegapixels: 1.6,
     },
     'very-low': {
         dprCap: 1,
@@ -195,6 +201,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         shoreFoam: false,
         foliageDetail: false,
         farField: false,
+        maxMegapixels: 1.0,
     },
 };
 
@@ -218,7 +225,9 @@ export function probeGpu(): GpuProbe {
     let renderer = '';
     let webgl2 = false;
     try {
-        const gl = document.createElement('canvas').getContext('webgl2');
+        // Same power preference as the real renderer, so a hybrid laptop is tiered
+        // on the GPU the game will actually run on (not the iGPU).
+        const gl = document.createElement('canvas').getContext('webgl2', { powerPreference: 'high-performance' });
         if (gl) {
             webgl2 = true;
             // Chrome/Edge/Safari 16+ expose the real renderer string through
@@ -263,23 +272,32 @@ export function classifyGpu(p: GpuProbe): GpuTier {
     if (software) return p.mobile ? 'very-low' : 'low';
 
     if (p.mobile) {
+        // Apple first: Safari's hardwareConcurrency isn't the physical core count
+        // (it can report 2-4 on capable iPads), so the core cut below would send an
+        // A12+ iPad to very-low. Every iOS/iPadOS device with WebGL2 Safari (A12+,
+        // 2018+) handles mobile-high; weak-memory devices still drop.
+        if (/apple/.test(r)) return weakMem ? 'mid' : 'mobile-high';
         if (weakMem || p.cores <= 4) return 'very-low';
-        // Apple hides the model behind "Apple GPU"; every iOS/iPadOS device that
-        // runs a WebGL2-capable Safari (A12+, 2018+) handles mobile-high caps.
-        if (/apple/.test(r)) return 'mobile-high';
         const adreno = /adreno[^0-9]*(\d{3})/.exec(r);
         if (adreno) {
             const n = +adreno[1];
-            return n >= 700 ? 'mobile-high' : n >= 610 ? 'mid' : 'very-low';
+            // 630/640/650/660 (2018-20 flagships) run mid; budget 610-620s run low.
+            return n >= 700 ? 'mobile-high' : n >= 630 ? 'mid' : n >= 610 ? 'low' : 'very-low';
         }
         if (/xclipse|immortalis/.test(r)) return 'mobile-high';
         const mali = /mali-g(\d+)/.exec(r);
-        if (mali) return +mali[1] >= 710 || +mali[1] === 78 || +mali[1] === 77 || +mali[1] === 76 ? 'mid' : 'very-low';
+        // Valhall G610+ (2022 mid-range, e.g. Dimensity) and the G76-G78 flagships run mid.
+        if (mali) return +mali[1] >= 610 || +mali[1] === 78 || +mali[1] === 77 || +mali[1] === 76 ? 'mid' : 'very-low';
         // Unknown mobile GPU: middle of the road beats guessing high.
         return p.cores >= 8 ? 'mid' : 'very-low';
     }
 
     if (weakMem || p.cores <= 2) return 'low';
+    // Older or entry-level discrete GPUs (2-4 GB, ~2014-19): GTX 7xx/9xx/1030-1050,
+    // GTX 1630/1650, MX laptop chips, GT-series, RX 550/560, old Quadros. They would
+    // match the discrete rule below and get high (radius 22, 3072 VSM, DPR 2).
+    if (/gtx ?(7\d\d|9\d\d|10[3-5]0|16[35]0)|\bmx ?\d{2,3}\b|\bgt ?\d{3,4}\b|rx ?5[56]0\b|quadro (k|m|p)\d/.test(r))
+        return 'mid';
     // Discrete GPUs and Apple Silicon.
     if (
         /nvidia|geforce|quadro|rtx|radeon (rx|pro)|\brx ?\d{3,4}|apple m\d|apple gpu/.test(r) &&

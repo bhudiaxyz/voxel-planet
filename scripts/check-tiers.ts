@@ -89,12 +89,37 @@ const cases: Array<[string, GpuProbe, GpuTier]> = [
     ['iPad (iPadOS Safari)', mob('Apple GPU', 8, undefined), 'mobile-high'],
     ['iPhone XS (2018, 6 cores)', mob('Apple GPU', 6, undefined), 'mobile-high'],
     ['Galaxy S10 (2019, Adreno 640)', mob('ANGLE (Qualcomm, Adreno (TM) 640, OpenGL ES 3.2)', 8, 8), 'mid'],
-    ['Pixel 4a (Adreno 618)', mob('Adreno (TM) 618', 8, 6), 'mid'],
+    // Budget Adreno 61x-62x run low; 630+ (2018-20 flagships) run mid.
+    ['Pixel 4a (Adreno 618)', mob('Adreno (TM) 618', 8, 6), 'low'],
+    ['Budget Adreno 610', mob('Adreno (TM) 610', 8, 4), 'low'],
+    ['Galaxy S9 (2018, Adreno 630)', mob('Adreno (TM) 630', 8, 4), 'mid'],
+    // Safari's core count isn't physical: an iPad reporting 4 must not drop to very-low.
+    ['iPad reporting 4 cores', mob('Apple GPU', 4, undefined), 'mobile-high'],
+    ['Mali-G610 (2022 mid-range)', mob('Mali-G610 MC6', 8, 8), 'mid'],
     ['Galaxy S10 Exynos (Mali-G76)', mob('Mali-G76', 8, 8), 'mid'],
     ['Galaxy A50 (Mali-G72)', mob('Mali-G72', 8, 4), 'very-low'],
     ['Budget Adreno 506', mob('Adreno (TM) 506', 8, 3), 'very-low'],
     ['2 GB phone', mob('Adreno (TM) 640', 8, 2), 'very-low'],
     ['No WebGL2', { renderer: '', webgl2: false, mobile: true, cores: 8, memGB: 4 }, 'very-low'],
+    // Older / entry discrete GPUs (2-4 GB) go mid, not high.
+    [
+        'GTX 1050 Ti laptop',
+        desk('ANGLE (NVIDIA, NVIDIA GeForce GTX 1050 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)', 8, 8),
+        'mid',
+    ],
+    ['GTX 970', desk('ANGLE (NVIDIA, NVIDIA GeForce GTX 970 Direct3D11 vs_5_0 ps_5_0, D3D11)', 8, 16), 'mid'],
+    ['MX450 laptop', desk('ANGLE (NVIDIA, NVIDIA GeForce MX450 Direct3D11 vs_5_0 ps_5_0, D3D11)', 8, 8), 'mid'],
+    ['RX 560', desk('ANGLE (AMD, Radeon RX 560 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', 8, 8), 'mid'],
+    [
+        'RTX 3060 stays high',
+        desk('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', 12, 16),
+        'high',
+    ],
+    [
+        'GTX 1070 stays high',
+        desk('ANGLE (NVIDIA, NVIDIA GeForce GTX 1070 Direct3D11 vs_5_0 ps_5_0, D3D11)', 8, 16),
+        'high',
+    ],
 ];
 
 for (const [name, probe, want] of cases) assert.equal(classifyGpu(probe), want, name);
