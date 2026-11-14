@@ -38,11 +38,12 @@ Architecture and all technical detail are in [DESIGN.md](DESIGN.md).
 
 | Keyboard & mouse | Touch | Action |
 | --- | --- | --- |
-| WASD · Mouse | Left thumb · Right drag | Move · Look |
+| WASD · Mouse | Left thumb · Right drag | Move · Look (in drone mode, look steers left/right and tilts the view up/down) |
 | Shift | ⚡ | Sprint |
 | Space · C | ↑ · ↓ | Jump / ascend · Descend |
 | F | 🚁 / ✈ / 🚶 | Cycle walk → drone → fly (icon shows the next mode) |
 | L | 🛬 | Land |
+| Q · E | ⟲ · ⟳ | Roll (drone / fly) |
 | M | 🗺️ | Map |
 | G | ☰ | Show / hide panels |
 | X | 🐕 | Dog sit / stand |
