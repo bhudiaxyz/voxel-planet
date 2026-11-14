@@ -587,9 +587,13 @@ async function start(): Promise<void> {
                 : controller.forwardInPlane(fpCam.camera.getWorldDirection(_mapFwd));
             sphereMap.update(mapDir, mapFwd, world.landmarks);
         }
+        if (drone.active || fly.active) fpCam.updateRoll(dt);
+        else fpCam.roll = 0;
         if (drone.active) {
             const droneInput = {
-                yaw: fpCam.drainDroneMX() * 0.0015,
+                yaw: fpCam.drainDroneMX(),
+                pitch: fpCam.pitch,
+                roll: fpCam.roll,
                 yawKey: (fpCam.isKeyDown('KeyD') ? 1 : 0) - (fpCam.isKeyDown('KeyA') ? 1 : 0) + fpCam._joyX,
                 forward: (fpCam.isKeyDown('KeyW') ? 1 : 0) - (fpCam.isKeyDown('KeyS') ? 1 : 0) + fpCam._joyY,
                 vertical: fpCam.drainDroneAltDelta(dt),

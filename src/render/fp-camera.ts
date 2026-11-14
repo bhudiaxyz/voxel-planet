@@ -29,6 +29,10 @@ export class FPCamera {
     camera: THREE.PerspectiveCamera;
     yaw: number;
     pitch: number;
+    /** Camera roll (radians) in drone/fly, from Q/E or touch ⟲⟳. Reset to 0 on foot. */
+    roll = 0;
+    /** Touch roll held state: -1 ⟲, +1 ⟳. */
+    touchRollAxis = 0;
     isLocked: boolean;
     droneActive: boolean;
     _keys: Set<string>;
@@ -42,6 +46,7 @@ export class FPCamera {
             this._keys.clear();
             this._prevSpace = false;
             this.touchAltAxis = 0;
+            this.touchRollAxis = 0;
         }
     }
     private _paused = false;
@@ -107,16 +112,8 @@ export class FPCamera {
 
         document.addEventListener('mousemove', (e: MouseEvent) => {
             if (!this.isLocked) return;
-            if (this.droneActive) {
-                this._droneMX += e.movementX;
-                // Mouse Y is intentionally NOT wired to altitude — any tiny upward
-                // mouse drift would cause continuous climb. Space/C/scroll handle it.
-                return;
-            }
-            // fly mode shares direct yaw/pitch update (falls through here intentionally)
-            this.yaw -= e.movementX * SENSITIVITY;
-            this.pitch -= e.movementY * SENSITIVITY;
-            this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch));
+            // Drone: X steers the heading, Y pitches the view only (altitude stays on Space/C/scroll).
+            this.applyLook(e.movementX * SENSITIVITY, e.movementY * SENSITIVITY);
         });
 
         document.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -184,7 +181,13 @@ export class FPCamera {
     /** Accumulate touch look delta (radians). */
     applyTouchLook(dyaw: number, dpitch: number): void {
         if (this.paused) return;
-        this.yaw -= dyaw;
+        this.applyLook(dyaw, dpitch);
+    }
+
+    /** Yaw/pitch look (radians). In drone mode yaw is drained by the drone as steering. */
+    private applyLook(dyaw: number, dpitch: number): void {
+        if (this.droneActive) this._droneMX += dyaw;
+        else this.yaw -= dyaw;
         this.pitch -= dpitch;
         this.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, this.pitch));
     }
@@ -204,7 +207,13 @@ export class FPCamera {
         return !this.paused && this._keys.has(code);
     }
 
-    /** Drain accumulated drone yaw input since last call. */
+    /** Q/E (+ touch ⟲⟳) roll for drone/fly; integrates `roll`, which the air-mode cameras apply. */
+    updateRoll(dt: number): void {
+        const axis = (this.isKeyDown('KeyE') ? 1 : 0) - (this.isKeyDown('KeyQ') ? 1 : 0) + this.touchRollAxis;
+        this.roll += axis * dt * 1.2;
+    }
+
+    /** Drain accumulated drone yaw input (radians) since last call. */
     drainDroneMX(): number {
         const v = this._droneMX;
         this._droneMX = 0;
@@ -251,6 +260,7 @@ export class FPCamera {
             .normalize()
             .add(this.camera.position);
         this.camera.lookAt(_look);
+        if (this.roll) this.camera.rotateZ(this.roll);
     }
 
     resize(aspect: number): void {

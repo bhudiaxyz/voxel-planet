@@ -39,7 +39,7 @@ const STYLE = `
 }
 #touch-btns button:active { background: rgba(192,88,40,0.30); }
 #btn-edges.active { border-color: rgba(192,88,40,1); background: rgba(192,88,40,0.25); }
-#btn-land { display: none; }
+#btn-land, #btn-roll-left, #btn-roll-right { display: none; }
 `;
 
 export interface TouchControls {
@@ -70,6 +70,7 @@ export interface TouchControls {
  *   Shift        → ⚡ button  (sprint)
  *   F            → ✈ button  (cycle walk → drone → fly, as in planet-explorer)
  *   L            → 🛬 button  (land — visible only while airborne)
+ *   Q / E        → ⟲ ⟳ buttons (roll — visible only while airborne)
  *   M            → 🗺️ button  (map)
  *   G            → ☰ button  (toggle panels)
  *   B            → ⬡ button  (block outlines)
@@ -113,6 +114,8 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
     <button id="btn-sprint"  aria-label="Sprint">⚡</button>
     <button id="btn-cycle"   aria-label="Cycle walk, drone, fly">🚁</button>
     <button id="btn-land"    aria-label="Land">🛬</button>
+    <button id="btn-roll-left"  aria-label="Roll left">⟲</button>
+    <button id="btn-roll-right" aria-label="Roll right">⟳</button>
     <button id="btn-panels"  aria-label="Toggle panels">☰</button>
     <button id="btn-edges"   aria-label="Toggle block outlines">⬡</button>
     <button id="btn-time-back"    aria-label="Step time back">◀</button>
@@ -241,6 +244,10 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
         },
     );
 
+    // ⟲ ⟳ roll (Q / E) — drone and fly
+    held('btn-roll-left', () => (fpCam.touchRollAxis = -1), () => (fpCam.touchRollAxis = 0));
+    held('btn-roll-right', () => (fpCam.touchRollAxis = 1), () => (fpCam.touchRollAxis = 0));
+
     // ---- tap-only buttons wired externally via returned setters -------------
     const tap = (id: string) => (fn: () => void) =>
         document.getElementById(id)!.addEventListener(
@@ -254,6 +261,8 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
     const edges = document.getElementById('btn-edges')!;
     const landBtn = document.getElementById('btn-land') as HTMLElement;
     const cycleBtn = document.getElementById('btn-cycle') as HTMLElement;
+    const rollL = document.getElementById('btn-roll-left') as HTMLElement;
+    const rollR = document.getElementById('btn-roll-right') as HTMLElement;
 
     const controls: TouchControls = {
         onCycle: tap('btn-cycle'),
@@ -272,6 +281,9 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
         update(droneActive: boolean, landing: boolean, flyActive: boolean) {
             // Land: shown while airborne in either mode, as in planet-explorer.
             landBtn.style.display = (droneActive && !landing) || flyActive ? 'block' : 'none';
+            const roll = droneActive || flyActive ? 'block' : 'none';
+            rollL.style.display = roll;
+            rollR.style.display = roll;
             // The cycle button shows the mode it switches TO next.
             const next = flyActive ? 'walk' : droneActive ? 'fly' : 'drone';
             cycleBtn.textContent = next === 'walk' ? '🚶' : next === 'fly' ? '✈' : '🚁';

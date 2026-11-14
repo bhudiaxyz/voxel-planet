@@ -12,7 +12,9 @@ const HOVER_HEIGHT = 14; // m above terrain when terrain-following
 const TERRAIN_FOLLOW_GAIN = 3; // P-gain: m/s correction per metre of error (capped at DRONE_VSPEED/2)
 
 export interface DroneInput {
-    yaw: number; // radians from mouse
+    yaw: number; // radians from mouse / touch look (steers heading)
+    pitch: number; // radians, view only — flight stays level
+    roll: number; // radians, view only (Q/E)
     yawKey: number; // -1..1 from A/D keys
     forward: number; // -1..1
     vertical: number; // -1..1
@@ -140,10 +142,15 @@ export function createSphereDroneMode(): SphereDroneMode {
                 altitude = Math.max(terrainAlt + MIN_CLEARANCE, Math.min(maxAlt - PLANET_RADIUS, altitude));
             }
 
-            // Camera: position radially, look forward along heading, up = dir
+            // Camera: position radially, look along heading tilted by pitch, up = dir, then roll
             camera.up.copy(dir);
             camera.position.copy(dir).multiplyScalar(PLANET_RADIUS + altitude);
-            camera.lookAt(camera.position.clone().add(heading));
+            _tmp.copy(heading)
+                .multiplyScalar(Math.cos(input.pitch))
+                .addScaledVector(dir, Math.sin(input.pitch))
+                .add(camera.position);
+            camera.lookAt(_tmp);
+            if (input.roll) camera.rotateZ(input.roll);
         },
     };
 }
