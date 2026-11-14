@@ -223,7 +223,7 @@ export class FPCamera {
     /**
      * Drain accumulated drone altitude delta since last call.
      * Returns a value in m/s so that the caller can do `hoverAltitude += result * dt`.
-     *   Keys / touch: ±12 m/s rate.
+     *   Keys / touch: ±13.2 m/s rate.
      *   Scroll wheel:  direct-delta converted to rate by dividing by dt,
      *                  so `rate * dt` restores the original per-tick offset.
      */
@@ -232,7 +232,7 @@ export class FPCamera {
         // Scroll gives a direct position delta; convert to rate so dt cancels cleanly.
         const scrollRate = dt > 0 ? this._droneAltDelta / dt : 0;
         this._droneAltDelta = 0;
-        return scrollRate + (keyAxis + this.touchAltAxis) * 12;
+        return scrollRate + (keyAxis + this.touchAltAxis) * 13.2;
     }
 
     /**

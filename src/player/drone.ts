@@ -17,7 +17,7 @@ export interface DroneInput {
     roll: number; // radians, view only (Q/E)
     yawKey: number; // -1..1 from A/D keys
     forward: number; // -1..1
-    vertical: number; // -1..1
+    vertical: number; // m/s hover-height change (drainDroneAltDelta)
     land: boolean;
     sprint: boolean;
 }
@@ -41,6 +41,7 @@ export function createSphereDroneMode(): SphereDroneMode {
     const _tmp = new THREE.Vector3();
 
     let altitude = ENTER_LIFT;
+    let hoverHeight = HOVER_HEIGHT;
     let active = false;
     let landing = false;
 
@@ -78,6 +79,7 @@ export function createSphereDroneMode(): SphereDroneMode {
         enter(playerDir: THREE.Vector3, groundRadius: number) {
             dir.copy(playerDir).normalize();
             altitude = groundRadius - PLANET_RADIUS + ENTER_LIFT;
+            hoverHeight = HOVER_HEIGHT;
             // Pick an initial heading perpendicular to dir
             _tmp.set(0, 1, 0);
             if (Math.abs(dir.dot(_tmp)) > 0.9) _tmp.set(1, 0, 0);
@@ -132,13 +134,15 @@ export function createSphereDroneMode(): SphereDroneMode {
                 // Manual vertical input adds on top. Result: smooth automatic height
                 // maintenance over hills/valleys, with manual override still available.
                 const terrainAlt = surfR - PLANET_RADIUS;
-                const altError = terrainAlt + HOVER_HEIGHT - altitude;
+                // Space/C/scroll raise/lower the hover target (input.vertical is m/s), as in planet-explorer.
+                hoverHeight = Math.max(MIN_CLEARANCE, hoverHeight + input.vertical * dt);
+                const altError = terrainAlt + hoverHeight - altitude;
                 const terrainVel = THREE.MathUtils.clamp(
                     altError * TERRAIN_FOLLOW_GAIN,
                     -DRONE_VSPEED * 0.5,
                     DRONE_VSPEED * 0.5,
                 );
-                altitude += (input.vertical * DRONE_VSPEED + terrainVel) * dt;
+                altitude += terrainVel * dt;
                 altitude = Math.max(terrainAlt + MIN_CLEARANCE, Math.min(maxAlt - PLANET_RADIUS, altitude));
             }
 

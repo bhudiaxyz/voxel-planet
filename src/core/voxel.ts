@@ -2371,6 +2371,12 @@ const FRAG_BODY = /* glsl */ `
       col = mix(col, uWaterInk, line * uWaterInkStrength);
     }
 
+    #ifdef FAR_FIELD
+      // The shell skips the detail/canopy shading that darkens near blocks, so its flat
+      // palette tops read pale grey under the haze. Pull value down (and keep chroma) to match.
+      // ponytail: fixed constant; make it a uniform if a theme/setting needs to tune it.
+      col *= 0.78;
+    #endif
     diffuseColor.rgb = col;
   }
 `;
