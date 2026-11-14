@@ -503,11 +503,14 @@ export function plantSphereBush(
                 nv = v + dv;
             if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1) continue;
             // only on flat ground (same surface layer ±1)
-            if (Math.abs(grid.columnTop(face, nu, nv) - surfaceLayer) > 1) continue;
+            const colTop = grid.columnTop(face, nu, nv);
+            if (Math.abs(colTop - surfaceLayer) > 1) continue;
             const e = Math.abs(du) + Math.abs(dv);
             if (e > w + (w >= 2 ? 1 : 0)) continue;
             const hh = Math.max(1, h - (e >= w ? 1 : 0));
-            for (let dy = 1; dy <= hh; dy++) {
+            // Start on this column's own ground: a column one lower used to get an
+            // air voxel under the bush (a floating clump with a gap beneath).
+            for (let dy = colTop - surfaceLayer + 1; dy <= hh; dy++) {
                 const nl = surfaceLayer + dy;
                 if (nl >= SHELL_DEPTH) break;
                 if (grid.get(face, nu, nv, nl) !== 0) continue;

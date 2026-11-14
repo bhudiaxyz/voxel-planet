@@ -934,7 +934,17 @@ export function meshSphereFaceRegion(
                     const nu = u + F.n[0],
                         nlayer = layer + F.n[1],
                         nv = v + F.n[2];
-                    if (grid.isSolidGlobal(face, nu, nv, nlayer)) continue;
+                    if (grid.isSolidGlobal(face, nu, nv, nlayer)) {
+                        // Ground beside/under a bush keeps its face: the bush's base sways, and a
+                        // culled face let the sky show through the gap it opens.
+                        if ((block as any).sway) continue;
+                        const nb = BLOCK_BY_ID[
+                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
+                                ? grid.get(face, nu, nv, nlayer)
+                                : grid.get(...crossFaceUV(face, nu, nv), nlayer)
+                        ] as any;
+                        if (!(nb?.sway && nb.solid)) continue;
+                    }
                     // Water draws every face that meets AIR — the surface, and the side
                     // faces where a river steps down a layer or ends — so it never reads
                     // as a floating sheet. Faces against other water (internal) and
