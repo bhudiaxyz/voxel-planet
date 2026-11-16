@@ -227,6 +227,10 @@ export const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; 
     },
 };
 
+/** Species that want their feet wet / that want it dry (see the wet map). */
+const WETLAND = new Set<Species>(['willow', 'mangrove', 'cypress']);
+const DRYLAND = new Set<Species>(['acacia', 'baobab']);
+
 export function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
     let total = 0;
     for (const [, w] of mix) total += w;
@@ -251,15 +255,32 @@ export function plantZoneTree(
     rng: ReturnType<typeof makeRng>,
     zone: Zone,
     roles: Record<'broad' | 'flowering' | 'conifer' | 'birch', any[]>,
+    /** -1..1 stand field: which species dominates this part of the forest. */
+    stand = 0,
+    /** Columns to the nearest water (0..WET_MAX). */
+    wetD = 4,
+    /** Forces a size (saplings); otherwise drawn from the zone range and age mix. */
+    sizeIn?: number,
 ) {
     const z = ZONE[zone];
-    const species = weightedPick(z.mix, rng);
+    // Stands: the stand field picks one species of the zone mix to dominate here
+    // (x4 weight), so forests come as birch groves and pine stands, not confetti.
+    // Water: wetland species near banks, savanna species far from them.
+    const lead = z.mix[Math.min(z.mix.length - 1, Math.floor(((stand + 1) / 2) * z.mix.length))]?.[0];
+    const mix = z.mix.map(([s, w]): [Species, number] => [
+        s,
+        w *
+            (s === lead ? 4 : 1) *
+            (WETLAND.has(s) ? (wetD <= 2 ? 3 : 0.15) : 1) *
+            (DRYLAND.has(s) ? (wetD <= 2 ? 0.1 : 1.5) : 1),
+    ]);
+    const species = weightedPick(mix, rng);
     // Size variety: the zone range, a ±25% per-tree jitter, and a real age mix —
     // ~10% young saplings (0.4-0.6x) and ~7% old giants (1.4-1.7x). A forest used to
     // sit mostly in a 5-14 layer band, so stands read as uniform.
     const age = rng();
     const ageK = age < 0.1 ? rng.range(0.4, 0.6) : age > 0.93 ? rng.range(1.4, 1.7) : rng.range(0.75, 1.25);
-    const size = Math.min(1.7, rng.range(z.size[0], z.size[1]) * ageK);
+    const size = sizeIn ?? Math.min(1.7, rng.range(z.size[0], z.size[1]) * ageK);
     if (species === 'broadleaf') {
         // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
         const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;

@@ -265,6 +265,7 @@ function box(
  * from its block's own colours so the palette stays authored in one place.
  * Bottom colour = block.side (shaded base), tip = block.topTint ?? block.top.
  */
+const YUCCA_BLOOM = new THREE.Color(0xf2ecd0);
 const _pDark = new THREE.Color();
 const _pLight = new THREE.Color();
 function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number) {
@@ -328,6 +329,39 @@ function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number)
         case PLANT.GRASS_TALL.id:
             blades(rng.int(4, 6), 0.3, 0.12, 0.2, 0.7, 1.15, 0.2, 1.1);
             break;
+        case PLANT.SCRUB_DRY.id:
+            // Low, splayed, wiry desert scrub that barely moves in the wind.
+            blades(rng.int(5, 8), 0.4, 0.06, 0.1, 0.3, 0.6, 0.35, 0.3);
+            break;
+        case PLANT.YUCCA.id: {
+            // Rosette of long stiff blades fanning up and out from one root,
+            // sometimes with a tall pale flower spike in the middle.
+            const n = rng.int(9, 14);
+            const rot0 = rng() * 6.28;
+            for (let k = 0; k < n; k++) {
+                const a = rot0 + (k / n) * 6.28 + rng.range(-0.2, 0.2);
+                const lean = rng.range(0.25, 0.55);
+                tuft(
+                    buf,
+                    root(centre, 0, 0),
+                    _up,
+                    rng.range(0.07, 0.11),
+                    rng.range(0.7, 1.1),
+                    _pDark,
+                    _pLight,
+                    a,
+                    Math.cos(a) * lean,
+                    Math.sin(a) * lean,
+                    0.12,
+                );
+            }
+            if (rng() < 0.4) {
+                const h = rng.range(1.6, 2.4);
+                tuft(buf, root(centre, 0, 0), _up, 0.05, h, _pDark, _pDark, 0, 0, 0, 0.2);
+                box(buf, _base2.copy(centre).addScaledVector(_up, h - 0.5), _up, 0.16, 0.55, YUCCA_BLOOM, 0.2, 0);
+            }
+            break;
+        }
         case PLANT.REED.id:
             // Reeds stand tall and nearly straight, with a darker seed head.
             blades(rng.int(3, 5), 0.25, 0.06, 0.1, 1.1, 1.7, 0.08, 0.7);
@@ -674,13 +708,15 @@ function scatterColumn(
     // small coloured head that nods with the wind.
     if (bloom > FLOWER_EDGE && rng() < (bloom - FLOWER_EDGE) * FLOWER_P * density) {
         const col = cols.flowers[(rng() * cols.flowers.length) | 0];
+        const alt = cols.flowers[(rng() * cols.flowers.length) | 0];
         const n = rng.int(1, 3);
         for (let k = 0; k < n; k++) {
             const r = root(centre, rng.range(-0.3, 0.3), rng.range(-0.3, 0.3));
             const h = rng.range(0.24, 0.42);
             const head = _base2.copy(r).addScaledVector(_up, h - 0.04);
             tuft(buf, r, _up, 0.07, h, _dark, _dark, 0, 0, 0, 0.6);
-            box(buf, head, _up, 0.2, 0.16, col, 0.9, rng() * 6.28);
+            // One head in five takes a second colour, so a drift isn't a single swatch.
+            box(buf, head, _up, 0.2, 0.16, rng() < 0.2 ? alt : col, 0.9, rng() * 6.28);
         }
     }
 
@@ -847,6 +883,8 @@ export function createSphereVegetation(
                         const gb = BLOCK_BY_ID[grid.get(face, u, v, g)] as any;
                         if (gb?.grassCap || gb?.id === BLOCKS.SOIL.id || gb?.id === BLOCKS.SAND.id) {
                             const ground = _centre.copy(_up).multiplyScalar(PLANET_RADIUS + g + 1);
+                            // Understorey ferns/moss (terrain.ts) on the shaded floor.
+                            if (plant) drawPlant(buf, ground, rng, plant);
                             drawLeafLitter(buf, ground, drng, block.top, drng.int(2, 5));
                         }
                         // Lowest leaf block over open air (the canopy's underside).

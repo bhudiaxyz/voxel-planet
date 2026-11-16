@@ -179,6 +179,17 @@ export const SCRUB_DRY = registerBlock('SCRUB_DRY', {
     rough: 0.6,
 });
 
+/** Desert yucca / agave rosette: stiff blue-green blades, drawn by the vegetation layer. */
+export const YUCCA = registerBlock('YUCCA', {
+    top: c(0x8aa878),
+    side: c(0x5e7a58),
+    bottom: c(0x48603f),
+    tint: c(0x9cb88a),
+    topTint: c(0xa4bc8c),
+    pattern: PATTERN.GRASS,
+    rough: 0.5,
+});
+
 /*
  * Foliage bushes. The old bushes were dusty rose/mauve/cream (blossom palette)
  * with the grass pattern, so they read as pink lumps, not shrubs. These are real
@@ -210,7 +221,17 @@ for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK])
 const BUSH_PALETTE = [SHRUB_FOREST, SHRUB_SAGE, SHRUB_DEEP, SHRUB_LIME, SHRUB_FOREST, BUSH_ROSE];
 
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
-export const PLANT = { FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL, GRASS_TALL, REED: REED_BLOCK, SCRUB_DRY };
+export const PLANT = {
+    FERN,
+    FERN_RED,
+    MOSS_THICK,
+    LICHEN_PALE,
+    SHRUB_TALL,
+    GRASS_TALL,
+    REED: REED_BLOCK,
+    SCRUB_DRY,
+    YUCCA,
+};
 
 /**
  * Ground cover per zone (chance per grass column, after trees and dead trunks).
@@ -497,17 +518,33 @@ export function plantSphereBush(
 ) {
     const w = rng.chance(0.3) ? 2 : rng.chance(0.7) ? 1 : 0;
     const h = w >= 2 ? rng.int(2, 3) : w === 1 ? rng.int(1, 2) : 1;
-    for (let dv = -w; dv <= w; dv++) {
-        for (let du = -w; du <= w; du++) {
+    // Shape variety: half the bushes with some width are lopsided (the mound
+    // stretches one column toward a side), and some of those grow a second lobe.
+    const [su, sv] =
+        w > 0 && rng.chance(0.5)
+            ? rng.pick([
+                  [1, 0],
+                  [-1, 0],
+                  [0, 1],
+                  [0, -1],
+              ] as Array<[number, number]>)
+            : [0, 0];
+    const lobe = (su || sv) && rng.chance(0.4);
+    const reach = w + (su || sv ? 1 : 0);
+    for (let dv = -reach; dv <= reach; dv++) {
+        for (let du = -reach; du <= reach; du++) {
             const nu = u + du,
                 nv = v + dv;
             if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1) continue;
             // only on flat ground (same surface layer ±1)
             const colTop = grid.columnTop(face, nu, nv);
             if (Math.abs(colTop - surfaceLayer) > 1) continue;
-            const e = Math.abs(du) + Math.abs(dv);
+            // Distance to the nearer of the main mound and the shifted lobe.
+            const e0 = Math.abs(du) + Math.abs(dv);
+            const e1 = Math.abs(du - su) + Math.abs(dv - sv) + (lobe ? 0 : 1);
+            const e = Math.min(e0, e1);
             if (e > w + (w >= 2 ? 1 : 0)) continue;
-            const hh = Math.max(1, h - (e >= w ? 1 : 0));
+            const hh = Math.max(1, h - (e >= w ? 1 : 0) - (e1 < e0 && !lobe ? 1 : 0));
             // Start on this column's own ground: a column one lower used to get an
             // air voxel under the bush (a floating clump with a gap beneath).
             for (let dy = colTop - surfaceLayer + 1; dy <= hh; dy++) {

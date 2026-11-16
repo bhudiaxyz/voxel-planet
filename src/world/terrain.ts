@@ -1,7 +1,8 @@
 // src/world/terrain.ts
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH } from '../core/voxel';
-import { basisFromCode } from '../core/geoutil';
+import { basisFromCode, columnDir } from '../core/geoutil';
+import { bakeWetMap, wetIdx, WET_MAX } from './wet-map';
 import { Noise3 } from '../core/noise3';
 import { makeRng } from '../core/rng';
 import { BLOCKS, BLOCK_BY_ID } from '../core/palette';
@@ -18,6 +19,7 @@ import {
     SHRUB_BLUEGREEN,
     SHRUB_OLIVE,
     SHRUB_RUSSET,
+    YUCCA,
     plantCactus,
     plantDeadTrunk,
     plantSingle,
@@ -113,6 +115,17 @@ export async function generateSphereTerrain(
 
     // Scatter voxel trees and bushes on land columns
     const treeRng = makeRng(seed ^ 0x7ace31);
+    /*
+     * Fields that shape the forest at landscape scale:
+     *   grove — tree density x0..2.5: dense woods, open clearings, soft edges
+     *   stand — which species a stand is dominated by (birch grove, pine stand…)
+     *   zone  — ±2 layers of jitter on altitude so zone edges don't follow contours
+     * wet — distance to water, so willows and mangroves keep to the banks.
+     */
+    const groveNoise = new Noise3(seed + 202),
+        standNoise = new Noise3(seed + 303),
+        zoneNoise = new Noise3(seed + 404);
+    const wet = bakeWetMap(grid, SEA_LAYER);
     const LEAVES = [
         BLOCKS.LEAF_PINK,
         BLOCKS.LEAF_BLUSH,
@@ -151,10 +164,19 @@ export async function generateSphereTerrain(
                 if (uu >= 0 && vv >= 0 && uu < FACE_RES && vv < FACE_RES) claim[vv * FACE_RES + uu] = 1;
             }
     };
+    let stand = 0,
+        wetD = WET_MAX;
     const tree = (face: number, u: number, v: number, sl: number, zone: Zone) => {
         if (!free(u, v)) return;
-        plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE);
+        plantZoneTree(grid, face, u, v, sl, treeRng, zone, LEAF_ROLE, stand, wetD);
         stake(u, v, TREE_GAP);
+        // A sapling now and then at the edge of the parent's spacing ring.
+        if (treeRng.chance(0.25)) {
+            const su = u + treeRng.pick([-3, 3]),
+                sv = v + treeRng.int(-3, 3);
+            if (grid.columnTop(face, su, sv) === sl && GRASS_IDS.has(grid.get(face, su, sv, sl)))
+                plantZoneTree(grid, face, su, sv, sl, treeRng, zone, LEAF_ROLE, stand, wetD, 0.12);
+        }
     };
     const bush = (face: number, u: number, v: number, sl: number, block: { id: number }) => {
         if (!free(u, v)) return;
@@ -170,11 +192,19 @@ export async function generateSphereTerrain(
                 const topId = grid.get(face, u, v, sl);
 
                 const roll = treeRng();
+                columnDir(face, u, v, FACE_RES, _dir);
+                const rise = sl - SEA_LAYER + Math.round(zoneNoise.get(_dir.x * 9, _dir.y * 9, _dir.z * 9) * 4);
+                stand = standNoise.get(_dir.x * 7, _dir.y * 7, _dir.z * 7);
+                wetD = wet[wetIdx(face, u, v)];
                 if (sl > SEA_LAYER + 1 && GRASS_IDS.has(topId)) {
                     // Altitude zone picks trees AND ground cover: cumulative shares per column.
-                    const zone = zoneOf(sl - SEA_LAYER);
+                    const zone = zoneOf(rise);
                     const g = GROUND[zone];
-                    let t = ZONE[zone].treeP;
+                    const grove = Math.min(
+                        2.5,
+                        Math.max(0, 1 + groveNoise.get(_dir.x * 6, _dir.y * 6, _dir.z * 6) * 3),
+                    );
+                    let t = ZONE[zone].treeP * grove;
                     if (roll < t) tree(face, u, v, sl, zone);
                     else if (roll < (t += DEAD_TRUNK_P) && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
                         plantDeadTrunk(grid, face, u, v, sl, treeRng);
@@ -185,7 +215,7 @@ export async function generateSphereTerrain(
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
                     // Cold rock: conifers where the highland is, a thin cover lower down,
                     // and wind-killed snags standing alone on the slopes.
-                    const zone = zoneOf(sl - SEA_LAYER);
+                    const zone = zoneOf(rise);
                     const onRockP = zone === 'highland' ? 0.01 : zone === 'treeline' ? 0.005 : 0.0025;
                     if (roll < onRockP) tree(face, u, v, sl, zone === 'treeline' ? 'treeline' : 'highland');
                     else if (roll < onRockP + DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
@@ -207,6 +237,7 @@ export async function generateSphereTerrain(
                     // Desert dunes: sparse cacti, each one its own height and shape.
                     if (roll < CACTUS_P) plantCactus(grid, face, u, v, sl, treeRng);
                     else if (roll < CACTUS_P + 0.012) plantSingle(grid, face, u, v, sl, SCRUB_DRY);
+                    else if (roll < CACTUS_P + 0.016) plantSingle(grid, face, u, v, sl, YUCCA);
                 } else if (sl >= SEA_LAYER - 1 && sl <= SEA_LAYER + 2 && !(BLOCK_BY_ID[topId] as any)?.isWater) {
                     // Waterline: reeds and waterside ferns
                     if (roll < 0.08) plantSingle(grid, face, u, v, sl, REED_BLOCK);
@@ -215,6 +246,19 @@ export async function generateSphereTerrain(
             }
         }
     }
+
+    // Understorey: the main pass only sees a column's top, so ground under a
+    // canopy grew nothing. Ferns and moss on the shaded grass beneath crowns.
+    for (let face = 0; face < 6; face++)
+        for (let v = 1; v < FACE_RES - 1; v++)
+            for (let u = 1; u < FACE_RES - 1; u++) {
+                if (!(BLOCK_BY_ID[grid.get(face, u, v, grid.columnTop(face, u, v))] as any)?.sway) continue;
+                const g = grid.groundColumnTop(face, u, v);
+                if (g <= SEA_LAYER + 1 || !GRASS_IDS.has(grid.get(face, u, v, g))) continue;
+                const r = treeRng();
+                if (r < 0.14) plantSingle(grid, face, u, v, g, treeRng.chance(0.75) ? FERN : FERN_RED);
+                else if (r < 0.2) plantSingle(grid, face, u, v, g, MOSS_THICK);
+            }
 
     return { grid, spawn };
 }
