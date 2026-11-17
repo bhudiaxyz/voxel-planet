@@ -14,7 +14,7 @@ import { BLOCK_BY_ID, BLOCKS, PATTERN, PETAL_COLORS } from '../core/palette';
 import { makeRng, makeNoise3D } from '../core/rng';
 import { PLANT } from './terrain';
 import { QuadBuffer, _up, _ta, _tb, _base, _base2, box, boxYawed, root } from './veg-geom';
-import { STONE_IDS, rockAt, scatterBoulder, scatterPebble } from './rocks';
+import { STONE_IDS, scatterBoulder, scatterPebble } from './rocks';
 
 const SEA_LAYER = 11;
 const TREE_P = 0.04;
@@ -356,10 +356,11 @@ function scatterGroundDetail(
     nearTrunk: boolean,
     lush: number,
     cols: DetailColours,
-    rockK: number,
+    /** Layers above sea. */
+    rise: number,
 ) {
     if (detail <= 0) return;
-    scatterBoulder(buf, centre, rng, detail, onStone, rockK, cols.pebbles, cols.moss);
+    scatterBoulder(buf, centre, rng, detail, onStone, rise, cols.pebbles, cols.moss);
     if (nearTrunk) {
         // Fallen log: a long bark box with a moss strip along its top.
         if (rng() < LOG_P * detail) {
@@ -556,7 +557,8 @@ function scatterColumn(
     lush: number,
     bloom: number,
     cols: DetailColours,
-    rockK: number,
+    /** Layers above sea. */
+    rise: number,
 ) {
     const roll = rng();
     // Colours mirror the flat-world grass tufts: dark = topTint × 0.86, light = top × 1.08.
@@ -597,7 +599,7 @@ function scatterColumn(
         );
     }
 
-    scatterPebble(buf, centre, rng, rockK, cols.pebbles);
+    scatterPebble(buf, centre, rng, rise, cols.pebbles, cols.moss);
 
     if (roll < TREE_P) {
         // Small foliage clump: a stump tuft plus a wider cross ~1 unit up.
@@ -737,7 +739,7 @@ export function createSphereVegetation(
                         let low = g + 1;
                         while (low < layer && !(BLOCK_BY_ID[grid.get(face, u, v, low)] as any)?.sway) low++;
                         const rise = g - SEA_LAYER;
-                        const hangP = HANG_P * groundDetail * (rise <= 7 ? 1 : rise <= 11 ? 0.35 : 0);
+                        const hangP = HANG_P * groundDetail * (rise <= 7 ? 1 : rise <= 14 ? 0.35 : 0);
                         if (low - g >= 3 && drng() < hangP)
                             drawHanging(
                                 buf,
@@ -771,7 +773,7 @@ export function createSphereVegetation(
                     drawReedClump(buf, centre, rng, cols);
                     continue;
                 }
-                const rockK = rockAt(layer - SEA_LAYER);
+                const rise = layer - SEA_LAYER;
                 if (groundDetail > 0)
                     scatterGroundDetail(
                         buf,
@@ -782,11 +784,11 @@ export function createSphereVegetation(
                         nearTrunk(u, v, layer),
                         lush,
                         cols,
-                        rockK,
+                        rise,
                     );
                 if (onStone) continue; // bare rock: boulders only, no grass
                 const bloom = field(flowerNoise, centre, FLOWER_FREQ);
-                scatterColumn(buf, centre, rng, block, density, lush, bloom, cols, rockK);
+                scatterColumn(buf, centre, rng, block, density, lush, bloom, cols, rise);
             }
         }
         if (buf.n === 0) return null;

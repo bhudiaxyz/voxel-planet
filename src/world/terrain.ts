@@ -32,7 +32,15 @@ export { PLANT } from './plants';
 // Sea level is layer 9; terrace step is 2 (same aesthetic as flat terrain)
 const SEA_LAYER = 11;
 const TERRACE_STEP = 2;
-const AMPLITUDE = 24; // max layers above/below sea level
+const AMPLITUDE = 24; // layers per unit of elevation
+/**
+ * Relief: land above RELIEF_KNEE (~5 layers up) climbs RELIEF_GAIN× faster, so
+ * hills and mountains stand tall while coasts and lowlands — where the zones,
+ * deserts and rivers are tuned — stay where they were. Sea floor unchanged.
+ */
+const RELIEF_KNEE = 0.2;
+const RELIEF_GAIN = 1.8;
+const relief = (e: number) => (e > RELIEF_KNEE ? RELIEF_KNEE + (e - RELIEF_KNEE) * RELIEF_GAIN : e);
 
 /** Minimum clear radius (columns) around a tree / a bush (see the spacing claim grid). */
 const TREE_GAP = 4;
@@ -81,7 +89,7 @@ export async function generateSphereTerrain(
                     .normalize();
 
                 const e = elevationAt(noise, noise2, _dir.x, _dir.y, _dir.z);
-                const terraced = TERRACE_STEP * Math.round((e * AMPLITUDE) / TERRACE_STEP);
+                const terraced = TERRACE_STEP * Math.round((relief(e) * AMPLITUDE) / TERRACE_STEP);
                 const surfaceLayer = Math.max(1, Math.min(SHELL_DEPTH - 10, SEA_LAYER + terraced));
                 const isLand = surfaceLayer > SEA_LAYER;
                 const desert = isLand && isDesert(noise, _dir, e, surfaceLayer);

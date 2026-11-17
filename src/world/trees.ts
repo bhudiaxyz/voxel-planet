@@ -159,7 +159,8 @@ const FORM_SPECIES: Partial<Record<Species, 'broad' | 'conifer'>> = {
 };
 
 export const zoneOf = (rise: number): Zone =>
-    rise <= 3 ? 'coast' : rise <= 7 ? 'lowland' : rise <= 11 ? 'midland' : rise <= 15 ? 'highland' : 'treeline';
+    // Bands above lowland stretched with the terrain's relief (terrain.ts RELIEF_GAIN).
+    rise <= 3 ? 'coast' : rise <= 7 ? 'lowland' : rise <= 14 ? 'midland' : rise <= 21 ? 'highland' : 'treeline';
 
 /** Per zone: tree chance per grass column, species weights, size range (0..1). */
 export const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; size: [number, number] }> = {
