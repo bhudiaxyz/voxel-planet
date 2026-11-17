@@ -91,10 +91,18 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
     ];
     const lakeSeeds: number[] = [];
     for (let r = 0, tries = 0; r < RIVERS && tries < RIVERS * 40; tries++) {
-        const f = rng.int(0, 5),
-            u = rng.int(4, N - 5),
-            v = rng.int(4, N - 5);
-        const h0 = grid.columnTop(f, u, v);
+        // Highest of a few random spots on one face: sources sit nearer the
+        // ridges, so rivers run further before they reach the sea.
+        const f = rng.int(0, 5);
+        let u = 0,
+            v = 0,
+            h0 = -1;
+        for (let s = 0; s < 4; s++) {
+            const su = rng.int(4, N - 5),
+                sv = rng.int(4, N - 5),
+                sh = grid.columnTop(f, su, sv);
+            if (sh > h0) [u, v, h0] = [su, sv, sh];
+        }
         // Sources in the uplands, on grass (springs, snowmelt below the bare rock).
         // Sources from 5 layers up (was 6), so lower hills get their own streams too.
         if (h0 < seaLayer + 5 || !grassIds.has(grid.get(f, u, v, h0))) continue;
@@ -105,10 +113,28 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
         const seen = new Set<number>();
         let len = 0,
             flat = 0;
-        for (; len < 900; len++) {
+        // Per-river character, so no two rivers look alike: a few stay thin
+        // streams, most widen into rivers; each snakes at its own amplitude and
+        // wavelength, and its width swells and narrows along its length.
+        const maxW = rng.chance(0.25) ? rng.range(1.2, 2) : rng.range(2.4, 4.6);
+        const grow = rng.range(0.015, 0.035);
+        const swing = rng.range(0.7, 1.5); // radians of heading swing at the bend apex
+        const bendF = 1 / rng.range(10, 26); // bends per column (wavelength 2π/f)
+        const inertia = rng.range(0.45, 0.8);
+        const ph = rng() * 6.28,
+            wph = rng() * 6.28;
+        const flatMax = rng.int(8, 16);
+        for (; len < 1600; len++) {
             seen.add(k);
-            // Width grows downstream: 1-block stream at the source → ~3-block river.
-            stamp(k, Math.min(0.6 + len * 0.012, 2.6));
+            // Width grows downstream from a 1-block spring, wobbling ±20%.
+            const wob = 1 + 0.2 * Math.sin(len * 0.045 + wph);
+            stamp(k, Math.min(0.6 + len * grow, maxW) * wob);
+            // Preferred heading swings side to side: the river meanders.
+            const a = swing * Math.sin(len * bendF + ph),
+                ca = Math.cos(a),
+                sa = Math.sin(a);
+            const pu = hu * ca - hv * sa,
+                pv = hu * sa + hv * ca;
             const [cf, cu, cv] = unkey(k);
             const h = grid.columnTop(cf, cu, cv);
             if (h <= seaLayer) break; // reached the sea
@@ -122,7 +148,7 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
                 const hj = top(j);
                 // Lower is better; inertia favours the current heading so it meanders
                 // instead of zig-zagging; jitter breaks ties on flat terraces.
-                const score = hj - (du * hu + dv * hv) * 0.35 + rng() * 0.3;
+                const score = hj - (du * pu + dv * pv) * inertia + rng() * 0.3;
                 if (score < bestScore) {
                     bestScore = score;
                     best = j;
@@ -130,11 +156,15 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
                     bv = dv;
                 }
             }
-            if (best < 0) break;
+            if (best < 0) {
+                // Boxed in by its own loops: pool into a lake rather than a dry tip.
+                lakeSeeds.push(k);
+                break;
+            }
             const hb = top(best);
             if (hb > h) {
                 // Uphill everywhere: a pit. Long flats end in a lake instead of a dry tip.
-                if (++flat > 6) {
+                if (++flat > flatMax) {
                     lakeSeeds.push(k);
                     break;
                 }

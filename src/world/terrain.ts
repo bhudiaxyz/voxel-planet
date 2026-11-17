@@ -37,6 +37,11 @@ const AMPLITUDE = 24; // max layers above/below sea level
 /** Minimum clear radius (columns) around a tree / a bush (see the spacing claim grid). */
 const TREE_GAP = 4;
 const BUSH_GAP = 2;
+/** Forest-edge thicket: grove value where it peaks, half-width, and bush / tall-shrub boost there. */
+const EDGE_PEAK = 0.7;
+const EDGE_WIDTH = 0.6;
+const EDGE_BUSH = 4;
+const EDGE_TALL = 2;
 
 /** Per grass/stone column above the lowlands: a dead trunk, rarer than living trees. */
 const DEAD_TRUNK_P = 0.0012;
@@ -204,14 +209,19 @@ export async function generateSphereTerrain(
                         2.5,
                         Math.max(0, 1 + groveNoise.get(_dir.x * 6, _dir.y * 6, _dir.z * 6) * 3),
                     );
+                    // Forest margin: grove ~0.1..1.3 (peak 0.7) is the thinning band
+                    // between woods and clearing — a thicket of bushes and tall shrubs.
+                    const edge = Math.max(0, 1 - Math.abs(grove - EDGE_PEAK) / EDGE_WIDTH);
                     let t = ZONE[zone].treeP * grove;
                     if (roll < t) tree(face, u, v, sl, zone);
                     else if (roll < (t += DEAD_TRUNK_P) && sl >= SEA_LAYER + DEAD_TRUNK_MIN_RISE)
                         plantDeadTrunk(grid, face, u, v, sl, treeRng);
-                    else if (roll < (t += g.bush)) bush(face, u, v, sl, treeRng.pick(g.bushes));
+                    else if (roll < (t += g.bush * (1 + EDGE_BUSH * edge)))
+                        bush(face, u, v, sl, treeRng.pick(g.bushes));
                     else if (roll < (t += g.fern))
                         plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
-                    else if (roll < (t += g.tall)) plantSingle(grid, face, u, v, sl, treeRng.pick(g.talls));
+                    else if (roll < (t += g.tall * (1 + EDGE_TALL * edge)))
+                        plantSingle(grid, face, u, v, sl, treeRng.pick(g.talls));
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
                     // Cold rock: conifers where the highland is, a thin cover lower down,
                     // and wind-killed snags standing alone on the slopes.
