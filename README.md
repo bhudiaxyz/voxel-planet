@@ -7,12 +7,14 @@ Inspired by **Verdant** [https://github.com/xikhar/verdant] and **Petalfell** [h
 ## Highlights
 
 - **A real round world** — terraced continents, beaches and highlands, generated from a seed. Share a planet with `?seed=word`.
-- **Rivers, streams, lakes and ponds** — water traced downhill from the hills and carved into the land, never standing above its banks, with lily pads, reed beds and fireflies at dusk.
-- **Living landscapes by altitude** — palms, mangroves and willows on the coast; oaks, acacias, baobabs and rainforest giants in the lowlands; birch, cypress and pine in the midlands; firs and spruces in the highlands; juniper and wind-bent pines at the treeline. Ground cover changes with height too.
+- **Rivers, streams, lakes and ponds** — winding rivers of every width, traced downhill from the hills and carved into the land, never standing above its banks, with lily pads, reed beds and fireflies at dusk.
+- **Living landscapes by altitude** — palms, mangroves and willows on the coast; dense woods of oaks, cherries and rainforest giants in the lowlands; mixed birch, maple, oak and fir forest in the midlands; firs, spruces and redwoods in the highlands; juniper and wind-bent pines at the treeline. Forests grow in groves and stands with open clearings, and their edges thicken into bushes and shrubs. Ground cover changes with height too.
+- **Real mountains** — lowlands stay gentle while hills and ranges climb steeply to tall peaks.
+- **Rocks by altitude** — sea-worn cobbles on the coast, mossy boulders in the lowlands, then tors, scree fields, big boulders, frost-split shards and standing stones higher up, with pebbles of every shape and size.
 - **Deserts** — dune bands near the equator with saguaros, barrel cacti, prickly pears and organ pipes; dead snags on higher ground.
 - **Varied trees** — five kinds of bark (furrowed oak, papery birch, scaly pine, ringed palm, smooth willow), leaf litter underfoot and vines hanging from tropical canopies.
 - **Soft, textured voxels** — gently lumpy turf, sand and stone with layered cliff faces, kept soft rather than noisy.
-- **Meadows full of detail** — grass, flowers, ferns, reeds, mushrooms, boulders and fallen logs, all swaying in the wind.
+- **Meadows full of detail** — grass, flowers, ferns, reeds, mushrooms and fallen logs, all swaying in the wind.
 - **Life in the air** — flocks of birds, soft billowy voxel clouds that cast shadows on land and water, butterflies over the flower drifts by day and fireflies at night.
 - **Water that reads as water** — clear sandy shallows deepening to ocean blue, with caustics and a foam line along the coast.
 - **Long views** — a wide detailed terrain radius with a low-detail shell beyond it, so distant land stays visible instead of disappearing into mist.

@@ -6,6 +6,30 @@ Voxel Planet is a first-person explorer on a procedurally generated spherical vo
 
 All paths below are relative to `src/` unless noted. Palette colours are stored in Three's linear working space; hex inputs are sRGB and converted by `THREE.Color`. User-facing controls are listed in [README.md](README.md).
 
+## Contents
+
+- [Architecture at a glance](#architecture-at-a-glance)
+- [Running](#running)
+- [1. Source layout](#1-source-layout)
+- [2. Sphere grid (core/voxel.ts, core/geoutil.ts)](#2-sphere-grid-corevoxelts-coregeoutilts)
+- [3. World assembly (world/world.ts)](#3-world-assembly-worldworldts)
+- [4. Terrain generation (world/terrain.ts, world/trees.ts, world/plants.ts)](#4-terrain-generation-worldterraints-worldtreests-worldplantsts)
+  - [4a. Fresh water (world/rivers.ts)](#4a-fresh-water-worldriversts)
+- [5. Chunk streaming and meshing (core/voxel.ts)](#5-chunk-streaming-and-meshing-corevoxelts)
+- [6. Voxel material shader (core/voxel.ts)](#6-voxel-material-shader-corevoxelts)
+- [7. Vegetation (world/vegetation.ts)](#7-vegetation-worldvegetationts)
+- [8. Water (world/water.ts, world/shore-map.ts)](#8-water-worldwaterts-worldshore-mapts)
+- [9. Sky and lighting](#9-sky-and-lighting)
+- [10. Post-processing (render/postfx.ts)](#10-post-processing-renderpostfxts)
+- [11. Palette system (core/palette.ts)](#11-palette-system-corepalettets)
+- [12. GPU tiering (render/gpu-tier.ts)](#12-gpu-tiering-rendergpu-tierts)
+- [13. FX (fx/)](#13-fx-fx)
+- [14. Player](#14-player)
+- [15. Dog (player/path.ts, player/dog.ts)](#15-dog-playerpathts-playerdogts)
+- [16. Controls, UI and map](#16-controls-ui-and-map)
+- [17. Checks and tooling](#17-checks-and-tooling)
+- [18. Debug hooks and known gaps](#18-debug-hooks-and-known-gaps)
+
 ### Architecture at a glance
 
 ```
@@ -74,7 +98,9 @@ src/
     plants.ts                 Ground-cover/shrub/cactus blocks, GROUND table, bushes, cacti, dead trunks, PLANT
     rivers.ts                 Fresh water: rivers, streams, lakes, ponds carved into the land (RIVER_WATER)
     wet-map.ts                Distance-to-water per column (critters, waterside plants)
-    vegetation.ts             Lazy per-patch grass/flowers/plants/ground detail meshes
+    vegetation.ts             Lazy per-patch grass/flowers/plants/logs/mushrooms meshes
+    rocks.ts                  Boulders, scree, slabs, tors, standing stones, pebbles by altitude zone
+    veg-geom.ts               Shared detail-mesh primitives: QuadBuffer, tangent frame, box/boxYawed/root
     water.ts                  Sea sphere shader
     shore-map.ts              Distance-to-land atlas bake + SHORE_GLSL
     landmarks.ts              Eleven landmark kinds, sky islands, names, site picker
@@ -191,11 +217,12 @@ Seed handling (`main.ts`): `?seed=<word>` overrides the default `currentSeedWord
 ### Terracing
 
 ```
-terraced = TERRACE_STEP * round(e * AMPLITUDE / TERRACE_STEP)
+relief(e) = e > RELIEF_KNEE ? RELIEF_KNEE + (e - RELIEF_KNEE) * RELIEF_GAIN : e
+terraced = TERRACE_STEP * round(relief(e) * AMPLITUDE / TERRACE_STEP)
 surfaceLayer = clamp(SEA_LAYER + terraced, 1, SHELL_DEPTH - 10)
 ```
 
-with `TERRACE_STEP = 2`, `AMPLITUDE = 24`, `SEA_LAYER = 11`. Land is a column with `surfaceLayer > SEA_LAYER`. Terraces are two layers tall, which is why the player's `MAX_STEP` and the dog's `maxUp` are tuned to 2.
+with `TERRACE_STEP = 2`, `AMPLITUDE = 24`, `SEA_LAYER = 11`, `RELIEF_KNEE = 0.2` (about 5 layers above sea) and `RELIEF_GAIN = 1.8`. Relief leaves coasts and lowlands where the zones, deserts and rivers are tuned, and makes hills and mountains climb 1.8x faster. On seed 1337 the median land height stayed at 6 layers above sea while the 90th percentile rose from 14 to 20 and the highest peak from 26 to 39. The upper zone bands in `zoneOf` were widened to match (see Altitude-zoned trees); raise `RELIEF_GAIN` and those bands together. Land is a column with `surfaceLayer > SEA_LAYER`. Terraces are two layers tall, which is why the player's `MAX_STEP` and the dog's `maxUp` are tuned to 2.
 
 ### Column fill
 
@@ -220,12 +247,14 @@ After the fill, `carveFreshWater` (section 4a) and `findSpawn` (which rejects wa
 
 | Top block | Roll thresholds (cumulative on the single roll) |
 | --- | --- |
-| Grass (`GRASS`, `GRASS_LIGHT`, `GRASS_DEEP`) | Cumulative bands set by the zone: `treeP` zone tree; then `DEAD_TRUNK_P` dead trunk (only at rise `>= DEAD_TRUNK_MIN_RISE (3)`); then `GROUND[zone].bush` bush from the zone's `bushes`; then `.fern` fern (60% `FERN`); then `.tall` plant from the zone's `talls` |
+| Grass (`GRASS`, `GRASS_LIGHT`, `GRASS_DEEP`) | Cumulative bands set by the zone: `treeP x grove` zone tree; then `DEAD_TRUNK_P` dead trunk (only at rise `>= DEAD_TRUNK_MIN_RISE (3)`); then `GROUND[zone].bush x (1 + EDGE_BUSH x edge)` bush from the zone's `bushes`; then `.fern` fern (60% `FERN`); then `.tall x (1 + EDGE_TALL x edge)` plant from the zone's `talls` |
 | Stone (`STONE`, `STONE_PALE`) | `onRockP` = 0.01 in highland, 0.005 in treeline, else 0.0025: conifer tree (zone clamped to highland/treeline); next `DEAD_TRUNK_P*1.5` dead trunk; `< 0.018` scrub bush (`SCRUB` 70%, `BUSH_MAUVE`); `< 0.055` moss or lichen: moss share 70% low down, 40% in the highland, 15% at the treeline (pale lichen takes over with height) |
 | Sand (desert) | `< CACTUS_P (0.006)` cactus; next 0.012 `SCRUB_DRY` plant |
 | Waterline (`SEA_LAYER-1 <= top <= SEA_LAYER+2`, not a water top) | `< 0.08` `REED`; `< 0.13` `FERN` plant |
 
 The thresholds are cumulative on one roll (a running total `t` adds each band), so outcomes are mutually exclusive and every band keeps its full width in every zone. Columns topped by fresh water match no branch, so channels stay free of plants.
+
+**Groves and forest edges.** `grove = clamp(1 + 3 x groveNoise(dir x 6), 0, 2.5)` scales tree density, so woods are dense, clearings empty and the land between them thins out. That thinning band is a thicket: `edge = max(0, 1 - |grove - EDGE_PEAK| / EDGE_WIDTH)` (`EDGE_PEAK = 0.7`, `EDGE_WIDTH = 0.6`) peaks there and boosts bushes up to 5x (`EDGE_BUSH = 4`) and tall shrubs up to 3x (`EDGE_TALL = 2`), in each zone's own bush colours.
 
 #### Ground cover by altitude (`GROUND`)
 
@@ -262,15 +291,17 @@ Block `DEADWOOD` (`PATTERN.BARK`, `isTrunk`), weathered grey-brown. 20% are stum
 
 ### Altitude-zoned trees
 
-`rise = surfaceLayer - SEA_LAYER`. `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=11` midland, `<=15` highland, else treeline.
+`rise = surfaceLayer - SEA_LAYER` (plus +/-4 layers of `zoneNoise` jitter in the scatter pass, so zone edges do not follow contours). `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=14` midland, `<=21` highland, else treeline. The midland and highland bands were widened from 11 and 15 when terrain relief was added. On seed 1337 land splits coast 23%, lowland 30%, midland 28%, highland 11%, treeline 8%.
 
 | Zone | rise | `treeP` | Species mix (weights) | Size range |
 | --- | --- | --- | --- | --- |
-| coast | 2-3 | 0.011 | palm 5, broadleaf 3, mangrove 2, willow 1 | 0.35-0.85 |
-| lowland | 4-7 | 0.016 | broadleaf 6, emergent 2, oak 2, acacia 1, baobab 1, willow 1, palm 1 | 0.2-1.0 |
-| midland | 8-11 | 0.013 | broadleaf 4, oak 3, birch 3, pine 2, fir 2, cypress 1 | 0.2-0.9 |
-| highland | 12-15 | 0.012 | fir 5, spruce 4, pine 3, birch 1 | 0.3-1.0 |
-| treeline | 16+ | 0.006 | krummholz 6, juniper 3, spruce 1 | 0.15-0.5 |
+| coast | 2-3 | 0.011 | palm 5, broadleaf 3, mangrove 2, willow 1, dragon 1 | 0.35-0.85 |
+| lowland | 4-7 | 0.022 | broadleaf 6, emergent 3, oak 3, cherry 2, acacia 1, baobab 1, willow 1, palm 1, jacaranda 1, maple 1 | 0.2-1.0 |
+| midland | 8-14 | 0.02 | broadleaf 4, oak 4, birch 3, fir 3, maple 3, pine 2, aspen 2, cypress 1, spruce 1, cherry 1 | 0.2-0.95 |
+| highland | 15-21 | 0.018 | fir 5, spruce 4, pine 3, birch 2, redwood 2, aspen 2, juniper 1 | 0.3-1.0 |
+| treeline | 22+ | 0.006 | krummholz 6, juniper 3, spruce 1 | 0.15-0.5 |
+
+The three forest zones (lowland, midland, highland) carry the higher `treeP` so they read as continuous woodland; each mix leans toward the trees that close a canopy (broadleaf and oak low, mixed deciduous and conifer mid, conifers high). The `stand` field still makes one species of the mix dominate locally (x4 weight), and the wet map pulls willow, mangrove and cypress to the banks and acacia and baobab away from them.
 
 `plantZoneTree` picks a species with `weightedPick` and a continuous `size` from the zone range, then builds:
 
@@ -306,13 +337,13 @@ Foliage blocks `LEAF_PINK, LEAF_BLUSH, LEAF_LILAC, LEAF_CREAM, LEAF_MINT, LEAF_R
 `carveFreshWater(grid, seaLayer, seed)` runs after the column fill and before the scatter pass. It is voxel-world's river carve adapted to the sphere: every neighbour lookup goes through `step(f, u, v, du, dv)`, which crosses face seams with `crossFaceUV`, so a river or lake straddling a seam carves on both sides.
 
 1. **Channels.** `half: Map<columnKey, weight>` records each channel column with a depth weight (1 at the centre, ~0 at the rim), max-merged so the wider reach wins where streams join.
-2. **Rivers and streams** (`RIVERS = 180`). Sources are random grass columns at least 5 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - heading x 0.35 + jitter x 0.3`; the inertia term makes it meander instead of zig-zagging. Width grows downstream from 0.6 to 2.6 columns, so headwaters are 1-block streams and lower reaches are rivers. A trace ends at the sea, or after 6 consecutive uphill-everywhere steps (a pit), which becomes a lake seed. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
+2. **Rivers and streams** (`RIVERS = 180`). Each source is the highest of four random columns on one face, and must be grass at least 5 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - preferred heading x inertia + jitter x 0.3`. Every river draws its own character so no two look alike: `maxW` (25% stay streams at 1.2-2 columns, the rest widen to 2.4-4.6), `grow` (0.015-0.035 columns of width per step), `inertia` (0.45-0.8), and a meander: the preferred heading is the current one rotated by `swing x sin(len x bendF + phase)` (`swing` 0.7-1.5 rad, wavelength 2pi x 10-26 columns), so traces swing in S-bends. Width grows downstream from 0.6 to `maxW`, wobbling +/-20% along the length. A trace (at most 1600 steps) ends at the sea; after `flatMax` (8-16) consecutive uphill-everywhere steps (a pit); or when it has no unvisited neighbour (boxed in by its own loops). The last two become lake seeds. On seed 1337 about two thirds of rivers reach the sea and the median length is about 80-95 columns: rivers are short because the land between ridge and coast is short. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
 3. **Lakes and ponds** (`LAKES = 650`). Seeds are spread round-robin over the six faces, on gentle grass ground (no point 3 columns away differs by more than 2 layers), at least `MIN_GAP = 12` columns from another seed on that face. 60% are ponds (radius 1.6-3.2 plus one extra disc); the rest are lakes (radius 4-8, four overlapping discs for a lumpy outline). River pits add lakes too.
 4. **Water surface: the "never above ground" rule.** For each channel column above the sea, the surface is `min(own height, lowest dry ground within BANK_R = 3) - 1`. Every dry neighbour counts as a bank, low beaches included. A relaxation then runs to a fixed point: no surface may exceed a neighbour's surface + 1 or a dry 4-neighbour's ground, and a neighbour whose water is the sea (surface at or below sea level, or a channel column already in the sea) caps it at sea level. That last rule is what stops a one-layer water ledge hanging over open sea floor at river mouths.
 5. **Carve and fill.** The bed is cut to `surface - depth` (depth 1 at the rim, up to `RIVER_DEPTH = 3` at the centre), clearing everything above it including trees, and laid with `SAND`. `RIVER_WATER` fills from `max(bed + 1, sea + 1)` up to the surface; at or below sea level the sea sphere is the water.
 6. **Puddle cleanup.** Connected water bodies under `MIN_BODY = 4` columns (strays the relaxation leaves) are drained; their hollow stays as a dip. The flood fill always completes the whole body, so part of a large lake is never mistaken for a puddle.
 
-`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~21k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
+`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~29k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
 
 **Rendering.** The mesher emits a water block's faces only where they meet air: the surface, plus side faces where a reach steps down a layer or ends. Faces against other water or solid ground, and bottoms, are skipped, so a channel never draws stacked internal walls and a step-down never reads as a floating sheet. Water quads carry `patternPacked = 16`; the fragment shader treats `vDataV.y > 15.5` as fresh water (no terrain or foliage detail; drifting three-plane ripples toward the block tint, timed by `uWindTime`), and the vertex sway test is `8 <= aData.y < 15.5`, so water never sways.
 
@@ -471,7 +502,7 @@ For each column in the patch, using the column's tangent frame (`_up` = column d
 1. Skip empty columns and water (`layer <= SEA_LAYER` without a plant).
 2. Skip unless the column has a plant, a `grassCap` top block, or a stone top.
 3. If a plant is recorded in `grid.plants`: `drawPlant` and continue (the plant replaces the column's grass).
-4. Otherwise: ground detail (if `groundDetail > 0`), then, if not bare stone, grass/flowers/blades/pebbles via `scatterColumn`.
+4. Otherwise: ground detail (if `groundDetail > 0`), then, if not bare stone, grass/flowers/blades/pebbles via `scatterColumn`. Both take `rise` (layers above sea) for the rocks (see Rocks below).
 
 Two noise fields (`makeNoise3D` seeded `seed ^ 0x51ed` and `seed ^ 0xf10e`, sampled in 3D at `MEADOW_FREQ = 0.026` and `FLOWER_FREQ = 0.055` per world unit so patches are continuous across cube seams) give `lush` (meadow density) and `bloom` (flower drifts).
 
@@ -481,9 +512,9 @@ Two noise fields (`makeNoise3D` seeded `seed ^ 0x51ed` and `seed ^ 0xf10e`, samp
 | `TREE_P` | 0.04 | Small foliage clump (stump tuft plus wider cross) |
 | `BLADE_P` | 0.12 | Tall lone blades, x density x `(0.4 + lush)` |
 | `FLOWER_EDGE` / `FLOWER_P` | 0.58 / 0.55 | Flowers only where `bloom > 0.58`; probability ramps above |
-| `PEBBLE_P` | 0.008 | Pebbles, never animated |
+| `PEBBLE_P` | 0.008 | Pebbles (`rocks.ts`), x `rockAt(rise)`, never animated |
 
-Flower colours are drawn from `PETAL_COLORS` (the theme's petal colours), not leaves: canopies are mostly green and green flowers would vanish. Grass blade colours derive from the column's block: dark = `topTint x 0.86`, light = `top x 1.08`. Pebbles use `STONE/STONE_PALE/STONE_WARM` tops. Flowers are a stem tuft plus a small coloured box head that nods with the wind.
+Flower colours are drawn from `PETAL_COLORS` (the theme's petal colours), not leaves: canopies are mostly green and green flowers would vanish. Grass blade colours derive from the column's block: dark = `topTint x 0.86`, light = `top x 1.08`. Flowers are a stem tuft plus a small coloured box head that nods with the wind.
 
 ### Plant sprites (`drawPlant`)
 
@@ -505,9 +536,41 @@ Colour: tip = block `topTint ?? top`; base = `side` lerped 45% toward the tip (t
 
 | Item | Probability | Notes |
 | --- | --- | --- |
-| Boulders (`BOULDER_P`) | 0.0045 x detail, x3 on bare stone | 1-3 stacked yawed boxes, half sunk, stone colours |
+| Rocks (`BOULDER_P`, `rocks.ts`) | 0.0045 x detail x `rockAt(rise)`, x3 on bare stone | Shape, size and weathering by altitude zone (see Rocks below) |
 | Fallen logs (`LOG_P`) | 0.006 x detail, only `nearTrunk` | Long bark box (`TRUNK`/`TRUNK_PALE` side colour) with a moss strip |
 | Mushrooms (`MUSHROOM_P`) | 0.05 x detail; x1 `nearTrunk`, x0.25 in open lush meadow (`lush > 0.7`), else 0 | 2-4 stems with caps from `PETAL_COLORS[0,2,3]` and `STONE_WARM` |
+
+### Rocks (`world/rocks.ts`)
+
+Rocks are drawn into the same vegetation patch meshes but authored in `rocks.ts`. `scatterBoulder` runs on the ground-detail stream (`drng`) and `scatterPebble` on the grass stream, so neither moves the grass layout. Both share their drawing primitives with `vegetation.ts` through `veg-geom.ts`, and pick the zone with `zoneOf(rise)` from `trees.ts`, so rocks and trees change at the same heights.
+
+**Density.** `rockAt(rise) = clamp(0.1 + 0.11 x rise + 0.25 x max(0, rise - 15), 0.35, 5)` multiplies both: about 0.35x on the coast, 1x in the midlands, then a steeper climb above the highland line up to 5x on the peaks.
+
+**Shapes per zone** (`SHAPES`, one weighted pick per rock group):
+
+| Zone | Shapes (weights) | `WEATHER` size / moss / pale |
+| --- | --- | --- |
+| coast | cobbles 5, rounded 3, slab 1 | 0.75 / 0.05 / 0.15 |
+| lowland | rounded 5, stacked 2, cobbles 1, slab 1 | 0.9 / 0.45 / 0 |
+| midland | stacked 4, rounded 2, slab 2, scree 2, erratic 1 | 1 / 0.22 / 0.05 |
+| highland | erratic 3, tor 3, scree 3, stacked 2, slab 1, shards 1 | 1.2 / 0.1 / 0.15 |
+| treeline | shards 4, scree 4, standing 2, tor 2, erratic 1 | 1.1 / 0.03 / 0.3 |
+
+| Shape | Build |
+| --- | --- |
+| cobbles | 3-7 low sea-worn stones, each two shrinking boxes so the top reads round |
+| rounded | A half-sunk boulder of three narrowing tiers (a dome) |
+| stacked | 1-3 stacked yawed blocks, half sunk |
+| scree | 4-9 small angular stones spread over the column |
+| slab | A wide low slab, 40% with a second broken piece |
+| erratic | A 1.2-2 unit core with 2-4 smaller blocks fused to its flanks and top; spills past its column |
+| tor | 3-5 flat slabs piled up, each offset and narrower than the one below |
+| shards | 3-6 thin upright blocks of mixed height (frost-shattered) |
+| standing | A tall narrow stone 1.2-2.2 high, 50% with a shorter shard beside it |
+
+Every group draws a size `S = WEATHER.size x 0.6-1.3`, with 8% giants at 1.6x. Every block takes its own colour: one of the theme's three stone tops (`STONE`, `STONE_PALE`, `STONE_WARM`) scaled 0.7-1.12, then with chance `moss` lerped 15-40% toward the moss green, otherwise (50%) lightened toward white by up to `pale`. So rocks are mossy low down and bleached up high, in every theme's own stone colours.
+
+**Pebbles.** A hit places one pebble (60%) or a cluster of 2-4 smaller ones. Each is round (45%), flat and elongated (35%) or a small chip, size 0.12-0.42, coloured like the zone's rocks (moss at half the boulder chance).
 
 `nearTrunk` checks the four neighbours at `layer+1` for a block with `isTrunk` *and* `pattern == PATTERN.BARK`, so living and dead wood qualify but cacti (solid trunks with `PATTERN.CACTUS`) do not.
 
@@ -829,7 +892,7 @@ Per update: look up the column under `dir`; `surfaceR = grid.surfaceRadius` (gro
 
 ### Drone (`player/drone.ts`)
 
-`createSphereDroneMode()` returns an object with `enter, exit, beginLanding, update` plus `active, landing, altitude, dir, heading`. Always cruises forward (a cinematic drone): base `DRONE_SPEED = 18` m/s (`DRONE_SPRINT_SPEED = 91` with Shift); W doubles it, S stops it. Yaw = mouse X / touch drag X (radians, from `_droneMX`) plus A/D x 1.2 rad/s about `dir`; position advances as an arc about `dir x heading`. Pitch and roll are view-only (`DroneInput.pitch` / `.roll` from `fpCam.pitch` / `fpCam.roll`), as in planet-explorer: the drone keeps flying level. Vertical: Space/C/scroll (`drainDroneAltDelta`, m/s) raise or lower a `hoverHeight` target (reset to `HOVER_HEIGHT = 14` on `enter`, floor `MIN_CLEARANCE`); a P-controller (`TERRAIN_FOLLOW_GAIN = 3`, clamped to +/-`DRONE_VSPEED/2`) pulls toward `terrainAlt + hoverHeight`; floor is terrain + `MIN_CLEARANCE (1.5)`, ceiling `PLANET_RADIUS + SHELL_DEPTH + 50`. Landing (`L` or `beginLanding`) lerps altitude toward the surface at rate 3 and deactivates within 0.6 of it. `enter` lifts `ENTER_LIFT = 8` above the current eye radius and picks an initial heading perpendicular to `dir`. Camera: position radial, `up = dir`, look along `heading*cos(pitch) + dir*sin(pitch)`, then `rotateZ(roll)`. Note the drone uses `columnTop` for its floor, so it rides over tree canopy.
+`createSphereDroneMode()` returns an object with `enter, exit, beginLanding, update` plus `active, landing, altitude, dir, heading`. Always cruises forward (a cinematic drone): base `DRONE_SPEED = 18` m/s (`DRONE_SPRINT_SPEED = 45` with Shift); W doubles it, S stops it. Yaw = mouse X / touch drag X (radians, from `_droneMX`) plus A/D x 1.2 rad/s about `dir`; position advances as an arc about `dir x heading`. Pitch and roll are view-only (`DroneInput.pitch` / `.roll` from `fpCam.pitch` / `fpCam.roll`), as in planet-explorer: the drone keeps flying level. Vertical: Space/C/scroll (`drainDroneAltDelta`, m/s) raise or lower a `hoverHeight` target (reset to `HOVER_HEIGHT = 14` on `enter`, floor `MIN_CLEARANCE`); a P-controller (`TERRAIN_FOLLOW_GAIN = 3`, clamped to +/-`DRONE_VSPEED/2`) pulls toward `terrainAlt + hoverHeight`; floor is terrain + `MIN_CLEARANCE (1.5)`, ceiling `PLANET_RADIUS + SHELL_DEPTH + 50`. Landing (`L` or `beginLanding`) lerps altitude toward the surface at rate 3 and deactivates within 0.6 of it. `enter` lifts `ENTER_LIFT = 8` above the current eye radius and picks an initial heading perpendicular to `dir`. Camera: position radial, `up = dir`, look along `heading*cos(pitch) + dir*sin(pitch)`, then `rotateZ(roll)`. Note the drone uses `columnTop` for its floor, so it rides over tree canopy.
 
 ### Fly (`player/fly.ts`)
 
