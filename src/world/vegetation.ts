@@ -13,6 +13,8 @@ import { columnDir } from '../core/geoutil';
 import { BLOCK_BY_ID, BLOCKS, PATTERN, PETAL_COLORS } from '../core/palette';
 import { makeRng, makeNoise3D } from '../core/rng';
 import { PLANT } from './terrain';
+import { QuadBuffer, _up, _ta, _tb, _base, _base2, box, boxYawed, root } from './veg-geom';
+import { STONE_IDS, rockAt, scatterBoulder, scatterPebble } from './rocks';
 
 const SEA_LAYER = 11;
 const TREE_P = 0.04;
@@ -22,7 +24,6 @@ const BLADE_P = 0.12;
 /** Flowers only grow where the drift field exceeds this; probability ramps above it. */
 const FLOWER_EDGE = 0.58;
 const FLOWER_P = 0.55;
-const PEBBLE_P = 0.008;
 /** Per still fresh-water column: a few lily pads. */
 const LILY_P = 0.09;
 /** Per bank column (1 from water) inside a reed stand: a dense reed clump. */
@@ -121,55 +122,6 @@ function makeVegMaterial(windAmp: number) {
     return { mat, uniforms };
 }
 
-/** Growable typed buffers — avoids the boxed-number arrays the flat DetailField uses. */
-class QuadBuffer {
-    pos = new Float32Array(4096 * 3);
-    nrm = new Float32Array(4096 * 3);
-    col = new Float32Array(4096 * 3);
-    det = new Float32Array(4096 * 2);
-    n = 0;
-    reset() {
-        this.n = 0;
-    }
-    private grow() {
-        const cap = this.pos.length / 3;
-        for (const [k, w] of [
-            ['pos', 3],
-            ['nrm', 3],
-            ['col', 3],
-            ['det', 2],
-        ] as const) {
-            const next = new Float32Array(cap * 2 * w);
-            next.set(this[k]);
-            this[k] = next;
-        }
-    }
-    vert(x: number, y: number, z: number, up: THREE.Vector3, c: THREE.Color, sway: number, phase: number) {
-        if (this.n * 3 >= this.pos.length) this.grow();
-        const i3 = this.n * 3,
-            i2 = this.n * 2;
-        this.pos[i3] = x;
-        this.pos[i3 + 1] = y;
-        this.pos[i3 + 2] = z;
-        // Normals point along the surface up: blades lit like the ground they
-        // grow from stay in the high-key band instead of turning to dark slivers.
-        this.nrm[i3] = up.x;
-        this.nrm[i3 + 1] = up.y;
-        this.nrm[i3 + 2] = up.z;
-        this.col[i3] = c.r;
-        this.col[i3 + 1] = c.g;
-        this.col[i3 + 2] = c.b;
-        this.det[i2] = sway;
-        this.det[i2 + 1] = phase;
-        this.n++;
-    }
-}
-
-const _up = new THREE.Vector3();
-const _ta = new THREE.Vector3();
-const _tb = new THREE.Vector3();
-const _base = new THREE.Vector3();
-const _base2 = new THREE.Vector3();
 const _centre = new THREE.Vector3();
 const _dark = new THREE.Color();
 const _light = new THREE.Color();
@@ -217,46 +169,6 @@ function tuft(
         buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, ph);
         buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, ph);
         buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, ph);
-    }
-}
-
-/**
- * A small surface-aligned box: flower heads and pebbles. Faces are lit along
- * the surface frame like the voxel blocks (top 1.0, sides 0.85, bottom 0.7).
- */
-const _boxC = new THREE.Color();
-const _n = new THREE.Vector3();
-function box(
-    buf: QuadBuffer,
-    base: THREE.Vector3,
-    up: THREE.Vector3,
-    w: number,
-    h: number,
-    color: THREE.Color,
-    sway: number,
-    phase: number,
-) {
-    const hw = w * 0.5;
-    // corner = base + ta*sa*hw + tb*sb*hw + up*sh*h
-    const P = (sa: number, sb: number, sh: number) => [
-        base.x + (_ta.x * sa + _tb.x * sb) * hw + up.x * sh * h,
-        base.y + (_ta.y * sa + _tb.y * sb) * hw + up.y * sh * h,
-        base.z + (_ta.z * sa + _tb.z * sb) * hw + up.z * sh * h,
-    ];
-    const faces: Array<[number[][], THREE.Vector3, number, boolean]> = [
-        [[P(-1, -1, 1), P(-1, 1, 1), P(1, 1, 1), P(1, -1, 1)], up, 1.0, true],
-        [[P(1, -1, 0), P(1, 1, 0), P(1, 1, 1), P(1, -1, 1)], _ta, 0.88, false],
-        [[P(-1, 1, 0), P(-1, -1, 0), P(-1, -1, 1), P(-1, 1, 1)], _ta, 0.88, false],
-        [[P(1, 1, 0), P(-1, 1, 0), P(-1, 1, 1), P(1, 1, 1)], _tb, 0.82, false],
-        [[P(-1, -1, 0), P(1, -1, 0), P(1, -1, 1), P(-1, -1, 1)], _tb, 0.82, false],
-    ];
-    for (const [v, , shade, top] of faces) {
-        _boxC.copy(color).multiplyScalar(shade);
-        for (let i = 0; i < 4; i++) {
-            // Tops sway entirely; side faces sway only along their upper edge.
-            const sw = top || i >= 2 ? sway : 0;
-            buf.vert(v[i][0], v[i][1], v[i][2], _n.copy(up), _boxC, sw, phase);
-        }
     }
 }
 
@@ -386,11 +298,6 @@ function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number)
     }
 }
 
-/** Root position on the surface at tangent offset (a, b) from the column centre. */
-function root(centre: THREE.Vector3, a: number, b: number) {
-    return _base.copy(centre).addScaledVector(_ta, a).addScaledVector(_tb, b);
-}
-
 /** Per-patch palette snapshot — palette colours are only filled once the palette loads. */
 interface DetailColours {
     flowers: THREE.Color[];
@@ -427,47 +334,18 @@ const readColours = (): DetailColours => ({
     vineTip: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.4),
 });
 
-/* ---- ground details: boulders, fallen logs, mushrooms -------------------
+/* ---- ground details: fallen logs, mushrooms (boulders: rocks.ts) ---------
  * Drawn from their own RNG stream so turning them on or off (tier setting)
  * never shifts where the grass and flowers land. */
-const BOULDER_P = 0.0045; // per grass column; ×3 on bare stone
 const LOG_P = 0.006; // per column next to a tree trunk
 const MUSHROOM_P = 0.05; // per column next to a tree trunk; ×0.25 in open lush meadow
 
-const _rot = new THREE.Vector3();
-const _saveA = new THREE.Vector3();
-const _saveB = new THREE.Vector3();
 const NEIGHBOURS4: Array<[number, number]> = [
     [1, 0],
     [-1, 0],
     [0, 1],
     [0, -1],
 ];
-const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id, BLOCKS.STONE_WARM.id]);
-/** A box rotated by `yaw` in the tangent plane. Temporarily swaps the shared frame. */
-function boxYawed(
-    buf: QuadBuffer,
-    base: THREE.Vector3,
-    up: THREE.Vector3,
-    w: number,
-    h: number,
-    len: number,
-    color: THREE.Color,
-    yaw: number,
-) {
-    const sa = _saveA.copy(_ta),
-        sb = _saveB.copy(_tb);
-    const c = Math.cos(yaw),
-        s = Math.sin(yaw);
-    _rot.copy(sa).multiplyScalar(c).addScaledVector(sb, s);
-    _tb.copy(sb).multiplyScalar(c).addScaledVector(sa, -s);
-    _ta.copy(_rot);
-    // box() is square in plan; stretch along _tb by scaling it for the log.
-    _tb.multiplyScalar(len / w);
-    box(buf, base, up, w, h, color, 0, 0);
-    _ta.copy(sa);
-    _tb.copy(sb);
-}
 
 function scatterGroundDetail(
     buf: QuadBuffer,
@@ -478,30 +356,10 @@ function scatterGroundDetail(
     nearTrunk: boolean,
     lush: number,
     cols: DetailColours,
+    rockK: number,
 ) {
     if (detail <= 0) return;
-    // Boulders: two or three stacked, rotated blocks, half sunk into the ground.
-    if (rng() < BOULDER_P * detail * (onStone ? 3 : 1)) {
-        const n = rng.int(1, 3);
-        const s0 = rng.range(0.55, 0.95);
-        for (let k = 0; k < n; k++) {
-            const sz = s0 * (1 - k * 0.3);
-            const r = root(centre, rng.range(-0.25, 0.25), rng.range(-0.25, 0.25)).addScaledVector(
-                _up,
-                -0.15 + k * s0 * 0.45,
-            );
-            boxYawed(
-                buf,
-                r,
-                _up,
-                sz,
-                sz * rng.range(0.55, 0.8),
-                sz,
-                cols.pebbles[(rng() * cols.pebbles.length) | 0],
-                rng() * 6.28,
-            );
-        }
-    }
+    scatterBoulder(buf, centre, rng, detail, onStone, rockK, cols.pebbles, cols.moss);
     if (nearTrunk) {
         // Fallen log: a long bark box with a moss strip along its top.
         if (rng() < LOG_P * detail) {
@@ -698,6 +556,7 @@ function scatterColumn(
     lush: number,
     bloom: number,
     cols: DetailColours,
+    rockK: number,
 ) {
     const roll = rng();
     // Colours mirror the flat-world grass tufts: dark = topTint × 0.86, light = top × 1.08.
@@ -738,20 +597,7 @@ function scatterColumn(
         );
     }
 
-    // Pebbles: never animated — the still notes among the moving grass.
-    if (rng() < PEBBLE_P) {
-        const r = root(centre, rng.range(-0.25, 0.25), rng.range(-0.25, 0.25)).addScaledVector(_up, -0.05);
-        box(
-            buf,
-            r,
-            _up,
-            rng.range(0.24, 0.42),
-            rng.range(0.12, 0.24),
-            cols.pebbles[(rng() * cols.pebbles.length) | 0],
-            0,
-            0,
-        );
-    }
+    scatterPebble(buf, centre, rng, rockK, cols.pebbles);
 
     if (roll < TREE_P) {
         // Small foliage clump: a stump tuft plus a wider cross ~1 unit up.
@@ -925,11 +771,22 @@ export function createSphereVegetation(
                     drawReedClump(buf, centre, rng, cols);
                     continue;
                 }
+                const rockK = rockAt(layer - SEA_LAYER);
                 if (groundDetail > 0)
-                    scatterGroundDetail(buf, centre, drng, groundDetail, onStone, nearTrunk(u, v, layer), lush, cols);
+                    scatterGroundDetail(
+                        buf,
+                        centre,
+                        drng,
+                        groundDetail,
+                        onStone,
+                        nearTrunk(u, v, layer),
+                        lush,
+                        cols,
+                        rockK,
+                    );
                 if (onStone) continue; // bare rock: boulders only, no grass
                 const bloom = field(flowerNoise, centre, FLOWER_FREQ);
-                scatterColumn(buf, centre, rng, block, density, lush, bloom, cols);
+                scatterColumn(buf, centre, rng, block, density, lush, bloom, cols, rockK);
             }
         }
         if (buf.n === 0) return null;
