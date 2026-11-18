@@ -11,7 +11,7 @@
  * returns, so a long route is spread over several frames instead of spiking
  * one. All working storage is preallocated typed arrays — no per-search garbage.
  */
-import { SphereVoxelGrid, FACE_RES, crossFaceUV, _FN as FN, _FTU as FTU, _FTV as FTV } from '../core/voxel';
+import { SphereVoxelGrid, FACE_RES, crossFaceUV, FN, FTU, FTV } from '../core/voxel';
 import { BLOCK_BY_ID } from '../core/palette';
 
 export interface Col {

@@ -32,7 +32,7 @@ export const SHELL_DEPTH = 96;
 //   face 3 -Y: n=(0,-1,0), tu=(1,0,0), tv=(0,0,1)
 //   face 4 +Z: n=(0,0,1), tu=(0,1,0), tv=(-1,0,0)
 //   face 5 -Z: n=(0,0,-1), tu=(0,1,0), tv=(1,0,0)
-export const _FN = [
+export const FN = [
     [1, 0, 0],
     [-1, 0, 0],
     [0, 1, 0],
@@ -40,7 +40,7 @@ export const _FN = [
     [0, 0, 1],
     [0, 0, -1],
 ];
-export const _FTU = [
+export const FTU = [
     [0, 1, 0],
     [0, 1, 0],
     [1, 0, 0],
@@ -48,7 +48,7 @@ export const _FTU = [
     [0, 1, 0],
     [0, 1, 0],
 ];
-export const _FTV = [
+export const FTV = [
     [0, 0, 1],
     [0, 0, -1],
     [0, 0, -1],
@@ -1836,9 +1836,9 @@ function prepareEdgeObject(edges: any) {
 
 /** Convert (face, u, v) where u or v may be out of [0, FACE_RES) to the canonical face+UV. */
 export function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
-    const n = _FN[face],
-        tu = _FTU[face],
-        tv = _FTV[face];
+    const n = FN[face],
+        tu = FTU[face],
+        tv = FTV[face];
     // Column centre in cube space (unnormalised — dominant axis determines new face)
     const pu = (2 * (u + 0.5)) / FACE_RES - 1;
     const pv = (2 * (v + 0.5)) / FACE_RES - 1;
@@ -1855,9 +1855,9 @@ export function crossFaceUV(face: number, u: number, v: number): [number, number
     const comp = axis === 0 ? cx : axis === 1 ? cy : cz;
     const f2 = axis * 2 + (comp < 0 ? 1 : 0);
     // Project cube vector onto new face plane
-    const n2 = _FN[f2],
-        tu2 = _FTU[f2],
-        tv2 = _FTV[f2];
+    const n2 = FN[f2],
+        tu2 = FTU[f2],
+        tv2 = FTV[f2];
     const dn = cx * n2[0] + cy * n2[1] + cz * n2[2];
     const du = cx * tu2[0] + cy * tu2[1] + cz * tu2[2];
     const dv = cx * tv2[0] + cy * tv2[1] + cz * tv2[2];
@@ -2450,16 +2450,12 @@ export function createFarField(grid: SphereVoxelGrid, nearMaterial: THREE.MeshLa
                 }
     }
 
-    // Face basis: the module-level tables (same six faces as basisFromCode).
-    const FN = _FN,
-        FU = _FTU,
-        FV = _FTV;
     const corner = (f: number, u: number, v: number, r: number): [number, number, number] => {
         const pu = (2 * u) / FACE_RES - 1,
             pv = (2 * v) / FACE_RES - 1;
-        const x = FN[f][0] + FU[f][0] * pu + FV[f][0] * pv,
-            y = FN[f][1] + FU[f][1] * pu + FV[f][1] * pv,
-            z = FN[f][2] + FU[f][2] * pu + FV[f][2] * pv;
+        const x = FN[f][0] + FTU[f][0] * pu + FTV[f][0] * pv,
+            y = FN[f][1] + FTU[f][1] * pu + FTV[f][1] * pv,
+            z = FN[f][2] + FTU[f][2] * pu + FTV[f][2] * pv;
         const l = Math.hypot(x, y, z);
         return [(x / l) * r, (y / l) * r, (z / l) * r];
     };
