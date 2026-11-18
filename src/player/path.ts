@@ -11,7 +11,7 @@
  * returns, so a long route is spread over several frames instead of spiking
  * one. All working storage is preallocated typed arrays — no per-search garbage.
  */
-import { SphereVoxelGrid, FACE_RES, crossFaceUV } from '../core/voxel';
+import { SphereVoxelGrid, FACE_RES, crossFaceUV, _FN as FN, _FTU as FTU, _FTV as FTV } from '../core/voxel';
 import { BLOCK_BY_ID } from '../core/palette';
 
 export interface Col {
@@ -79,30 +79,6 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
 
     /** Unit direction of a column centre, written into out[0..2]. */
     const _d = [0, 0, 0];
-    const FN = [
-        [1, 0, 0],
-        [-1, 0, 0],
-        [0, 1, 0],
-        [0, -1, 0],
-        [0, 0, 1],
-        [0, 0, -1],
-    ];
-    const FTU = [
-        [0, 1, 0],
-        [0, 1, 0],
-        [1, 0, 0],
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 1, 0],
-    ];
-    const FTV = [
-        [0, 0, 1],
-        [0, 0, -1],
-        [0, 0, -1],
-        [0, 0, 1],
-        [-1, 0, 0],
-        [1, 0, 0],
-    ];
     function dirOf(f: number, u: number, v: number) {
         const pu = (2 * (u + 0.5)) / FACE_RES - 1,
             pv = (2 * (v + 0.5)) / FACE_RES - 1;

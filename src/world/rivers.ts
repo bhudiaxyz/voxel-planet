@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, crossFaceUV } from '../core/voxel';
 import { BLOCKS, registerBlock } from '../core/palette';
 import { makeRng } from '../core/rng';
+import { SNOW } from './trees';
 
 /** River water: non-solid (isWater), so the player wades and the mesher draws banks behind it. */
 export const RIVER_WATER = registerBlock('RIVER_WATER', {
@@ -49,6 +50,7 @@ function step(f: number, u: number, v: number, du: number, dv: number): number {
 export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: number) {
     const rng = makeRng(seed ^ 0x51e7a);
     const grassIds = new Set([BLOCKS.GRASS.id, BLOCKS.GRASS_LIGHT.id, BLOCKS.GRASS_DEEP.id]);
+    const sourceIds = new Set([...grassIds, SNOW.id]);
     const top = (k: number) => {
         const [f, u, v] = unkey(k);
         return grid.columnTop(f, u, v);
@@ -105,7 +107,8 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
         }
         // Sources in the uplands, on grass (springs, snowmelt below the bare rock).
         // Sources from 5 layers up (was 6), so lower hills get their own streams too.
-        if (h0 < seaLayer + 5 || !grassIds.has(grid.get(f, u, v, h0))) continue;
+        // Snowfields count too: snowmelt feeds the highest streams.
+        if (h0 < seaLayer + 5 || !sourceIds.has(grid.get(f, u, v, h0))) continue;
         r++;
         let k = key(f, u, v);
         let hu = 0,

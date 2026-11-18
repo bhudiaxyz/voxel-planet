@@ -236,7 +236,7 @@ export const PLANT = {
 /**
  * Ground cover per zone (chance per grass column, after trees and dead trunks).
  * Lush ferns and tall grass by the water, flowering bushes in the lowlands,
- * tall shrubs mid-slope, then thin grey scrub and moss toward the treeline.
+ * tall shrubs mid-slope, then moss, ferns and scrub among the rocks up high.
  */
 export const GROUND: Record<Zone, { bush: number; fern: number; tall: number; bushes: any[]; talls: any[] }> = {
     coast: {
@@ -255,18 +255,18 @@ export const GROUND: Record<Zone, { bush: number; fern: number; tall: number; bu
         talls: [SHRUB_TALL],
     },
     highland: {
-        bush: 0.02,
-        fern: 0.006,
-        tall: 0.012,
+        bush: 0.016,
+        fern: 0.03,
+        tall: 0.06,
         bushes: [SHRUB_DEEP, SHRUB_BLUEGREEN, SCRUB_BLOCK, SHRUB_OLIVE],
-        talls: [SHRUB_TALL, MOSS_THICK],
+        talls: [MOSS_THICK, MOSS_THICK, SHRUB_TALL],
     },
     treeline: {
-        bush: 0.012,
-        fern: 0,
-        tall: 0.02,
+        bush: 0.01,
+        fern: 0.02,
+        tall: 0.08,
         bushes: [SHRUB_BLUEGREEN, SCRUB_BLOCK, SHRUB_RUSSET],
-        talls: [MOSS_THICK, LICHEN_PALE],
+        talls: [MOSS_THICK, MOSS_THICK, LICHEN_PALE],
     },
 };
 

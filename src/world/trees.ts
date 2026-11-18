@@ -22,6 +22,25 @@ export const DEADWOOD = registerBlock('DEADWOOD', {
     rough: 0.7,
     isTrunk: true,
 });
+/**
+ * Snow: the snowcap above the snowline (terrain.ts SNOWLINE). Not one flat white:
+ * the terrain texture (patTerrain, PATTERN.NONE) gives the top lumpy drifts and
+ * relief, and the cool blue-grey tint shades them into wind hollows and shadow.
+ * Sides are frost-dusted rock, and the fringe drapes a ragged lip of snow over
+ * every exposed edge, so a snowfield's cliffs read as rock with snow on top.
+ * Fixed colours rather than palette ones, so snow stays snow in every theme.
+ */
+export const SNOW = registerBlock('SNOW', {
+    top: c(0xf4f7fb),
+    topTint: c(0xb8c8dc), // drift shadows and wind hollows: cool blue-grey
+    side: c(0x8d939b), // frost-dusted granite
+    bottom: c(0x6f757d),
+    tint: c(0x5e646c),
+    fringe: 0.35, // snow lip down the top third of each exposed side
+    fringeColor: c(0xe6edf5),
+    pattern: PATTERN.NONE,
+    rough: 0.35,
+});
 /** Birch: pale bark with the bark pattern's furrows (reads as dark streaks on white). */
 export const BIRCH = registerBlock('BIRCH', {
     top: c(0xd8d2c4),
@@ -209,8 +228,9 @@ export const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; 
         ],
         size: [0.2, 0.95],
     },
+    // High ground thins out to rock, moss and fern: half the trees it had.
     highland: {
-        treeP: 0.018,
+        treeP: 0.009,
         mix: [
             ['fir', 5],
             ['spruce', 4],
@@ -223,7 +243,7 @@ export const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; 
         size: [0.3, 1.0],
     },
     treeline: {
-        treeP: 0.006,
+        treeP: 0.003,
         mix: [
             ['krummholz', 6],
             ['juniper', 3],

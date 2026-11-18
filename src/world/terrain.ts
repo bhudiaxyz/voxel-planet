@@ -25,7 +25,7 @@ import {
     plantSingle,
     plantSphereBush,
 } from './plants';
-import { ZONE, plantZoneTree, zoneOf } from './trees';
+import { SNOW, ZONE, plantZoneTree, zoneOf } from './trees';
 import type { Zone } from './trees';
 export { PLANT } from './plants';
 
@@ -65,9 +65,25 @@ const CACTUS_P = 0.006;
 /** Let the browser paint the loading screen between stages (no-op cost in node). */
 const paint = () => new Promise((r) => setTimeout(r, 0));
 
+/** Snowline: layers above sea at the equator, and how much lower it sits at the poles. */
+const SNOWLINE = 29;
+const SNOWLINE_POLAR = 10;
+
 /** Scattered ranges: mask threshold (lower = more ranges) and strength vs the main ranges. */
 const MOUNTAIN_EDGE = 0.05;
 const MOUNTAIN_SCATTER = 0.85;
+/**
+ * Ridge shape: RIDGE_SHARP is the power on the ridged noise (2 = the old rounded
+ * hump; higher = narrower, steeper crests). RIDGE_SPUR adds saw-tooth peaks along
+ * them, RIDGE_RAVINE cuts gullies down the faces, RIDGE_GAIN rescales the total
+ * so the peaks stay where they were.
+ */
+const RIDGE_SHARP = 2.4;
+const RIDGE_SPUR = 0.3;
+const RIDGE_RAVINE = 0.15;
+const RIDGE_GAIN = 0.8;
+/** Ridge-noise frequency: higher = more, narrower ridges and peaks per range (was 1.5). */
+const RIDGE_FREQ = 2.2;
 
 const smoothstep = (a: number, b: number, x: number) => {
     const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -92,9 +108,28 @@ function elevationAt(noise: Noise3, noise2: Noise3, x: number, y: number, z: num
         smoothstep(MOUNTAIN_EDGE, MOUNTAIN_EDGE + 0.3, noise.get(wx * f * 1.7 + 31, wy * f * 1.7, wz * f * 1.7 - 13)) *
         smoothstep(0, 0.12, base);
     const mm = Math.max(mm0, mm1 * MOUNTAIN_SCATTER);
-    const ridged = Math.max(0, 1 - Math.abs(noise2.fbm(wx * f * 1.5, wy * f * 1.5, wz * f * 1.5, o, 2.0, 0.5) * 2));
-    const e = base + hills + 0.8 * mm * ridged * ridged * 0.8 - 0.05;
+    const rf = f * RIDGE_FREQ;
+    const ridged = Math.max(0, 1 - Math.abs(noise2.fbm(wx * rf, wy * rf, wz * rf, o, 2.0, 0.5) * 2));
+    // Crests: a higher power sharpens ridged into knife-edge arêtes with steep
+    // flanks; a finer ridged octave adds spurs and saw-tooth peaks along them,
+    // and a ravine noise cuts gullies down the faces. All scale with the
+    // mountain mask, so lowlands are untouched.
+    const crest = Math.pow(ridged, RIDGE_SHARP);
+    const spur = Math.max(0, 1 - Math.abs(noise.get(wx * f * 6 + 5, wy * f * 6, wz * f * 6 - 9) * 2));
+    const ravine = smoothstep(0.55, 0.9, Math.abs(noise2.get(wx * f * 9 - 3, wy * f * 9, wz * f * 9 + 7)));
+    const peak = crest * (1 + RIDGE_SPUR * spur * spur) - RIDGE_RAVINE * ravine * ridged;
+    const e = base + hills + 0.8 * mm * Math.max(0, peak) * RIDGE_GAIN - 0.05;
     return e < 0 ? e * 0.5 : e;
+}
+
+/**
+ * Snowcap: land above the snowline. The line sits SNOWLINE layers above sea at
+ * the equator and drops by SNOWLINE_POLAR toward the poles, with a ragged edge
+ * from noise so snowfields reach down the gullies in tongues.
+ */
+function isSnow(noise: Noise3, dir: THREE.Vector3, surfaceLayer: number): boolean {
+    const line = SNOWLINE - SNOWLINE_POLAR * dir.y * dir.y + noise.get(dir.x * 14 - 21, dir.y * 14, dir.z * 14) * 4;
+    return surfaceLayer - SEA_LAYER >= line;
 }
 
 /** Hot, dry, low land: the warmest band near the equator, close to sea level. */
@@ -168,14 +203,19 @@ export async function generateSphereTerrain(
                 const surfaceLayer = Math.max(1, Math.min(SHELL_DEPTH - 10, SEA_LAYER + terraced));
                 const isLand = surfaceLayer > SEA_LAYER;
                 const desert = isLand && isDesert(noise, _dir, e, surfaceLayer);
+                const snow = isLand && !desert && isSnow(noise, _dir, surfaceLayer);
 
                 for (let layer = 0; layer <= surfaceLayer; layer++) {
                     let id: number;
                     if (!isLand) {
                         id = layer === surfaceLayer ? SAND.id : STONE.id;
                     } else if (layer === surfaceLayer) {
-                        id = desert ? SAND.id : selectSurface(noise, _dir, e, GRASS, GRASS_LIGHT, STONE_PALE);
-                    } else if (layer >= surfaceLayer - 2) {
+                        id = desert
+                            ? SAND.id
+                            : snow
+                              ? SNOW.id
+                              : selectSurface(noise, _dir, e, GRASS, GRASS_LIGHT, STONE_PALE);
+                    } else if (layer >= surfaceLayer - 2 && !snow) {
                         id = desert ? SAND.id : SOIL.id; // dunes are sand all the way down to rock
                     } else {
                         id = selectRock(noise, _dir, layer, STONE, STONE_PALE);
@@ -306,15 +346,18 @@ export async function generateSphereTerrain(
                     else if (roll < (t += g.tall * (1 + EDGE_TALL * edge)))
                         plantSingle(grid, face, u, v, sl, treeRng.pick(g.talls));
                 } else if (sl > SEA_LAYER + 1 && STONE_IDS.has(topId)) {
-                    // Cold rock: conifers where the highland is, a thin cover lower down,
-                    // and wind-killed snags standing alone on the slopes.
+                    // Cold rock: a few conifers where the highland is, a thin cover lower
+                    // down, and wind-killed snags standing alone on the slopes.
                     const zone = zoneOf(rise);
-                    const onRockP = zone === 'highland' ? 0.01 : zone === 'treeline' ? 0.005 : 0.0025;
+                    const onRockP = zone === 'highland' ? 0.005 : zone === 'treeline' ? 0.0025 : 0.0025;
                     if (roll < onRockP) tree(face, u, v, sl, zone === 'treeline' ? 'treeline' : 'highland');
                     else if (roll < onRockP + DEAD_TRUNK_P * 1.5) plantDeadTrunk(grid, face, u, v, sl, treeRng);
                     else if (roll < 0.018)
                         bush(face, u, v, sl, treeRng.pick([SCRUB_BLOCK, SHRUB_OLIVE, SHRUB_BLUEGREEN, SHRUB_RUSSET]));
-                    else if (roll < 0.055)
+                    else if (roll < 0.03)
+                        // Ferns in the sheltered rock clefts.
+                        plantSingle(grid, face, u, v, sl, treeRng.chance(0.6) ? FERN : FERN_RED);
+                    else if (roll < 0.1)
                         // Moss on the lower, damper rock; pale lichen takes over with height.
                         plantSingle(
                             grid,

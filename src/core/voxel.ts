@@ -32,7 +32,7 @@ export const SHELL_DEPTH = 96;
 //   face 3 -Y: n=(0,-1,0), tu=(1,0,0), tv=(0,0,1)
 //   face 4 +Z: n=(0,0,1), tu=(0,1,0), tv=(-1,0,0)
 //   face 5 -Z: n=(0,0,-1), tu=(0,1,0), tv=(1,0,0)
-const _FN = [
+export const _FN = [
     [1, 0, 0],
     [-1, 0, 0],
     [0, 1, 0],
@@ -40,7 +40,7 @@ const _FN = [
     [0, 0, 1],
     [0, 0, -1],
 ];
-const _FTU = [
+export const _FTU = [
     [0, 1, 0],
     [0, 1, 0],
     [1, 0, 0],
@@ -48,7 +48,7 @@ const _FTU = [
     [0, 1, 0],
     [0, 1, 0],
 ];
-const _FTV = [
+export const _FTV = [
     [0, 0, 1],
     [0, 0, -1],
     [0, 0, -1],
@@ -2450,30 +2450,10 @@ export function createFarField(grid: SphereVoxelGrid, nearMaterial: THREE.MeshLa
                 }
     }
 
-    const FN = [
-        [1, 0, 0],
-        [-1, 0, 0],
-        [0, 1, 0],
-        [0, -1, 0],
-        [0, 0, 1],
-        [0, 0, -1],
-    ];
-    const FU = [
-        [0, 1, 0],
-        [0, 1, 0],
-        [1, 0, 0],
-        [1, 0, 0],
-        [0, 1, 0],
-        [0, 1, 0],
-    ];
-    const FV = [
-        [0, 0, 1],
-        [0, 0, -1],
-        [0, 0, -1],
-        [0, 0, 1],
-        [-1, 0, 0],
-        [1, 0, 0],
-    ];
+    // Face basis: the module-level tables (same six faces as basisFromCode).
+    const FN = _FN,
+        FU = _FTU,
+        FV = _FTV;
     const corner = (f: number, u: number, v: number, r: number): [number, number, number] => {
         const pu = (2 * u) / FACE_RES - 1,
             pv = (2 * v) / FACE_RES - 1;

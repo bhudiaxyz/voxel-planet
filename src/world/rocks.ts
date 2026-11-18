@@ -14,7 +14,7 @@ import * as THREE from 'three';
 import { BLOCKS } from '../core/palette';
 import { makeRng } from '../core/rng';
 import { QuadBuffer, _up, box, boxYawed, root } from './veg-geom';
-import { Zone, weightedPick, zoneOf } from './trees';
+import { SNOW, Zone, weightedPick, zoneOf } from './trees';
 
 type Rng = ReturnType<typeof makeRng>;
 
@@ -22,9 +22,9 @@ const BOULDER_P = 0.0045; // per grass column; ×3 on bare stone
 const PEBBLE_P = 0.008;
 /**
  * Boulder/pebble multiplier by layers above sea: ~0.35 on the coast, 1 at midland,
- * then a steeper climb above the highland line (rise 15) toward 5 on the peaks.
+ * then a steep climb above the highland line (rise 15) to 7 on the peaks.
  */
-export const rockAt = (rise: number) => Math.min(5, Math.max(0.35, 0.1 + rise * 0.11 + Math.max(0, rise - 15) * 0.25));
+export const rockAt = (rise: number) => Math.min(7, Math.max(0.35, 0.1 + rise * 0.11 + Math.max(0, rise - 15) * 0.4));
 
 type Shape = 'cobbles' | 'rounded' | 'stacked' | 'scree' | 'slab' | 'erratic' | 'tor' | 'shards' | 'standing';
 /** Shape weights per zone. */
@@ -72,7 +72,8 @@ const WEATHER: Record<Zone, { size: number; moss: number; pale: number }> = {
     treeline: { size: 1.1, moss: 0.03, pale: 0.3 },
 };
 
-export const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id, BLOCKS.STONE_WARM.id]);
+/** Bare ground that takes rocks but no grass: stone, and snowfields above the snowline. */
+export const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id, BLOCKS.STONE_WARM.id, SNOW.id]);
 const _stone = new THREE.Color();
 const WHITE = new THREE.Color(1, 1, 1);
 

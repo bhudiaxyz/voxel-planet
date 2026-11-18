@@ -214,7 +214,7 @@ Seed handling (`main.ts`): `?seed=<word>` overrides the default `currentSeedWord
 2. `base = noise.fbm(warped * 1.6, 5 octaves, lacunarity 2, gain 0.5) * 1.1`
 3. `hills = noise.get(warped * 1.6*3.1 + 9) * 0.06`
 4. A mountain mask multiplies a ridged term `ridged^2` (`ridged = max(0, 1 - |2*noise2.fbm(warped*1.6*1.5)|)`). The mask is `mm = max(mm0, mm1 x MOUNTAIN_SCATTER)`: `mm0 = smoothstep(-0.1, 0.35, noise2(warped * 1.6*0.6 + 7))` gives the few large ranges; `mm1 = smoothstep(MOUNTAIN_EDGE, MOUNTAIN_EDGE + 0.3, noise(warped * 1.6*1.7 + offset)) x smoothstep(0, 0.12, base)` is a finer mask that scatters smaller ranges between them, on land only (so it raises inland massifs, not new islands). `MOUNTAIN_EDGE = 0.05` (lower = more ranges), `MOUNTAIN_SCATTER = 0.85` (strength relative to the main ranges). Over seeds 1337 and 42 this took separate ranges (15+ layers above sea, at least 8 sampled columns) from about 44 to about 70, and mountain land from 17-20% to 22-27%, with peaks unchanged at 36-37.
-5. `e = base + hills + 0.8*mm*ridged^2*0.8 - 0.05`; negative values are halved (`e < 0 ? e*0.5 : e`) so the sea floor is shallower than the land is high.
+5. **Ridges.** `ridged` is sampled at `RIDGE_FREQ = 2.2` x the base frequency (was 1.5), so each range carries more, narrower ridges. `crest = ridged ^ RIDGE_SHARP` (`2.4`, was 2) narrows them into knife-edge crests with steep flanks; a finer ridged octave `spur` adds saw-tooth peaks along them (`x (1 + RIDGE_SPUR x spur^2)`, `RIDGE_SPUR = 0.3`); a ravine noise cuts gullies down the faces (`- RIDGE_RAVINE x ravine x ridged`, `RIDGE_RAVINE = 0.15`). `peak` is that sum, and `e = base + hills + 0.8 x mm x max(0, peak) x RIDGE_GAIN - 0.05` with `RIDGE_GAIN = 0.8`. Negative values are halved (`e < 0 ? e*0.5 : e`) so the sea floor is shallower than the land is high. Measured over seeds 1337 and 42 against the old rounded ridges: distinct summits rose from about 700 to about 1,150, the mean height step between neighbouring mountain columns from 1.1-1.2 to 1.6-1.7 layers, mountain columns with a cliff (a drop of 4+ layers) beside them from ~4% to 8-9%, and the highest peaks from 36-37 to 42-44 layers above sea. A first, sharper setting (`RIDGE_SHARP = 3.2`, `RIDGE_SPUR = 0.55`, `RIDGE_RAVINE = 0.35`) was about 20% steeper still (mean step 2.0-2.1) and was eased back; `RIDGE_SHARP` and the two detail terms are the steepness controls, while `RIDGE_GAIN` mostly sets peak height and mountain coverage.
 
 ### Terracing
 
@@ -233,8 +233,8 @@ For every column, layers `0..surfaceLayer`:
 | Condition | Block |
 | --- | --- |
 | Not land | Top layer `SAND`, below it `STONE` |
-| Land, top layer | Desert: `SAND`. Otherwise `selectSurface` |
-| Land, top 2 layers below surface | Desert: `SAND` ("dunes are sand to rock"); otherwise `SOIL` |
+| Land, top layer | Desert: `SAND`. Above the snowline (`isSnow`): `SNOW`. Otherwise `selectSurface` |
+| Land, top 2 layers below surface | Desert: `SAND` ("dunes are sand to rock"); under snow: rock (`selectRock`), so snowy cliffs show stone; otherwise `SOIL` |
 | Land, deeper | `selectRock`: 3D noise at `dir*12` offset by `layer*0.3`; `> 0.2` -> `STONE_PALE`, else `STONE` |
 
 `selectSurface` uses a temperature proxy `temp = 1 - 1.1*dir.y^2 - 1.2*max(e, 0)` (colder near the poles and at altitude): `temp > 0.6` -> `GRASS`; `> -0.05` -> `GRASS_LIGHT`; else `STONE_PALE`. The light-grass cutoff was lowered from 0.2 to -0.05 to grow grassland by ~31% (46.7% to 61.4% of land, over three seeds) at the expense of cold pale rock.
@@ -243,6 +243,12 @@ For every column, layers `0..surfaceLayer`:
 
 `isDesert(noise, dir, e, surfaceLayer)`: same `temp` formula; false if `surfaceLayer > SEA_LAYER + DESERT_MAX_RISE`; otherwise `temp + noise(dir*9 + 40)*0.08 > DESERT_TEMP`. Constants: `DESERT_TEMP = 0.815`, `DESERT_MAX_RISE = 6`. `DESERT_TEMP` was raised from 0.8 to trim sand cover by ~10% (10.2% to 9.2% of land, measured over three seeds) in favour of grassland. The noise term roughens the boundary so dunes meet grass in tongues. Desert columns are computed only for land.
 
+### Snowline (`isSnow`)
+
+Land at or above the snowline gets a `SNOW` top. The line is `SNOWLINE = 29` layers above sea at the equator, lowered by `SNOWLINE_POLAR = 10 x dir.y^2` toward the poles, with +/-4 layers of noise (`dir x 14`) so snowfields run down the gullies in tongues. On seeds 1337 and 42 snow covers 4-7% of land, all of it on mountains (about a fifth of mountain land): the upper slopes and peaks.
+
+`SNOW` (registered in `trees.ts`) has fixed colours, so it stays snow in every theme, and is not one flat colour. Its top is drawn by the terrain texture (`patTerrain`: lumpy drifts, soft relief, fine grain) between a white `top` and a cool blue-grey `topTint` for drift shadows. Its sides are frost-dusted grey rock, and `fringe: 0.35` drapes a ragged white lip down the top third of every exposed side, so snowy cliffs read as rock with snow on top.
+
 ### Scatter pass
 
 After the fill, `carveFreshWater` (section 4a) and `findSpawn` (which rejects water tops), a second pass visits every column and rolls `treeRng()` once. The top block of the column decides the branch (only above `SEA_LAYER + 1`):
@@ -250,7 +256,8 @@ After the fill, `carveFreshWater` (section 4a) and `findSpawn` (which rejects wa
 | Top block | Roll thresholds (cumulative on the single roll) |
 | --- | --- |
 | Grass (`GRASS`, `GRASS_LIGHT`, `GRASS_DEEP`) | Cumulative bands set by the zone: `treeP x grove` zone tree; then `DEAD_TRUNK_P` dead trunk (only at rise `>= DEAD_TRUNK_MIN_RISE (3)`); then `GROUND[zone].bush x (1 + EDGE_BUSH x edge)` bush from the zone's `bushes`; then `.fern` fern (60% `FERN`); then `.tall x (1 + EDGE_TALL x edge)` plant from the zone's `talls` |
-| Stone (`STONE`, `STONE_PALE`) | `onRockP` = 0.01 in highland, 0.005 in treeline, else 0.0025: conifer tree (zone clamped to highland/treeline); next `DEAD_TRUNK_P*1.5` dead trunk; `< 0.018` scrub bush (`SCRUB` 70%, `BUSH_MAUVE`); `< 0.055` moss or lichen: moss share 70% low down, 40% in the highland, 15% at the treeline (pale lichen takes over with height) |
+| Stone (`STONE`, `STONE_PALE`) | `onRockP` = 0.005 in highland, 0.0025 in treeline and lower: conifer tree (zone clamped to highland/treeline); next `DEAD_TRUNK_P*1.5` dead trunk; `< 0.018` scrub bush; `< 0.03` fern in the rock clefts (60% `FERN`); `< 0.1` moss or lichen: moss share 70% low down, 40% in the highland, 15% at the treeline (pale lichen takes over with height) |
+| Snow (`SNOW`) | Nothing grows. The vegetation layer treats snow as bare stone (`STONE_IDS` in `rocks.ts`), so snowfields get boulders and pebbles only |
 | Sand (desert) | `< CACTUS_P (0.006)` cactus; next 0.012 `SCRUB_DRY` plant |
 | Waterline (`SEA_LAYER-1 <= top <= SEA_LAYER+2`, not a water top) | `< 0.08` `REED`; `< 0.13` `FERN` plant |
 
@@ -265,8 +272,10 @@ The thresholds are cumulative on one roll (a running total `t` adds each band), 
 | coast | 0.015 | 0.03 | 0.03 | cream, rose | `GRASS_TALL` |
 | lowland | 0.035 | 0.03 | 0.02 | `BUSH_PALETTE` | `GRASS_TALL`, `SHRUB_TALL` |
 | midland | 0.03 | 0.015 | 0.02 | mauve, cream, scrub | `SHRUB_TALL` |
-| highland | 0.02 | 0.006 | 0.012 | scrub (×2), mauve | `SHRUB_TALL`, `MOSS_THICK` |
-| treeline | 0.012 | 0 | 0.02 | scrub | `MOSS_THICK`, `LICHEN_PALE` |
+| highland | 0.016 | 0.03 | 0.06 | scrub (×2), mauve | `MOSS_THICK` (×2), `SHRUB_TALL` |
+| treeline | 0.01 | 0.02 | 0.08 | scrub | `MOSS_THICK` (×2), `LICHEN_PALE` |
+
+The high zones trade trees for ground cover: moss, ferns and lichen among the rocks, with tree density halved (see Altitude-zoned trees).
 
 Tree placement writes voxels via local `set()` helpers that refuse cells outside `[1, FACE_RES-2]` in `u/v`, above `SHELL_DEPTH`, or already occupied.
 
@@ -293,17 +302,17 @@ Block `DEADWOOD` (`PATTERN.BARK`, `isTrunk`), weathered grey-brown. 20% are stum
 
 ### Altitude-zoned trees
 
-`rise = surfaceLayer - SEA_LAYER` (plus +/-4 layers of `zoneNoise` jitter in the scatter pass, so zone edges do not follow contours). `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=14` midland, `<=21` highland, else treeline. The midland and highland bands were widened from 11 and 15 when terrain relief was added. On seed 1337 land splits coast 20%, lowland 26%, midland 32%, highland 14%, treeline 8%.
+`rise = surfaceLayer - SEA_LAYER` (plus +/-4 layers of `zoneNoise` jitter in the scatter pass, so zone edges do not follow contours). `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=14` midland, `<=21` highland, else treeline. The midland and highland bands were widened from 11 and 15 when terrain relief was added. On seed 1337 land splits coast 19%, lowland 26%, midland 31%, highland 14%, treeline 10%.
 
 | Zone | rise | `treeP` | Species mix (weights) | Size range |
 | --- | --- | --- | --- | --- |
 | coast | 2-3 | 0.011 | palm 5, broadleaf 3, mangrove 2, willow 1, dragon 1 | 0.35-0.85 |
 | lowland | 4-7 | 0.022 | broadleaf 6, emergent 3, oak 3, cherry 2, acacia 1, baobab 1, willow 1, palm 1, jacaranda 1, maple 1 | 0.2-1.0 |
 | midland | 8-14 | 0.02 | broadleaf 4, oak 4, birch 3, fir 3, maple 3, pine 2, aspen 2, cypress 1, spruce 1, cherry 1 | 0.2-0.95 |
-| highland | 15-21 | 0.018 | fir 5, spruce 4, pine 3, birch 2, redwood 2, aspen 2, juniper 1 | 0.3-1.0 |
-| treeline | 22+ | 0.006 | krummholz 6, juniper 3, spruce 1 | 0.15-0.5 |
+| highland | 15-21 | 0.009 | fir 5, spruce 4, pine 3, birch 2, redwood 2, aspen 2, juniper 1 | 0.3-1.0 |
+| treeline | 22+ | 0.003 | krummholz 6, juniper 3, spruce 1 | 0.15-0.5 |
 
-The three forest zones (lowland, midland, highland) carry the higher `treeP` so they read as continuous woodland; each mix leans toward the trees that close a canopy (broadleaf and oak low, mixed deciduous and conifer mid, conifers high). The `stand` field still makes one species of the mix dominate locally (x4 weight), and the wet map pulls willow, mangrove and cypress to the banks and acacia and baobab away from them.
+Lowland and midland carry the higher `treeP` so they read as continuous woodland; highland and treeline were halved so high ground opens out into rock, moss and fern; each mix leans toward the trees that close a canopy (broadleaf and oak low, mixed deciduous and conifer mid, conifers high). The `stand` field still makes one species of the mix dominate locally (x4 weight), and the wet map pulls willow, mangrove and cypress to the banks and acacia and baobab away from them.
 
 `plantZoneTree` picks a species with `weightedPick` and a continuous `size` from the zone range, then builds:
 
@@ -339,13 +348,13 @@ Foliage blocks `LEAF_PINK, LEAF_BLUSH, LEAF_LILAC, LEAF_CREAM, LEAF_MINT, LEAF_R
 `carveFreshWater(grid, seaLayer, seed)` runs after the column fill and before the scatter pass. It is voxel-world's river carve adapted to the sphere: every neighbour lookup goes through `step(f, u, v, du, dv)`, which crosses face seams with `crossFaceUV`, so a river or lake straddling a seam carves on both sides.
 
 1. **Channels.** `half: Map<columnKey, weight>` records each channel column with a depth weight (1 at the centre, ~0 at the rim), max-merged so the wider reach wins where streams join.
-2. **Rivers and streams** (`RIVERS = 180`). Each source is the highest of four random columns on one face, and must be grass at least 5 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - preferred heading x inertia + jitter x 0.3`. Every river draws its own character so no two look alike: `maxW` (25% stay streams at 1.2-2 columns, the rest widen to 2.4-4.6), `grow` (0.015-0.035 columns of width per step), `inertia` (0.45-0.8), and a meander: the preferred heading is the current one rotated by `swing x sin(len x bendF + phase)` (`swing` 0.7-1.5 rad, wavelength 2pi x 10-26 columns), so traces swing in S-bends. Width grows downstream from 0.6 to `maxW`, wobbling +/-20% along the length. A trace (at most 1600 steps) ends at the sea; after `flatMax` (8-16) consecutive uphill-everywhere steps (a pit); or when it has no unvisited neighbour (boxed in by its own loops). The last two become lake seeds. On seed 1337 about two thirds of rivers reach the sea and the median length is about 80-95 columns: rivers are short because the land between ridge and coast is short. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
+2. **Rivers and streams** (`RIVERS = 180`). Each source is the highest of four random columns on one face, and must be grass or snow (snowmelt) at least 5 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - preferred heading x inertia + jitter x 0.3`. Every river draws its own character so no two look alike: `maxW` (25% stay streams at 1.2-2 columns, the rest widen to 2.4-4.6), `grow` (0.015-0.035 columns of width per step), `inertia` (0.45-0.8), and a meander: the preferred heading is the current one rotated by `swing x sin(len x bendF + phase)` (`swing` 0.7-1.5 rad, wavelength 2pi x 10-26 columns), so traces swing in S-bends. Width grows downstream from 0.6 to `maxW`, wobbling +/-20% along the length. A trace (at most 1600 steps) ends at the sea; after `flatMax` (8-16) consecutive uphill-everywhere steps (a pit); or when it has no unvisited neighbour (boxed in by its own loops). The last two become lake seeds. On seed 1337 about two thirds of rivers reach the sea and the median length is about 80-95 columns: rivers are short because the land between ridge and coast is short. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
 3. **Lakes and ponds** (`LAKES = 650`). Seeds are spread round-robin over the six faces, on gentle grass ground (no point 3 columns away differs by more than 2 layers), at least `MIN_GAP = 12` columns from another seed on that face. 60% are ponds (radius 1.6-3.2 plus one extra disc); the rest are lakes (radius 4-8, four overlapping discs for a lumpy outline). River pits add lakes too.
 4. **Water surface: the "never above ground" rule.** For each channel column above the sea, the surface is `min(own height, lowest dry ground within BANK_R = 3) - 1`. Every dry neighbour counts as a bank, low beaches included. A relaxation then runs to a fixed point: no surface may exceed a neighbour's surface + 1 or a dry 4-neighbour's ground, and a neighbour whose water is the sea (surface at or below sea level, or a channel column already in the sea) caps it at sea level. That last rule is what stops a one-layer water ledge hanging over open sea floor at river mouths.
 5. **Carve and fill.** The bed is cut to `surface - depth` (depth 1 at the rim, up to `RIVER_DEPTH = 3` at the centre), clearing everything above it including trees, and laid with `SAND`. `RIVER_WATER` fills from `max(bed + 1, sea + 1)` up to the surface; at or below sea level the sea sphere is the water.
 6. **Puddle cleanup.** Connected water bodies under `MIN_BODY = 4` columns (strays the relaxation leaves) are drained; their hollow stays as a dip. The flood fill always completes the whole body, so part of a large lake is never mistaken for a puddle.
 
-`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~34k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
+`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~38k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
 
 **Rendering.** The mesher emits a water block's faces only where they meet air: the surface, plus side faces where a reach steps down a layer or ends. Faces against other water or solid ground, and bottoms, are skipped, so a channel never draws stacked internal walls and a step-down never reads as a floating sheet. Water quads carry `patternPacked = 16`; the fragment shader treats `vDataV.y > 15.5` as fresh water (no terrain or foliage detail; drifting three-plane ripples toward the block tint, timed by `uWindTime`), and the vertex sway test is `8 <= aData.y < 15.5`, so water never sways.
 
@@ -546,7 +555,7 @@ Colour: tip = block `topTint ?? top`; base = `side` lerped 45% toward the tip (t
 
 Rocks are drawn into the same vegetation patch meshes but authored in `rocks.ts`. `scatterBoulder` runs on the ground-detail stream (`drng`) and `scatterPebble` on the grass stream, so neither moves the grass layout. Both share their drawing primitives with `vegetation.ts` through `veg-geom.ts`, and pick the zone with `zoneOf(rise)` from `trees.ts`, so rocks and trees change at the same heights.
 
-**Density.** `rockAt(rise) = clamp(0.1 + 0.11 x rise + 0.25 x max(0, rise - 15), 0.35, 5)` multiplies both: about 0.35x on the coast, 1x in the midlands, then a steeper climb above the highland line up to 5x on the peaks.
+**Density.** `rockAt(rise) = clamp(0.1 + 0.11 x rise + 0.4 x max(0, rise - 15), 0.35, 7)` multiplies both: about 0.35x on the coast, 1x in the midlands, then a steep climb above the highland line up to 7x on the peaks. Snowfields are in `STONE_IDS`, so they get rocks (x3, as bare stone) and nothing else.
 
 **Shapes per zone** (`SHAPES`, one weighted pick per rock group):
 
@@ -987,6 +996,8 @@ Title that fades after ~3.2 s, a time-of-day chip (`HH:MM`, sun/moon icon switch
 `buildSphereLandmarks(grid, rng)` runs after terrain and returns `LandmarkRecord[]` (`kind`, unit `dir`, `name`, optional `sky`).
 
 **Monolith ring** (after planet-explorer's): nine slabs on a radius-13 circle, each 2 wide and 1 deep with its long side along the ring's tangent (so its face looks at the centre), 8-12 high, sunk one layer into the ground, half of them leaning one block at the top, capped in the ring's accent colour, with a glowing altar at the centre. No lintels.
+
+**Sky islands vs mountains.** Island caps sit at layers `SKY_MIN_L = 46` to `SKY_MAX_L = 78`, and the tallest peaks now reach about layer 55. So an island spot is skipped if the ground anywhere within 10 columns climbs above layer `SKY_GROUND_MAX = 28`; otherwise a mountain could reach into the island. `check-islands.ts` asserts the ground under every island stays below it.
 
 **Kinds (11):** twisted spire, obelisk, monolith ring, tombstone field, floating biosphere, ancient well, ruined arch, stepped ziggurat, ruined watchtower, crystal grove, old aqueduct.
 

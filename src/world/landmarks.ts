@@ -142,7 +142,9 @@ const MIN_SEP = 20; // minimum u/v distance between two landmarks on same face
  * with glowing drips and a tree or two; sizes and heights vary so the sky has
  * depth. Kept below SHELL_DEPTH (the grid's ceiling) including the trees. */
 const SKY_ISLANDS = 10;
-const SKY_MIN_L = 46; // above the highest peaks (~layer 35)
+const SKY_MIN_L = 46; // island caps start here; islands stay off high ground (SKY_GROUND_MAX)
+/** Skip island spots where the ground below (within 10 columns) climbs above this layer, so mountains never reach into one. */
+const SKY_GROUND_MAX = 28;
 const SKY_MAX_L = 78; // leaves room for the cap + trees under SHELL_DEPTH (96)
 
 // ── Site picker & entry point ────────────────────────────────────────────────
@@ -740,6 +742,14 @@ export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<type
         const u = 14 + Math.floor(rng() * (FACE_RES - 28));
         const v = 14 + Math.floor(rng() * (FACE_RES - 28));
         if (sky.some(([f, pu, pv]) => f === face && Math.hypot(u - pu, v - pv) < 60)) continue;
+        let high = false;
+        for (let dv = -10; dv <= 10 && !high; dv += 2)
+            for (let du = -10; du <= 10; du += 2)
+                if (grid.groundColumnTop(face, u + du, v + dv) > SKY_GROUND_MAX) {
+                    high = true;
+                    break;
+                }
+        if (high) continue;
         skyIsland(grid, face, u, v, makeRng((rng() * 0xffffffff) | 0));
         sky.push([face, u, v]);
         n++;
