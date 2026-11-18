@@ -10,16 +10,16 @@ import type { DayNight } from '../render/day-night';
 const CSS = `
 #hud {
   position:fixed; inset:0; z-index:20; pointer-events:none;
-  font-family:Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family:var(--font-body);
   color:var(--ink);
-  --hud-shadow:0 8px 24px rgba(0,0,0,.42);
+  --hud-shadow:0 8px 24px rgba(0,0,0,.4);
 }
 #hud .place {
   position:absolute; left:50%; top:max(24px, env(safe-area-inset-top));
   transform:translate(-50%, -6px); opacity:0;
-  font-size:12px; font-weight:700; letter-spacing:.22em;
-  text-transform:uppercase; color:var(--gold);
-  text-shadow:0 0 14px rgba(201,173,115,.4);
+  font:300 18px/1 var(--font-display); letter-spacing:.16em; text-transform:uppercase;
+  color:var(--cream);
+  text-shadow:0 2px 14px rgba(0,0,0,.6);
   transition:opacity .55s ease, transform .55s ease;
 }
 #hud .place.show { opacity:.9; transform:translate(-50%, 0); }
@@ -32,16 +32,16 @@ const CSS = `
 #hud .shortcuts.show { opacity:.82; transform:none; }
 #hud .shortcut {
   display:flex; align-items:center; gap:7px; height:30px; padding:0 10px 0 7px;
-  border:1px solid var(--line); border-radius:8px;
-  background:rgba(20,19,24,.72); backdrop-filter:blur(14px) saturate(1.08);
-  box-shadow:var(--hud-shadow); font-size:10px; font-weight:700;
-  letter-spacing:.11em; text-transform:uppercase; color:var(--ink-soft);
+  border:1px solid var(--line); border-radius:var(--radius-sm);
+  background:var(--panel); backdrop-filter:blur(14px) saturate(1.08);
+  box-shadow:var(--hud-shadow); font-size:10px; font-weight:600;
+  letter-spacing:.12em; text-transform:uppercase; color:var(--ink-soft);
 }
 #hud kbd {
   min-width:18px; height:18px; padding:0 4px; display:grid; place-items:center;
-  border-radius:4px; background:rgba(201,173,115,.18); color:var(--gold);
-  font:700 10px/1 Inter, ui-sans-serif, system-ui, sans-serif;
-  box-shadow:0 1px 0 rgba(0,0,0,.3);
+  border-radius:var(--radius-sm); background:var(--tint); color:var(--accent);
+  font:700 10px/1 var(--font-body);
+  box-shadow:none; border:1px solid var(--line);
 }
 #hud .status-bar {
   position:absolute; left:max(18px, env(safe-area-inset-left));
@@ -50,10 +50,10 @@ const CSS = `
 }
 #hud .status-chip {
   display:flex; align-items:center; gap:6px; height:28px; padding:0 10px 0 8px;
-  border:1px solid var(--line); border-radius:8px;
-  background:rgba(20,19,24,.72); backdrop-filter:blur(14px) saturate(1.08);
-  box-shadow:var(--hud-shadow); font-size:10px; font-weight:700;
-  letter-spacing:.09em; font-variant-numeric:tabular-nums; opacity:.82;
+  border:1px solid var(--line); border-radius:var(--radius-sm);
+  background:var(--panel); backdrop-filter:blur(14px) saturate(1.08);
+  box-shadow:var(--hud-shadow); font-size:11px; font-weight:600;
+  letter-spacing:.08em; font-variant-numeric:tabular-nums; opacity:.82;
   color:var(--ink-soft);
 }
 #hud .settings-btn {
@@ -61,15 +61,15 @@ const CSS = `
   right:max(14px, env(safe-area-inset-right));
   pointer-events:none; width:38px; height:38px;
   opacity:0; transition:opacity .4s ease, background .14s ease, border-color .14s ease, color .14s ease;
-  border:1px solid var(--line); border-radius:10px;
-  background:rgba(20,19,24,.72); backdrop-filter:blur(14px) saturate(1.08);
+  border:1px solid var(--line); border-radius:var(--radius-sm);
+  background:var(--panel); backdrop-filter:blur(14px) saturate(1.08);
   box-shadow:var(--hud-shadow); color:var(--ink-soft);
   font-size:18px; cursor:pointer; display:grid; place-items:center;
   -webkit-tap-highlight-color:transparent;
 }
 #hud .settings-btn.visible { opacity:.82; pointer-events:auto; }
 #hud .settings-btn:hover, #hud .settings-btn:focus-visible {
-  outline:none; background:rgba(42,39,48,.88); border-color:var(--gold); color:var(--gold);
+  outline:none; background:var(--panel-hover); border-color:var(--accent); color:var(--accent);
 }
 @media (max-width:640px), (pointer:coarse) {
   #hud .shortcuts { display:none; }

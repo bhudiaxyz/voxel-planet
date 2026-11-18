@@ -6,55 +6,55 @@ const CSS = `
 #pause {
   position:fixed; inset:0; z-index:45; display:none;
   align-items:center; justify-content:center;
-  background:rgba(7,7,10,.55); backdrop-filter:blur(10px) saturate(1.04);
-  font-family:var(--font-body,Inter,ui-sans-serif,system-ui,sans-serif); color:var(--ink);
+  background:rgba(5,11,22,.55); backdrop-filter:blur(10px) saturate(1.04);
+  font-family:var(--font-body); color:var(--ink);
 }
 #pause.open { display:flex; }
 #pause .panel {
   width:min(360px, calc(100vw - 32px)); padding:18px 20px 20px;
-  border-radius:14px; background:rgba(20,19,24,.92);
+  border-radius:var(--radius); background:var(--panel);
   border:1px solid var(--line);
   backdrop-filter:blur(18px) saturate(1.12);
-  box-shadow:0 24px 64px rgba(0,0,0,.55);
+  box-shadow:var(--shadow);
 }
-#pause h2 { margin:0 0 18px; font-size:15px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--gold); }
+#pause h2 { margin:0 0 18px; padding-bottom:12px; border-bottom:1px solid var(--line); font:600 20px/1 var(--font-display); letter-spacing:-.01em; color:var(--accent); }
 #pause nav { display:grid; gap:8px; }
 #pause button {
   width:100%; height:42px; padding:0 14px; display:flex; align-items:center;
-  justify-content:space-between; border:1px solid rgba(201,173,115,.18);
-  border-radius:8px; background:rgba(30,28,35,.72); color:var(--ink-soft);
-  font:600 12px/1 var(--font-body,Inter,ui-sans-serif,system-ui,sans-serif);
-  letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+  justify-content:space-between; border:1px solid var(--line);
+  border-radius:var(--radius-sm); background:var(--panel-raised); color:var(--ink-soft);
+  font:600 11px/1 var(--font-body);
+  letter-spacing:.14em; text-transform:uppercase; cursor:pointer;
   transition:background .14s ease, border-color .14s ease;
 }
 #pause button:hover, #pause button:focus-visible {
-  outline:none; background:rgba(42,39,48,.88); border-color:var(--gold);
+  outline:none; background:var(--panel-hover); border-color:var(--accent);
 }
-#pause #pause-resume { background:rgba(201,173,115,.12); border-color:var(--line); color:var(--gold); }
+#pause #pause-resume { background:var(--tint); border-color:var(--line-strong); color:var(--accent-bright); }
 #pause #pause-resume:hover, #pause #pause-resume:focus-visible {
-  background:rgba(201,173,115,.22); border-color:var(--gold);
+  background:var(--tint-strong); border-color:var(--accent);
 }
 #pause kbd {
   min-width:22px; height:20px; padding:0 5px; display:inline-grid; place-items:center;
-  border-radius:5px; background:rgba(201,173,115,.12); color:var(--gold);
-  font:700 9px/1 var(--font-body,Inter,ui-sans-serif,system-ui,sans-serif);
+  border-radius:5px; background:var(--tint); color:var(--accent);
+  font:700 9px/1 var(--font-body);
   text-transform:uppercase; white-space:nowrap;
 }
 #pause .controls {
   margin-top:18px; padding-top:16px;
-  border-top:1px solid rgba(201,173,115,.12);
+  border-top:1px solid var(--tint);
 }
 #pause .controls h3 {
-  margin:0 0 10px; font-size:10px; font-weight:700;
-  letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint,rgba(232,220,193,.4));
+  margin:0 0 10px; font-size:10px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint);
 }
 #pause .bindings {
   display:grid; grid-template-columns:1fr 1fr; gap:5px 10px;
 }
 #pause .binding {
   display:flex; align-items:center; gap:6px;
-  font-size:11px; color:var(--ink-soft,rgba(232,220,193,.62));
-  letter-spacing:.04em;
+  font-size:11px; color:var(--ink-soft);
+  letter-spacing:.02em;
 }
 #pause .binding kbd { flex-shrink:0; }
 `;

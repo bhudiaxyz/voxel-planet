@@ -30,15 +30,15 @@ const STYLE = `
 }
 #touch-btns button {
   width: 60px; height: 60px; border-radius: 50%;
-  border: 1.5px solid rgba(192,88,40,0.55);
-  background: rgba(7,7,10,0.55); color: #e8dcc1;
+  border: 1.5px solid var(--line-strong);
+  background: var(--panel); color: var(--ink);
   font-size: 22px; line-height: 1; cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   user-select: none; touch-action: manipulation;
   transition: opacity 0.2s;
 }
-#touch-btns button:active { background: rgba(192,88,40,0.30); }
-#btn-edges.active { border-color: rgba(192,88,40,1); background: rgba(192,88,40,0.25); }
+#touch-btns button:active { background: var(--tint-strong); }
+#btn-edges.active { border-color: var(--accent); background: var(--tint-strong); }
 #btn-land, #btn-roll-left, #btn-roll-right { display: none; }
 `;
 
@@ -129,7 +129,7 @@ export function createTouchControls(fpCam: FPCamera, dom: HTMLElement): TouchCon
         zone: joyZone,
         mode: 'dynamic',
         restOpacity: 0.55,
-        color: 'rgba(192,88,40,0.8)',
+        color: 'rgba(201,164,92,0.8)',
         size: 110,
     });
     manager.on('move', (evt) => {

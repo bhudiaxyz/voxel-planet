@@ -24,27 +24,48 @@ const LABEL: Record<LandmarkRecord['kind'], string> = {
     aqueduct: 'Aqueducts',
 };
 
+/* Same card language as the pause and settings panels: --panel glass, hairline
+ * rim, display-font title over a rule, uppercase section labels, menu-button rows. */
 const css = `
-#locs { position: fixed; top: 78px; left: 10px; z-index: 19; font: 12px/1.25 var(--font-body);
-  color: var(--ink); background: rgba(14, 11, 18, 0.72); border: 1px solid var(--line);
-  border-radius: 7px; backdrop-filter: blur(6px); user-select: none; }
-#locs[open] { width: 200px; max-height: calc(100dvh - 160px); overflow-y: auto; }
-#locs > summary { cursor: pointer; padding: 4px 8px; list-style: none; font-size: 14px; }
+#locs { position: fixed; top: 78px; left: max(14px, env(safe-area-inset-left)); z-index: 19;
+  font: 500 12px/1.25 var(--font-body); color: var(--ink);
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  backdrop-filter: blur(18px) saturate(1.12); box-shadow: var(--shadow); user-select: none; }
+#locs[open] { width: 248px; max-height: calc(100dvh - 160px); overflow-y: auto; padding: 0 0 8px; }
+/* Closed: a 38px square button, like the HUD's settings button. */
+#locs > summary { cursor: pointer; list-style: none; width: 38px; height: 38px;
+  display: grid; place-items: center; font-size: 17px; color: var(--ink-soft); }
+#locs > summary:hover { color: var(--accent); }
+#locs[open] > summary { width: auto; height: auto; display: flex; align-items: center; gap: 8px;
+  margin: 0 14px 6px; padding: 14px 0 12px; border-bottom: 1px solid var(--line);
+  font: 600 20px/1 var(--font-display); letter-spacing: -.01em; color: var(--cream); }
+#locs[open] > summary::after { content: 'Locations'; }
+#locs[open] > summary::before { content: '×'; order: 2; margin-left: auto; font: 400 19px/1 var(--font-body);
+  color: var(--ink-faint); }
+#locs[open] > summary:hover::before { color: var(--accent); }
 #locs > summary::-webkit-details-marker, #locs details > summary::-webkit-details-marker { display: none; }
-#locs details details { border-top: 1px solid rgba(232,220,193,0.08); }
-#locs details details > summary { cursor: pointer; padding: 4px 8px; display: flex; align-items: center;
-  gap: 6px; list-style: none; white-space: nowrap; }
-#locs details details > summary::after { content: '▸'; margin-left: auto; opacity: 0.55; font-size: 10px; transition: transform 0.15s; }
-#locs details details[open] > summary::after { transform: rotate(90deg); }
-#locs .sw { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1.5px rgba(0,0,0,0.5); }
-#locs .n { opacity: 0.5; font-size: 10px; }
-#locs .chips { display: flex; flex-direction: column; gap: 1px; padding: 0 6px 5px 18px; }
-#locs button { height: 22px; padding: 0 6px; text-align: left; border: 1px solid transparent;
-  border-radius: 5px; background: none; color: var(--ink); font: 600 11px var(--font-body);
-  cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#locs button:hover, #locs button:focus-visible { background: rgba(223, 112, 56, 0.3); border-color: var(--gold-bright);
-  color: #fff; outline: none; }
-@media (pointer: coarse) { #locs button { height: 34px; } }
+/* Group rows: uppercase labels with a colour swatch and a count, chevron on the right. */
+#locs > details > summary { cursor: pointer; margin: 0 8px; padding: 8px 6px; display: flex;
+  align-items: center; gap: 8px; list-style: none; white-space: nowrap; border-radius: var(--radius-sm);
+  font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-soft); }
+#locs > details > summary:hover { background: var(--tint); color: var(--ink); }
+#locs > details > summary::after { content: '▸'; margin-left: auto; color: var(--ink-faint);
+  font-size: 10px; transition: transform 0.15s; }
+#locs > details[open] > summary::after { transform: rotate(90deg); color: var(--accent); }
+#locs > details[open] > summary { color: var(--accent-bright); }
+#locs .sw { width: 7px; height: 7px; border-radius: 50%; flex: none; box-shadow: 0 0 0 1px rgba(236,230,216,0.4); }
+#locs .n { min-width: 18px; height: 16px; padding: 0 4px; display: inline-grid; place-items: center;
+  border-radius: var(--radius-sm); background: var(--tint); color: var(--accent);
+  font-size: 9px; font-weight: 700; letter-spacing: 0; }
+/* Places: compact rows like the pause menu's buttons. */
+#locs .chips { display: flex; flex-direction: column; gap: 2px; padding: 2px 14px 8px 29px; }
+#locs button { height: 28px; padding: 0 9px; text-align: left; border: 1px solid transparent;
+  border-radius: var(--radius-sm); background: none; color: var(--ink-soft); font: 500 12px var(--font-body);
+  cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: background .14s ease, border-color .14s ease; }
+#locs button:hover, #locs button:focus-visible { background: var(--panel-hover); border-color: var(--accent);
+  color: var(--ink); outline: none; }
+@media (pointer: coarse) { #locs button { height: 36px; } }
 `;
 
 export function createLocations(records: LandmarkRecord[], go: (r: LandmarkRecord) => void) {

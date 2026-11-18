@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="en" style="background: #07070a">
+<html lang="en" style="background: #070e1a">
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <title>Voxel Planet</title>
         <link
             rel="icon"
-            href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1 15 5v6l-7 4-7-4V5z' fill='%23c05828'/><path d='M8 1 15 5 8 9 1 5z' fill='%23e8dcc1'/></svg>"
+            href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23070e1a'/><g fill='none' stroke='%23e3c27f' stroke-width='1.4' stroke-linejoin='round'><path d='M16 4 27 10v12l-11 6-11-6V10z'/><path d='M5 10l11 6 11-6M16 16v12' opacity='.55'/></g><path d='M16 11.5 20.5 14 16 16.5 11.5 14z' fill='%23e3c27f'/><path d='M11.5 14 16 16.5V21.5L11.5 19z' fill='%23c9a45c'/><path d='M20.5 14 16 16.5V21.5L20.5 19z' fill='%23a8853f'/></svg>"
         />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
         <link
-            href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&display=swap"
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
             rel="stylesheet"
         />
         <style>
@@ -19,12 +19,12 @@
             body,
             #app,
             canvas {
-                background: #07070a;
+                background: #070e1a;
             }
         </style>
         <link rel="stylesheet" href="/src/styles.css" />
     </head>
-    <body style="background: #07070a">
+    <body style="background: #070e1a">
         <div id="app"></div>
         <div id="boot">
             <div class="ls-bg"></div>
@@ -38,10 +38,18 @@
                         <div class="ls-face ls-face--left"></div>
                         <div class="ls-face ls-face--right"></div>
                     </div>
+                    <div class="ls-cube ls-cube--inner">
+                        <div class="ls-face ls-face--top"></div>
+                        <div class="ls-face ls-face--bottom"></div>
+                        <div class="ls-face ls-face--front"></div>
+                        <div class="ls-face ls-face--back"></div>
+                        <div class="ls-face ls-face--left"></div>
+                        <div class="ls-face ls-face--right"></div>
+                    </div>
                 </div>
                 <h1 class="ls-title">Voxel Planet</h1>
                 <div class="ls-rule"></div>
-                <p class="ls-sub" role="status" aria-live="polite">A procedural voxel planet</p>
+                <p class="ls-sub" role="status" aria-live="polite">An uncharted world</p>
                 <div class="ls-bar"><span></span></div>
                 <p class="ls-tip">Generating world&hellip;</p>
                 <p class="ls-controls"></p>

@@ -1,13 +1,44 @@
+/*
+ * Explorer's atlas theme. Every UI surface (splash, pause, settings, HUD,
+ * locations, map tooltip, touch buttons) reads these variables, so the look is
+ * changed here. Deep navy night sky, parchment ink, antique-brass accents,
+ * one clean sans (Inter) for titles and text.
+ */
 :root {
-    --bg: #07070a;
-    --ink: #e8dcc1;
-    --ink-soft: rgba(232, 220, 193, 0.62);
-    --ink-faint: rgba(232, 220, 193, 0.4);
-    --gold: #c05828;
-    --gold-bright: #df7038;
-    --line: rgba(192, 88, 40, 0.3);
-    --font-body: 'Outfit', system-ui, sans-serif;
-    --font-display: 'Outfit', system-ui, sans-serif;
+    --bg: #070e1a;
+    --sky-top: #03070f;
+    --sky-low: #0d1a2e;
+
+    /* Parchment ink on navy. */
+    --ink: #ece6d8;
+    --ink-soft: rgba(236, 230, 216, 0.78);
+    --ink-faint: rgba(236, 230, 216, 0.52);
+
+    /* Accents: antique brass (interactive), sea teal (on/positive), slate blue. */
+    --accent: #c9a45c;
+    --accent-bright: #e3c27f;
+    --accent-2: #5fa4a8;
+    --accent-3: #8fa7c9;
+    --cream: #f3ecdc;
+
+    /* Panels: dark navy cards with a fine brass hairline. */
+    --panel: rgba(7, 14, 26, 0.92);
+    --panel-raised: rgba(15, 26, 44, 0.8);
+    --panel-hover: rgba(24, 39, 62, 0.94);
+    --line: rgba(201, 164, 92, 0.26);
+    --line-strong: rgba(201, 164, 92, 0.6);
+    --tint: rgba(201, 164, 92, 0.1);
+    --tint-strong: rgba(201, 164, 92, 0.22);
+    --shadow: 0 18px 48px rgba(0, 0, 0, 0.5);
+    --radius: 6px;
+    --radius-sm: 4px;
+
+    --font-body: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+    /* Legacy names, kept so nothing still using them breaks. */
+    --gold: var(--accent);
+    --gold-bright: var(--accent-bright);
 }
 
 * {
@@ -64,17 +95,44 @@ canvas {
     cursor: pointer;
 }
 
+/* Night sky: navy gradient, a faint star field and a graticule (map grid). */
 .ls-bg {
     position: absolute;
     inset: 0;
-    background:
-        radial-gradient(ellipse at 50% 38%, rgba(70, 25, 8, 0.45), rgba(4, 4, 6, 0) 60%),
-        radial-gradient(ellipse at center, #0b0a0c 0%, #050506 70%, #020203 100%);
+    overflow: hidden;
+    background: radial-gradient(ellipse at 50% 42%, var(--sky-low) 0%, var(--sky-top) 72%);
     transition: opacity 0.9s ease;
+}
+.ls-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(1.4px 1.4px at 9% 14%, rgba(255, 255, 255, 0.8) 50%, transparent 51%),
+        radial-gradient(1px 1px at 21% 72%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
+        radial-gradient(1.2px 1.2px at 33% 26%, rgba(255, 255, 255, 0.7) 50%, transparent 51%),
+        radial-gradient(1px 1px at 47% 88%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
+        radial-gradient(1.4px 1.4px at 64% 11%, rgba(255, 255, 255, 0.8) 50%, transparent 51%),
+        radial-gradient(1px 1px at 76% 64%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
+        radial-gradient(1.2px 1.2px at 88% 30%, rgba(255, 255, 255, 0.7) 50%, transparent 51%),
+        radial-gradient(1px 1px at 93% 82%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
+        radial-gradient(1px 1px at 4% 52%, rgba(255, 255, 255, 0.5) 50%, transparent 51%),
+        radial-gradient(1.2px 1.2px at 56% 46%, rgba(255, 255, 255, 0.4) 50%, transparent 51%);
+    animation: ls-twinkle 5s ease-in-out infinite alternate;
+}
+.ls-bg::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background:
+        repeating-linear-gradient(0deg, rgba(201, 164, 92, 0.045) 0 1px, transparent 1px 96px),
+        repeating-linear-gradient(90deg, rgba(201, 164, 92, 0.045) 0 1px, transparent 1px 96px);
+    -webkit-mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
+    mask-image: radial-gradient(ellipse at center, #000 20%, transparent 75%);
 }
 
 #boot.ready .ls-bg {
-    opacity: 0.34;
+    opacity: 0.55;
 }
 
 .ls-frame {
@@ -83,105 +141,122 @@ canvas {
     padding: 0 40px;
 }
 
+/* Emblem: a wireframe voxel cube in brass, a smaller solid cube turning the
+ * other way inside it. Faces lit top-brightest, like the voxel blocks. */
 .ls-emblem {
-    width: 64px;
-    height: 64px;
-    margin: 0 auto 26px;
-    perspective: 240px;
+    position: relative;
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 44px;
+    perspective: 320px;
     transition: opacity 0.5s ease;
 }
-
 .ls-cube {
-    width: 100%;
-    height: 100%;
-    position: relative;
+    --s: 72px;
+    position: absolute;
+    inset: 0;
     transform-style: preserve-3d;
-    animation: ls-voxel 3.2s linear infinite;
+    animation: ls-voxel 9s linear infinite;
 }
-
 .ls-face {
     position: absolute;
-    width: 100%;
-    height: 100%;
-    border: 1px solid rgba(0, 0, 0, 0.35);
+    width: var(--s);
+    height: var(--s);
+    border: 1px solid rgba(227, 194, 127, 0.85);
+    background: rgba(201, 164, 92, 0.06);
 }
-
-/* Voxel shading: top = brightest, sides darker */
 .ls-face--top {
-    background: #d4922a;
-    transform: rotateX(90deg) translateZ(32px);
+    background: rgba(201, 164, 92, 0.16);
+    transform: rotateX(90deg) translateZ(calc(var(--s) / 2));
 }
 .ls-face--bottom {
-    background: #4a1e02;
-    transform: rotateX(-90deg) translateZ(32px);
+    transform: rotateX(-90deg) translateZ(calc(var(--s) / 2));
 }
 .ls-face--front {
-    background: #a85212;
-    transform: translateZ(32px);
+    transform: translateZ(calc(var(--s) / 2));
 }
 .ls-face--back {
-    background: #5c2908;
-    transform: rotateY(180deg) translateZ(32px);
+    transform: rotateY(180deg) translateZ(calc(var(--s) / 2));
 }
 .ls-face--left {
-    background: #7a3d08;
-    transform: rotateY(-90deg) translateZ(32px);
+    transform: rotateY(-90deg) translateZ(calc(var(--s) / 2));
 }
 .ls-face--right {
-    background: #8e4610;
-    transform: rotateY(90deg) translateZ(32px);
+    transform: rotateY(90deg) translateZ(calc(var(--s) / 2));
+}
+/* Inner cube: a third of the size, solid brass shades, counter-rotating. */
+.ls-cube--inner {
+    --s: 26px;
+    inset: 23px;
+    animation: ls-voxel-rev 6s linear infinite;
+}
+.ls-cube--inner .ls-face {
+    border-color: rgba(7, 14, 26, 0.5);
+    background: #a8853f;
+}
+.ls-cube--inner .ls-face--top {
+    background: #e3c27f;
+}
+.ls-cube--inner .ls-face--front,
+.ls-cube--inner .ls-face--back {
+    background: #c9a45c;
 }
 
 #boot.ready .ls-emblem {
     opacity: 0;
 }
 
-@keyframes ls-voxel {
-    0% {
-        transform: rotateX(-20deg) rotateY(0deg);
-    }
-    100% {
-        transform: rotateX(-20deg) rotateY(360deg);
-    }
-}
-
 .ls-title {
     font-family: var(--font-display);
-    font-size: clamp(40px, 8vw, 78px);
-    font-weight: 800;
-    letter-spacing: 0.22em;
+    font-size: clamp(36px, 6.5vw, 66px);
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    line-height: 1.05;
     text-transform: uppercase;
-    color: var(--gold-bright);
-    text-shadow:
-        0 2px 30px rgba(200, 80, 30, 0.4),
-        0 1px 3px rgba(0, 0, 0, 0.9);
+    padding-left: 0.14em; /* balance the trailing letter-spacing */
+    color: var(--cream);
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.55);
 }
 
+/* Hairline rule with a compass-diamond at its centre. */
 .ls-rule {
-    width: min(420px, 60vw);
+    position: relative;
+    width: min(360px, 60vw);
     height: 1px;
-    margin: 18px auto 16px;
-    background: linear-gradient(90deg, transparent, var(--gold) 50%, transparent);
-    opacity: 0.7;
+    margin: 20px auto 16px;
+    background: linear-gradient(90deg, transparent, var(--accent) 20%, var(--accent) 80%, transparent);
+    opacity: 0.85;
+}
+.ls-rule::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    transform: translate(-50%, -50%) rotate(45deg);
 }
 
 .ls-sub {
-    font-size: 17px;
-    font-style: italic;
-    letter-spacing: 0.1em;
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
     color: var(--ink-soft);
 }
 
 .ls-sub.error {
-    color: #e07070;
-    font-style: normal;
+    font-size: 14px;
+    color: #f0b4a8;
 }
 
+/* Progress: a fine brass line on a faint track. */
 .ls-bar {
-    width: 240px;
+    width: min(300px, 70vw);
     height: 2px;
-    margin: 40px auto 16px;
-    background: rgba(192, 88, 40, 0.14);
+    margin: 42px auto 16px;
+    background: rgba(201, 164, 92, 0.16);
     overflow: hidden;
 }
 
@@ -189,33 +264,43 @@ canvas {
     display: block;
     width: 0%;
     height: 100%;
-    background: linear-gradient(90deg, transparent, var(--gold-bright), transparent);
+    background: var(--accent-bright);
+    box-shadow: 0 0 10px rgba(227, 194, 127, 0.6);
     transition: width 0.25s ease;
 }
 
 .ls-tip {
-    font-size: 12px;
-    letter-spacing: 0.22em;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--ink-faint);
-    animation: pulse 2.2s ease-in-out infinite;
+    animation: pulse 2.4s ease-in-out infinite;
 }
 
 .ls-enter {
     display: none;
-    margin-top: 38px;
-    font-family: var(--font-display);
-    font-size: 16px;
-    letter-spacing: 0.26em;
+    margin: 38px auto 0;
+    padding: 12px 28px;
+    width: fit-content;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.24em;
     text-transform: uppercase;
-    color: var(--gold);
-    animation: pulse 2.2s ease-in-out infinite;
+    color: var(--accent-bright);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    background: rgba(201, 164, 92, 0.06);
+    animation: pulse 2.4s ease-in-out infinite;
 }
 
 .ls-controls {
     margin-top: 20px;
+    white-space: pre-wrap; /* keep the triple-space gaps between hints */
+    word-spacing: 0.1em;
     font-size: 11px;
-    letter-spacing: 0.14em;
+    font-weight: 500;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
     color: var(--ink-faint);
     display: none;
@@ -237,9 +322,42 @@ canvas {
 @keyframes pulse {
     0%,
     100% {
-        opacity: 0.5;
+        opacity: 0.55;
     }
     50% {
         opacity: 1;
+    }
+}
+@keyframes ls-voxel {
+    from {
+        transform: rotateX(-24deg) rotateY(0deg);
+    }
+    to {
+        transform: rotateX(-24deg) rotateY(360deg);
+    }
+}
+@keyframes ls-voxel-rev {
+    from {
+        transform: rotateX(-24deg) rotateY(360deg) rotateZ(0deg);
+    }
+    to {
+        transform: rotateX(-24deg) rotateY(0deg) rotateZ(360deg);
+    }
+}
+@keyframes ls-twinkle {
+    from {
+        opacity: 0.55;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ls-cube,
+    .ls-bg::before,
+    .ls-enter,
+    .ls-tip {
+        animation: none;
     }
 }

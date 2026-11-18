@@ -461,7 +461,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
         point(-Math.PI / 2, R * 0.55, '#d8d0c4');
         point(0, R * 0.62, PLAYER_ORANGE);
         // Letters
-        ctx.font = '700 11px sans-serif';
+        ctx.font = '600 11px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillStyle = '#fff8ec';
@@ -484,7 +484,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
 
     function drawLabel(text: string, x: number, y: number) {
         ctx.save();
-        ctx.font = '600 11px sans-serif';
+        ctx.font = '500 11px Inter, sans-serif';
         const w = ctx.measureText(text).width + 8,
             h = 15;
         const lx = Math.max(2, Math.min(MAP_W - w - 2, x - w / 2));
@@ -527,7 +527,7 @@ export function createSphereMap(grid: SphereVoxelGrid): SphereMap {
     // Tooltip element
     const tip = document.createElement('div');
     tip.style.cssText =
-        'position:fixed;padding:3px 8px;background:rgba(0,0,0,0.75);color:#fff;font:12px/1.4 sans-serif;border-radius:3px;pointer-events:none;display:none;z-index:21;white-space:nowrap;';
+        'position:fixed;padding:4px 10px;background:var(--panel);color:var(--ink);font:500 12px/1.4 var(--font-body);border:1px solid var(--line);border-radius:var(--radius-sm);pointer-events:none;display:none;z-index:21;white-space:nowrap;';
     document.body.appendChild(tip);
 
     let _cachedLandmarks: LandmarkRecord[] = [];
