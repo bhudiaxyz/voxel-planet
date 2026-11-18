@@ -61,6 +61,11 @@ export const _base2 = new THREE.Vector3();
  */
 export const _boxC = new THREE.Color();
 export const _n = new THREE.Vector3();
+
+const _rot = new THREE.Vector3();
+const _saveA = new THREE.Vector3();
+const _saveB = new THREE.Vector3();
+
 export function box(
     buf: QuadBuffer,
     base: THREE.Vector3,
@@ -99,10 +104,6 @@ export function box(
 export function root(centre: THREE.Vector3, a: number, b: number) {
     return _base.copy(centre).addScaledVector(_ta, a).addScaledVector(_tb, b);
 }
-
-const _rot = new THREE.Vector3();
-const _saveA = new THREE.Vector3();
-const _saveB = new THREE.Vector3();
 
 /** A box rotated by `yaw` in the tangent plane. Temporarily swaps the shared frame. */
 export function boxYawed(

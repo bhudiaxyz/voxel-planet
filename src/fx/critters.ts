@@ -130,6 +130,51 @@ const BUTTERFLY_FRAG = /* glsl */ `
   }
 `;
 
+const FIREFLY_VERT = /* glsl */ `
+  #include <common>
+  attribute vec3 aAnchor;
+  attribute vec3 aSeed;
+  uniform float uTime, uSize, uPixelRatio;
+  varying float vGlow;
+  void main() {
+    vec3 up = normalize(aAnchor);
+    vec3 t1 = normalize(cross(up, abs(up.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 t2 = cross(up, t1);
+    float tt = uTime * aSeed.y * 0.35 + aSeed.x * 6.28318;
+    vec3 world = aAnchor + up * (0.5 + 0.9 * (0.5 + 0.5 * sin(tt * 0.8)))
+               + t1 * sin(tt * 0.6) * aSeed.z + t2 * cos(tt * 0.45) * aSeed.z;
+    // Slow blink: on for a while, off for a while, each on its own clock.
+    float b = sin(uTime * (0.6 + aSeed.y * 0.5) + aSeed.x * 31.0);
+    vGlow = smoothstep(0.1, 0.8, b);
+    vec4 mv = viewMatrix * vec4(world, 1.0);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = uSize * uPixelRatio * (40.0 / max(-mv.z, 1.0));
+  }
+`;
+
+const FIREFLY_FRAG = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uAlpha;
+  varying float vGlow;
+  void main() {
+    float d = length(gl_PointCoord - 0.5) * 2.0;
+    float a = (1.0 - smoothstep(0.0, 1.0, d)) * vGlow * uAlpha;
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(uColor * (1.0 + 2.0 * (1.0 - d)), a);
+  }
+`;
+
+export interface GroundSampler {
+    /** World radius of the walkable ground under a direction, or -1 for water. */
+    groundAt(dir: THREE.Vector3): number;
+    /** Optional 0..1 habitat scores: the best of a few candidate spots wins. */
+    butterflyPref?(dir: THREE.Vector3): number;
+    fireflyPref?(dir: THREE.Vector3): number;
+}
+
+/** Candidate spots tried per anchor; the highest habitat score is kept. */
+const CANDIDATES = 4;
+
 /**
  * One butterfly: a body plus forewing and hindwing on each side. Wings are
  * separate panels rooted at the body, so they fold about the body axis.
@@ -220,51 +265,6 @@ function butterflyGeometry() {
     g.setIndex(idx);
     return g;
 }
-
-const FIREFLY_VERT = /* glsl */ `
-  #include <common>
-  attribute vec3 aAnchor;
-  attribute vec3 aSeed;
-  uniform float uTime, uSize, uPixelRatio;
-  varying float vGlow;
-  void main() {
-    vec3 up = normalize(aAnchor);
-    vec3 t1 = normalize(cross(up, abs(up.y) < 0.95 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-    vec3 t2 = cross(up, t1);
-    float tt = uTime * aSeed.y * 0.35 + aSeed.x * 6.28318;
-    vec3 world = aAnchor + up * (0.5 + 0.9 * (0.5 + 0.5 * sin(tt * 0.8)))
-               + t1 * sin(tt * 0.6) * aSeed.z + t2 * cos(tt * 0.45) * aSeed.z;
-    // Slow blink: on for a while, off for a while, each on its own clock.
-    float b = sin(uTime * (0.6 + aSeed.y * 0.5) + aSeed.x * 31.0);
-    vGlow = smoothstep(0.1, 0.8, b);
-    vec4 mv = viewMatrix * vec4(world, 1.0);
-    gl_Position = projectionMatrix * mv;
-    gl_PointSize = uSize * uPixelRatio * (40.0 / max(-mv.z, 1.0));
-  }
-`;
-
-const FIREFLY_FRAG = /* glsl */ `
-  uniform vec3 uColor;
-  uniform float uAlpha;
-  varying float vGlow;
-  void main() {
-    float d = length(gl_PointCoord - 0.5) * 2.0;
-    float a = (1.0 - smoothstep(0.0, 1.0, d)) * vGlow * uAlpha;
-    if (a < 0.01) discard;
-    gl_FragColor = vec4(uColor * (1.0 + 2.0 * (1.0 - d)), a);
-  }
-`;
-
-export interface GroundSampler {
-    /** World radius of the walkable ground under a direction, or -1 for water. */
-    groundAt(dir: THREE.Vector3): number;
-    /** Optional 0..1 habitat scores: the best of a few candidate spots wins. */
-    butterflyPref?(dir: THREE.Vector3): number;
-    fireflyPref?(dir: THREE.Vector3): number;
-}
-
-/** Candidate spots tried per anchor; the highest habitat score is kept. */
-const CANDIDATES = 4;
 
 export function createCritters(
     scene: THREE.Scene,

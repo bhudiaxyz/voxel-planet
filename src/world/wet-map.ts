@@ -14,6 +14,9 @@ import { BLOCK_BY_ID } from '../core/palette';
 
 export const WET_MAX = 4;
 
+/** Column index into the wet map. */
+export const wetIdx = (face: number, u: number, v: number) => (face * FACE_RES + v) * FACE_RES + u;
+
 export function bakeWetMap(grid: SphereVoxelGrid, seaLayer: number): Uint8Array {
     const N = FACE_RES;
     const out = new Uint8Array(6 * N * N).fill(WET_MAX);
@@ -53,6 +56,3 @@ export function bakeWetMap(grid: SphereVoxelGrid, seaLayer: number): Uint8Array 
     }
     return out;
 }
-
-/** Column index into the wet map. */
-export const wetIdx = (face: number, u: number, v: number) => (face * FACE_RES + v) * FACE_RES + u;

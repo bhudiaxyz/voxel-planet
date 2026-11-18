@@ -14,9 +14,10 @@ import { createSphereWater } from './water';
 import { createSphereVegetation } from './vegetation';
 import { bakeShoreMap } from './shore-map';
 
+import { buildSphereLandmarks, LandmarkRecord } from './landmarks';
+
 /** Sea surface layer on the sphere (matches sphere-terrain / sphere-landmarks). */
 const SEA_LAYER = 11;
-import { buildSphereLandmarks, LandmarkRecord } from './landmarks';
 
 export interface SphereWorld {
     grid: SphereVoxelGrid;

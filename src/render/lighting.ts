@@ -317,6 +317,8 @@ export class Atmosphere {
     }
 }
 
+export { AERIAL_D, FOG_NEAR, FOG };
+
 function makeSkyDome(radius: any, sunDir: any) {
     const geo = new THREE.SphereGeometry(radius, 32, 20);
     const mat = new THREE.ShaderMaterial({
@@ -371,5 +373,3 @@ function makeSkyDome(radius: any, sunDir: any) {
     m.frustumCulled = false;
     return m;
 }
-
-export { AERIAL_D, FOG_NEAR, FOG };

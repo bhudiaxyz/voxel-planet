@@ -1,22 +1,6 @@
-// src/core/noise3.ts
-// Copied from planet-explorer/src/core/noise.ts — Perlin noise with FBM
-export function rng(seed: number) {
-    return () => {
-        seed |= 0;
-        seed = (seed + 0x6d2b79f5) | 0;
-        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-}
 const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-function grad(h: number, x: number, y: number, z: number) {
-    h &= 15;
-    const u = h < 8 ? x : y,
-        v = h < 4 ? y : h === 12 || h === 14 ? x : z;
-    return (h & 1 ? -u : u) + (h & 2 ? -v : v);
-}
+
 export class Noise3 {
     permutation = new Uint8Array(512);
     constructor(seed: number) {
@@ -75,4 +59,23 @@ export class Noise3 {
         }
         return sum / norm;
     }
+}
+
+function grad(h: number, x: number, y: number, z: number) {
+    h &= 15;
+    const u = h < 8 ? x : y,
+        v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+    return (h & 1 ? -u : u) + (h & 2 ? -v : v);
+}
+
+// src/core/noise3.ts
+// Copied from planet-explorer/src/core/noise.ts — Perlin noise with FBM
+export function rng(seed: number) {
+    return () => {
+        seed |= 0;
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
 }

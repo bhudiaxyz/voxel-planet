@@ -214,6 +214,8 @@ export interface GpuProbe {
     memGB: number | undefined;
 }
 
+const TIERS: GpuTier[] = ['high', 'mobile-high', 'mid', 'low', 'very-low'];
+
 export function probeGpu(): GpuProbe {
     const cores = navigator.hardwareConcurrency || 4;
     const ua = navigator.userAgent;
@@ -313,8 +315,6 @@ export function classifyGpu(p: GpuProbe): GpuTier {
     // Unknown desktop renderer (e.g. masked by privacy settings): fall back to cores.
     return p.cores >= 8 ? 'mid' : 'low';
 }
-
-const TIERS: GpuTier[] = ['high', 'mobile-high', 'mid', 'low', 'very-low'];
 
 /**
  * Detect GPU tier. `?tier=<name>` in the URL overrides detection, for testing

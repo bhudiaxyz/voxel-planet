@@ -57,38 +57,6 @@ const _FTV = [
     [1, 0, 0],
 ];
 
-/** Convert (face, u, v) where u or v may be out of [0, FACE_RES) to the canonical face+UV. */
-export function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
-    const n = _FN[face],
-        tu = _FTU[face],
-        tv = _FTV[face];
-    // Column centre in cube space (unnormalised — dominant axis determines new face)
-    const pu = (2 * (u + 0.5)) / FACE_RES - 1;
-    const pv = (2 * (v + 0.5)) / FACE_RES - 1;
-    const cx = n[0] + tu[0] * pu + tv[0] * pv;
-    const cy = n[1] + tu[1] * pu + tv[1] * pv;
-    const cz = n[2] + tu[2] * pu + tv[2] * pv;
-    // Find dominant axis → new face
-    const ax = Math.abs(cx),
-        ay = Math.abs(cy),
-        az = Math.abs(cz);
-    let axis = 0;
-    if (ay > ax) axis = 1;
-    if (az > Math.max(ax, ay)) axis = 2;
-    const comp = axis === 0 ? cx : axis === 1 ? cy : cz;
-    const f2 = axis * 2 + (comp < 0 ? 1 : 0);
-    // Project cube vector onto new face plane
-    const n2 = _FN[f2],
-        tu2 = _FTU[f2],
-        tv2 = _FTV[f2];
-    const dn = cx * n2[0] + cy * n2[1] + cz * n2[2];
-    const du = cx * tu2[0] + cy * tu2[1] + cz * tu2[2];
-    const dv = cx * tv2[0] + cy * tv2[1] + cz * tv2[2];
-    const u2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((du / dn + 1) * FACE_RES) / 2)));
-    const v2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((dv / dn + 1) * FACE_RES) / 2)));
-    return [f2, u2, v2];
-}
-
 export class SphereVoxelGrid {
     readonly data: Uint8Array;
     // highest solid layer per column, -1 if empty
@@ -448,88 +416,6 @@ class MeshBuffer {
     }
 }
 
-function createMeshRoots() {
-    const solidGroup = new THREE.Group();
-    const glowGroup = new THREE.Group();
-    const edgeGroup = new THREE.Group();
-    solidGroup.name = 'terrain';
-    glowGroup.name = 'glow';
-    edgeGroup.name = 'voxel-edges';
-
-    const solidMat = makeVoxelMaterial();
-    // Leaves: the same voxel material, double-sided, sharing every uniform object
-    // (wind, fade, lighting) so the two stay in lockstep.
-    const leafMat = makeVoxelMaterial();
-    leafMat.side = THREE.DoubleSide;
-    leafMat.userData.uniforms = solidMat.userData.uniforms;
-    const glowMat = makeGlowMaterial();
-    const edgeMat = makeEdgeMaterial();
-    // Preserve the former single-edge-object access path for developer tools.
-    (edgeGroup as any).material = edgeMat;
-
-    return {
-        solid: solidGroup,
-        glow: glowGroup,
-        edges: edgeGroup,
-        material: solidMat,
-        /** [front-sided solid, double-sided leaves] — chunk geometry groups 0 and 1. */
-        materials: [solidMat, leafMat],
-        leafMaterial: leafMat,
-        glowMaterial: glowMat,
-        edgeMaterial: edgeMat,
-    };
-}
-
-/** Build one sphere chunk. ci/ck are chunk indices within the face. */
-function buildSphereMeshChunk(
-    grid: SphereVoxelGrid,
-    face: number,
-    ci: number,
-    ck: number,
-    meshes: ReturnType<typeof createMeshRoots>,
-    /** Collect outline edges (costly: ~40% of build time). Only near chunks on tiers that draw outlines. */
-    wantEdges = true,
-) {
-    const u0 = ci * CHUNK,
-        v0 = ck * CHUNK;
-    const u1 = Math.min(u0 + CHUNK, FACE_RES);
-    const v1 = Math.min(v0 + CHUNK, FACE_RES);
-    const solid = new MeshBuffer(),
-        glow = new MeshBuffer(),
-        leaves = new MeshBuffer(),
-        edgeMap = wantEdges ? new Map() : null;
-    meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1, leaves);
-    // Leaf faces ride in the solid mesh as a second, double-sided draw group: from
-    // inside a bush or canopy the outward-facing faces are back faces, and front-
-    // sided culling made the plant see-through. Only leaves pay the double side.
-    solid.append(leaves);
-    const record: any = { solid: null, glow: null, edges: null };
-    if (!solid.empty) {
-        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.materials);
-        record.solid.name = `terrain-${face}-${ci}-${ck}`;
-        record.solid.castShadow = true;
-        record.solid.receiveShadow = true;
-        record.solid.matrixAutoUpdate = false;
-        meshes.solid.add(record.solid);
-    }
-    if (!glow.empty) {
-        record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
-        record.glow.name = `glow-${face}-${ci}-${ck}`;
-        record.glow.matrixAutoUpdate = false;
-        // Gems cast too: spire/obelisk caps, and the crystal grove (almost all gem),
-        // which otherwise threw no shadow at all. They are lit by their own glow, so
-        // they don't receive.
-        record.glow.castShadow = true;
-        meshes.glow.add(record.glow);
-    }
-    if (edgeMap && edgeMap.size > 0) {
-        record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial);
-        record.edges.name = `voxel-edges-${face}-${ci}-${ck}`;
-        meshes.edges.add(record.edges);
-    }
-    return record;
-}
-
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
 /** Angle one chunk spans at a cube-face centre (columns shrink slightly toward the corners). */
 export const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
@@ -565,572 +451,6 @@ export interface ChunkListener {
     chunkUnloaded(face: number, u0: number, v0: number): void;
 }
 
-export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number; edges?: boolean } = {}) {
-    const tierEdges = opts.edges ?? true;
-    const meshes = createMeshRoots();
-    const loaded = new Map<string, any>();
-    const fadingMeshes = new Set<any>();
-    let loadQueue: Array<{ face: number; ci: number; ck: number; dot: number }> = [];
-    let disposed = false;
-    const maxRadius = opts.loadRadius ?? 10;
-    let radius = maxRadius;
-    let loadCos = 1,
-        unloadCos = 1;
-    const fadeUniforms = meshes.material.userData.uniforms;
-    let detailCos = 1;
-    const setCos = () => {
-        loadCos = Math.cos(radius * CHUNK_ANGLE);
-        unloadCos = Math.cos((radius + UNLOAD_MARGIN) * CHUNK_ANGLE);
-        detailCos = Math.cos(Math.min(DETAIL_RADIUS, radius) * CHUNK_ANGLE);
-        // Fade band in world units along the ground (chord ≈ arc at these angles).
-        // Measured from the camera, so it fades against what's on screen.
-        const surf = PLANET_RADIUS + 14;
-        fadeUniforms.uFadeFar.value = radius * CHUNK_ANGLE * surf;
-        fadeUniforms.uFadeNear.value = radius * (1 - FADE_BAND) * CHUNK_ANGLE * surf;
-    };
-    let listener: ChunkListener | null = null;
-    /** Chunks whose detail state (outlines/shadow) last applied; flipped as the player moves. */
-    const detailed = new Map<string, boolean>();
-    setCos();
-    const lastScan = new THREE.Vector3();
-    let forceScan = true;
-
-    // Chunk centre directions never change — compute all 3,750 once.
-    const chunkDirs = new Float32Array(6 * CHUNKS_PER_FACE_EDGE * CHUNKS_PER_FACE_EDGE * 3);
-    {
-        const n = new THREE.Vector3(),
-            tu = new THREE.Vector3(),
-            tv = new THREE.Vector3(),
-            d = new THREE.Vector3();
-        let o = 0;
-        for (let face = 0; face < 6; face++) {
-            basisFromCode(face, n, tu, tv);
-            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
-                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
-                    const u = (ci + 0.5) * CHUNK,
-                        v = (ck + 0.5) * CHUNK;
-                    d.copy(n)
-                        .addScaledVector(tu, (2 * u) / FACE_RES - 1)
-                        .addScaledVector(tv, (2 * v) / FACE_RES - 1)
-                        .normalize();
-                    chunkDirs[o++] = d.x;
-                    chunkDirs[o++] = d.y;
-                    chunkDirs[o++] = d.z;
-                }
-            }
-        }
-    }
-
-    const keyOf = (face: number, ci: number, ck: number) => `${face},${ci},${ck}`;
-
-    const initFade = (record: any) => {
-        const uniforms = meshes.material.userData.uniforms;
-        for (const mesh of [record.solid, record.glow]) {
-            if (!mesh) continue;
-            mesh.userData.lodAlpha = 0.0;
-            mesh.userData.lodFading = true;
-            fadingMeshes.add(mesh);
-            mesh.onBeforeRender = () => {
-                uniforms.uLodAlpha.value = mesh.userData.lodAlpha;
-            };
-            mesh.onAfterRender = () => {
-                uniforms.uLodAlpha.value = 1.0;
-            };
-        }
-    };
-
-    const setDetail = (record: any, on: boolean) => {
-        if (record.edges) record.edges.visible = on;
-        if (record.solid) record.solid.castShadow = on;
-        if (record.glow) record.glow.castShadow = on;
-    };
-
-    const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
-        const key = keyOf(face, ci, ck);
-        if (loaded.has(key) || disposed) return;
-        const near = dot >= detailCos;
-        const record = buildSphereMeshChunk(grid, face, ci, ck, meshes, tierEdges && near);
-        record.hasEdges = tierEdges && near;
-        if (fade) initFade(record);
-        setDetail(record, near);
-        detailed.set(key, near);
-        loaded.set(key, record);
-        listener?.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
-    };
-
-    const unloadChunk = (key: string) => {
-        const record = loaded.get(key);
-        if (!record) return;
-        for (const mesh of [record.solid, record.glow, record.edges]) {
-            if (!mesh) continue;
-            fadingMeshes.delete(mesh);
-        }
-        removeMeshChunk(meshes, record);
-        loaded.delete(key);
-        detailed.delete(key);
-        const [face, ci, ck] = key.split(',').map(Number);
-        listener?.chunkUnloaded(face, ci * CHUNK, ck * CHUNK);
-    };
-
-    const scan = (playerDir: THREE.Vector3) => {
-        lastScan.copy(playerDir);
-        forceScan = false;
-        loadQueue = [];
-        const keep = new Set<string>();
-        let o = 0;
-        for (let face = 0; face < 6; face++) {
-            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
-                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++, o += 3) {
-                    const dot =
-                        chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
-                    if (dot < unloadCos) continue;
-                    const key = keyOf(face, ci, ck);
-                    keep.add(key);
-                    const record = loaded.get(key);
-                    if (record) {
-                        const near = dot >= detailCos;
-                        if (near && tierEdges && !record.hasEdges) {
-                            // Built far (no outlines) and now near: re-mesh it with
-                            // edges through the normal budgeted queue.
-                            unloadChunk(key);
-                            loadQueue.push({ face, ci, ck, dot });
-                            continue;
-                        }
-                        if (detailed.get(key) !== near) {
-                            setDetail(record, near);
-                            detailed.set(key, near);
-                        }
-                    } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
-                }
-            }
-        }
-        // Closest first; popped from the end.
-        loadQueue.sort((a, b) => a.dot - b.dot);
-        for (const key of loaded.keys()) if (!keep.has(key)) unloadChunk(key);
-    };
-
-    return {
-        meshes,
-        get loadRadius() {
-            return radius;
-        },
-        /** World-unit distances of the near terrain's dither-out band. */
-        get fadeBand(): [number, number] {
-            return [fadeUniforms.uFadeNear.value, fadeUniforms.uFadeFar.value];
-        },
-        get loadedCount() {
-            return loaded.size;
-        },
-        get pendingCount() {
-            return loadQueue.length;
-        },
-        /** Something that tracks chunk load/unload — the vegetation layer. */
-        setListener(l: ChunkListener) {
-            listener = l;
-            for (const key of loaded.keys()) {
-                const [face, ci, ck] = key.split(',').map(Number);
-                l.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
-            }
-        },
-        setLoadRadius(r: number) {
-            const next = Math.max(3, Math.min(maxRadius, Math.round(r)));
-            if (next === radius) return;
-            radius = next;
-            setCos();
-            forceScan = true;
-        },
-
-        /**
-         * @param budgetMs main-thread meshing budget this call. Pass Infinity at
-         *        startup to fill the view before the first frame (no fade-in then).
-         */
-        update(playerDir: THREE.Vector3, budgetMs = BUILD_BUDGET_MS) {
-            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
-            const fade = Number.isFinite(budgetMs);
-            const t0 = performance.now();
-            do {
-                const next = loadQueue.pop();
-                if (!next) break;
-                loadChunk(next.face, next.ci, next.ck, next.dot, fade);
-            } while (performance.now() - t0 < budgetMs);
-        },
-
-        /**
-         * Build, synchronously and without fade, every queued chunk within
-         * `radiusChunks` of `playerDir` (closest first); the rest stream in on the
-         * normal per-frame budget. Used for the first view, teleports and palette
-         * rebuilds — a full-radius synchronous fill was 1,400-2,200 chunks there.
-         */
-        fillNear(playerDir: THREE.Vector3, radiusChunks = NEAR_FILL) {
-            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
-            const minDot = Math.cos(radiusChunks * CHUNK_ANGLE);
-            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
-                const next = loadQueue.pop()!;
-                loadChunk(next.face, next.ci, next.ck, next.dot, false);
-            }
-        },
-
-        /** Queued chunks with dot >= minDot (i.e. within a radius), for boot progress. */
-        pendingNear(minDot: number) {
-            let n = 0;
-            for (let i = loadQueue.length - 1; i >= 0 && loadQueue[i].dot >= minDot; i--) n++;
-            return n;
-        },
-        /** Build near chunks (dot >= minDot, closest first) for up to budgetMs, no fade. */
-        fillNearSlice(minDot: number, budgetMs: number) {
-            const t0 = performance.now();
-            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
-                const next = loadQueue.pop()!;
-                loadChunk(next.face, next.ci, next.ck, next.dot, false);
-                if (performance.now() - t0 >= budgetMs) break;
-            }
-        },
-
-        tick(dt: number) {
-            for (const mesh of fadingMeshes) {
-                mesh.userData.lodAlpha = Math.min(1, mesh.userData.lodAlpha + dt * 3);
-                if (mesh.userData.lodAlpha >= 1) {
-                    mesh.userData.lodFading = false;
-                    fadingMeshes.delete(mesh);
-                }
-            }
-        },
-
-        /**
-         * Drop every chunk and reload around `playerDir`. Block colours are baked into
-         * the meshes, so a palette switch must rebuild them. Fills the view at once.
-         */
-        rebuildAll(playerDir: THREE.Vector3) {
-            for (const key of [...loaded.keys()]) unloadChunk(key);
-            forceScan = true;
-            this.fillNear(playerDir);
-        },
-
-        dispose() {
-            disposed = true;
-            for (const key of loaded.keys()) unloadChunk(key);
-        },
-    };
-}
-
-function removeMeshChunk(meshes: any, record: any) {
-    for (const [root, object] of [
-        [meshes.solid, record.solid],
-        [meshes.glow, record.glow],
-        [meshes.edges, record.edges],
-    ]) {
-        if (!object) continue;
-        root.remove(object);
-        object.geometry.dispose();
-    }
-}
-
-/**
- * Fills solid/glow MeshBuffers for a patch of a cube face.
- *
- * Coordinate mapping from the flat mesher: x→u (column U), y→layer (radial), z→v (column V).
- * FACES[f].n = [nu, nl, nv]; FACES[f].corners[i] = [du, dl, dv].
- */
-export function meshSphereFaceRegion(
-    grid: SphereVoxelGrid,
-    face: number,
-    u0: number,
-    v0: number,
-    u1: number,
-    v1: number,
-    solid: any,
-    glow: any,
-    edgeMap: any,
-    uHalo = 0,
-    /** Optional buffer for leaf (sway) faces, drawn double-sided; falls back to `solid`. */
-    leaves: MeshBuffer | null = null,
-) {
-    const _fn = new THREE.Vector3(),
-        _ftu = new THREE.Vector3(),
-        _ftv = new THREE.Vector3();
-    basisFromCode(face, _fn, _ftu, _ftv);
-    const fnx = _fn.x,
-        fny = _fn.y,
-        fnz = _fn.z;
-    const ftux = _ftu.x,
-        ftuy = _ftu.y,
-        ftuz = _ftu.z;
-    const ftvx = _ftv.x,
-        ftvy = _ftv.y,
-        ftvz = _ftv.z;
-
-    function cornerPos(uc: number, vc: number, layerc: number): [number, number, number] {
-        const cx = fnx + ftux * ((2 * uc) / FACE_RES - 1) + ftvx * ((2 * vc) / FACE_RES - 1);
-        const cy = fny + ftuy * ((2 * uc) / FACE_RES - 1) + ftvy * ((2 * vc) / FACE_RES - 1);
-        const cz = fnz + ftuz * ((2 * uc) / FACE_RES - 1) + ftvz * ((2 * vc) / FACE_RES - 1);
-        const len = Math.sqrt(cx * cx + cy * cy + cz * cz);
-        const r = PLANET_RADIUS + layerc;
-        return [(cx / len) * r, (cy / len) * r, (cz / len) * r];
-    }
-
-    function radialDir(u: number, v: number): [number, number, number] {
-        const cx = fnx + ftux * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvx * ((2 * (v + 0.5)) / FACE_RES - 1);
-        const cy = fny + ftuy * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvy * ((2 * (v + 0.5)) / FACE_RES - 1);
-        const cz = fnz + ftuz * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvz * ((2 * (v + 0.5)) / FACE_RES - 1);
-        const len = Math.sqrt(cx * cx + cy * cy + cz * cz);
-        return [cx / len, cy / len, cz / len];
-    }
-
-    /** Sway multiplier 0..1 for a leaf block, from the nearest bark below it (≤ 12 layers). */
-    const swayOfColumn = (g: SphereVoxelGrid, f: number, cu: number, cv: number, layer: number) => {
-        for (let l = layer - 1; l >= Math.max(0, layer - 12); l--) {
-            const b = BLOCK_BY_ID[g.get(f, cu, cv, l)] as any;
-            if (b?.isTrunk) return SWAY_BY_BARK[b.barkStyle ?? 0] ?? 0.55;
-            if (b && !b.sway) break; // reached ground with no trunk under this leaf
-        }
-        // A side branch of canopy with no trunk directly below: use the default.
-        return 0.55;
-    };
-
-    const aoOf = (occ: boolean[]) => {
-        if (occ[0] && occ[1]) return 0;
-        return (3 - (+occ[0] + +occ[1] + +occ[2])) / 3;
-    };
-
-    const ao = new Array(4);
-    const localV = new Array(4);
-    const uvs: [number, number][] = [
-        [0, 0],
-        [0, 0],
-        [0, 0],
-        [0, 0],
-    ];
-    const verts: [number, number, number][] = [
-        [0, 0, 0],
-        [0, 0, 0],
-        [0, 0, 0],
-        [0, 0, 0],
-    ];
-
-    const scanU0 = Math.max(0, u0 - uHalo);
-    const scanV0 = Math.max(0, v0 - uHalo);
-    const scanU1 = Math.min(FACE_RES, u1 + uHalo);
-    const scanV1 = Math.min(FACE_RES, v1 + uHalo);
-
-    for (let v = scanV0; v < scanV1; v++) {
-        for (let u = scanU0; u < scanU1; u++) {
-            const top = grid.columnTop(face, u, v);
-            if (top < 0) continue;
-
-            for (let layer = 0; layer <= top; layer++) {
-                const id = grid.get(face, u, v, layer);
-                if (id === 0) continue;
-                const block = BLOCK_BY_ID[id];
-                if (!block) continue;
-                // Leaves go to their own buffer (drawn double-sided; see buildSphereMeshChunk).
-                const target = (block as any).emissive ? glow : (block as any).sway && leaves ? leaves : solid;
-                const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
-                const isWaterBlk = !!(block as any).isWater;
-
-                const [rdx, rdy, rdz] = radialDir(u, v);
-
-                for (let f = 0; f < 6; f++) {
-                    const F = FACES[f];
-                    const nu = u + F.n[0],
-                        nlayer = layer + F.n[1],
-                        nv = v + F.n[2];
-                    if (grid.isSolidGlobal(face, nu, nv, nlayer)) {
-                        // Ground beside/under a bush keeps its face: the bush's base sways, and a
-                        // culled face let the sky show through the gap it opens.
-                        if ((block as any).sway) continue;
-                        const nb = BLOCK_BY_ID[
-                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
-                                ? grid.get(face, nu, nv, nlayer)
-                                : grid.get(...crossFaceUV(face, nu, nv), nlayer)
-                        ] as any;
-                        if (!(nb?.sway && nb.solid)) continue;
-                    }
-                    // Water draws every face that meets AIR — the surface, and the side
-                    // faces where a river steps down a layer or ends — so it never reads
-                    // as a floating sheet. Faces against other water (internal) and
-                    // against solid ground (hidden by the bank) are skipped.
-                    if (isWaterBlk) {
-                        if (F.n[1] === -1) continue; // the bed is beneath, always
-                        const nId =
-                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
-                                ? grid.get(face, nu, nv, nlayer)
-                                : grid.get(...crossFaceUV(face, nu, nv), nlayer);
-                        if (nId === id) continue;
-                    }
-
-                    const isTop = F.n[1] === 1;
-                    const isBottom = F.n[1] === -1;
-                    const baseCol = isTop
-                        ? (block as any).top
-                        : isBottom
-                          ? (block as any).bottom || (block as any).side
-                          : (block as any).side;
-                    const pattern = isTop
-                        ? ((block as any).topPattern ?? (block as any).pattern)
-                        : (block as any).pattern;
-                    const tintCol =
-                        (isTop ? (block as any).topTint || (block as any).tint : (block as any).tint) || baseCol;
-                    // Leaves carry their tree's sway stiffness in aFringe.r (leaves have no
-                    // grass fringe, so the channel is free): soft for willow/palm/birch,
-                    // stiff for scaly conifers. Read from the bark under the canopy.
-                    const fringeCol = (block as any).sway
-                        ? _swayCol.setRGB(swayOfColumn(grid, face, u, v, layer), 0, 0)
-                        : (block as any).fringeColor || (block as any).top || baseCol;
-
-                    let nrm: [number, number, number];
-                    if (isTop) nrm = [rdx, rdy, rdz];
-                    else if (isBottom) nrm = [-rdx, -rdy, -rdz];
-                    else if (F.n[0] !== 0) nrm = [F.n[0] * ftux, F.n[0] * ftuy, F.n[0] * ftuz];
-                    else nrm = [F.n[2] * ftvx, F.n[2] * ftvy, F.n[2] * ftvz];
-
-                    const uA = AXIS_VEC[F.uAxis],
-                        vA = AXIS_VEC[F.vAxis];
-
-                    let convexMask = 0,
-                        concaveMask = 0;
-                    if (edgeMap) {
-                        const dirs: [number, number, number, number][] = [
-                            [-uA[0], -uA[1], -uA[2], 1],
-                            [uA[0], uA[1], uA[2], 2],
-                            [-vA[0], -vA[1], -vA[2], 4],
-                            [vA[0], vA[1], vA[2], 8],
-                        ];
-                        for (const [dx, dy, dz, bit] of dirs) {
-                            const sdu = u + dx,
-                                sdv = v + dz,
-                                sdl = layer + dy;
-                            if (!grid.isSolidGlobal(face, sdu, sdv, sdl)) {
-                                convexMask |= bit;
-                            } else if (grid.isSolidGlobal(face, sdu + F.n[0], sdv + F.n[2], sdl + F.n[1])) {
-                                concaveMask |= bit;
-                            }
-                        }
-                    }
-
-                    const forceLightEdge = isTop && (block as any).lightEdge === true;
-                    if (edgeMap)
-                        _collectSphereFaceEdges(
-                            edgeMap,
-                            face,
-                            u,
-                            v,
-                            layer,
-                            F,
-                            nrm,
-                            convexMask,
-                            baseCol,
-                            false,
-                            forceLightEdge,
-                            cornerPos,
-                        );
-                    if (edgeMap)
-                        _collectSphereFaceEdges(
-                            edgeMap,
-                            face,
-                            u,
-                            v,
-                            layer,
-                            F,
-                            nrm,
-                            concaveMask,
-                            baseCol,
-                            true,
-                            forceLightEdge,
-                            cornerPos,
-                        );
-
-                    if (!emitGeometry) continue;
-
-                    for (let i = 0; i < 4; i++) {
-                        const c = F.corners[i];
-                        verts[i] = cornerPos(u + c[0], v + c[2], layer + c[1]);
-
-                        const su = c[F.uAxis] === 1 ? 1 : -1;
-                        const sv = c[F.vAxis] === 1 ? 1 : -1;
-                        const s1 = grid.isSolidGlobal(face, nu + uA[0] * su, nv + uA[2] * su, nlayer + uA[1] * su);
-                        const s2 = grid.isSolidGlobal(face, nu + vA[0] * sv, nv + vA[2] * sv, nlayer + vA[1] * sv);
-                        const cn = grid.isSolidGlobal(
-                            face,
-                            nu + uA[0] * su + vA[0] * sv,
-                            nv + uA[2] * su + vA[2] * sv,
-                            nlayer + uA[1] * su + vA[1] * sv,
-                        );
-                        ao[i] = aoOf([s1, s2, cn]);
-
-                        const ucorner = u + c[0],
-                            vcorner = v + c[2],
-                            lcorner = layer + c[1];
-                        uvs[i][0] = F.uAxis === 0 ? ucorner : F.uAxis === 2 ? vcorner : lcorner;
-                        uvs[i][1] = F.vAxis === 0 ? ucorner : F.vAxis === 2 ? vcorner : lcorner;
-
-                        localV[i] = isTop ? 1 : isBottom ? 0 : c[1];
-                    }
-
-                    // Bit 3 = sway (leaves); 16 = fresh water (shader draws ripples, skips terrain detail).
-                    const patternPacked = isWaterBlk ? 16 : (pattern || 0) | ((block as any).sway ? 8 : 0);
-                    // Reverse winding: x→u, y→layer, z→v swaps two axes (det=-1), flipping face orientation
-                    target.quad(
-                        [verts[3], verts[2], verts[1], verts[0]],
-                        nrm,
-                        baseCol,
-                        tintCol,
-                        fringeCol,
-                        [uvs[3], uvs[2], uvs[1], uvs[0]],
-                        [ao[3], ao[2], ao[1], ao[0]],
-                        patternPacked,
-                        // Negative fringe values are flags (fringe is otherwise >= 0):
-                        //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
-                        //   -(10 + s)   natural stone style s for patRock (0 marble .. 6 quartzite)
-                        (block as any).rockStyle !== undefined
-                            ? -(10 + (block as any).rockStyle)
-                            : (block as any).barkStyle !== undefined
-                              ? -(2 + (block as any).barkStyle)
-                              : (block as any).fringe || 0,
-                        [localV[3], localV[2], localV[1], localV[0]],
-                    );
-                }
-            }
-        }
-    }
-}
-
-/**
- * Collect edge entries for the sphere mesher.
- * ponytail: no cross-face seam dedup — add if seam artifacts become visible
- */
-function _collectSphereFaceEdges(
-    edgeMap: any,
-    face: number,
-    u: number,
-    v: number,
-    layer: number,
-    F: any,
-    nrm: [number, number, number],
-    mask: number,
-    col: any,
-    isConcave: boolean,
-    forceLight: boolean,
-    cornerPos: (uc: number, vc: number, lc: number) => [number, number, number],
-) {
-    if (mask === 0) return;
-    const uA = AXIS_VEC[F.uAxis],
-        vA = AXIS_VEC[F.vAxis];
-    const borders = [
-        { bit: 1, cIdx: [0, 1] },
-        { bit: 2, cIdx: [2, 3] },
-        { bit: 4, cIdx: [0, 3] },
-        { bit: 8, cIdx: [1, 2] },
-    ];
-    for (const { bit, cIdx } of borders) {
-        if (!(mask & bit)) continue;
-        const c0 = F.corners[cIdx[0]],
-            c1 = F.corners[cIdx[1]];
-        const p0 = cornerPos(u + c0[0], v + c0[2], layer + c0[1]);
-        const p1 = cornerPos(u + c1[0], v + c1[2], layer + c1[1]);
-        addEdgeFace(edgeMap, p0, p1, nrm, forceLight || isLightFace(col), isConcave, forceLight);
-    }
-}
-
 /* ================================================================== *
  * Explicit voxel edges
  * ================================================================== */
@@ -1138,484 +458,6 @@ function _collectSphereFaceEdges(
 /** Intrinsic sRGB luminance at which a face belongs to the pale palette. */
 const LIGHT_FACE_LUMA = 0.61;
 const faceLightCache = new WeakMap();
-
-function isLightFace(color: any) {
-    const cached = faceLightCache.get(color);
-    if (cached !== undefined) return cached;
-    const hex = color.getHex(THREE.SRGBColorSpace);
-    const r = ((hex >> 16) & 255) / 255;
-    const g = ((hex >> 8) & 255) / 255;
-    const b = (hex & 255) / 255;
-    const light = r * 0.2126 + g * 0.7152 + b * 0.0722 >= LIGHT_FACE_LUMA;
-    faceLightCache.set(color, light);
-    return light;
-}
-
-function pointOrder(a: any, b: any) {
-    for (let i = 0; i < 3; i++) {
-        if (a[i] !== b[i]) return a[i] - b[i];
-    }
-    return 0;
-}
-
-/** Add one face's ownership of a unit edge, deduplicated across both faces. */
-function addEdgeFace(edgeMap: any, p0: any, p1: any, normal: any, light: any, concave: any, forceLight: any) {
-    let start = p0,
-        end = p1;
-    if (pointOrder(start, end) > 0) [start, end] = [end, start];
-    const key = `${start.join(',')}|${end.join(',')}`;
-    let edge = edgeMap.get(key);
-    if (!edge) {
-        edge = { start, end, faces: [], concave: false };
-        edgeMap.set(key, edge);
-    }
-    // If either owning face identifies this as an inward fold, the shared edge
-    // is concave. Concave edges always use the dark ink.
-    edge.concave ||= concave;
-
-    const normalKey = normal.join(',');
-    const existing = edge.faces.find((face: any) => face.key === normalKey);
-    if (existing) {
-        // A material boundary can contribute the same plane twice. Be
-        // conservative: both contributors must be pale for the face to be pale.
-        existing.light = existing.light && light;
-        existing.forceLight ||= forceLight;
-    } else {
-        edge.faces.push({ key: normalKey, normal: [...normal], light, forceLight });
-    }
-}
-
-/** Merge adjacent unit edges with identical topology into clean long runs. */
-function mergeEdgeRuns(edgeMap: any) {
-    const groups = new Map();
-
-    for (const edge of edgeMap.values()) {
-        const faces = [...edge.faces].sort((a, b) => a.key.localeCompare(b.key));
-        const normalA = faces[0]?.normal || [0, 0, 0];
-        const normalB = faces[1]?.normal || [0, 0, 0];
-        // A grass top explicitly promotes its convex perimeter to the light ink;
-        // otherwise both owning faces must belong to the pale palette. Concave
-        // and non-manifold connections remain dark without exception.
-        const light =
-            faces.length === 2 &&
-            !edge.concave &&
-            ((faces[0].light && faces[1].light) || faces.some((face) => face.forceLight));
-        const axis = edge.start.findIndex((value: any, i: any) => value !== edge.end[i]);
-        const fixed = edge.start.filter((_: any, i: any) => i !== axis);
-        const style = `${axis}|${fixed.join(',')}|${normalA.join(',')}|${normalB.join(',')}|${light ? 1 : 0}`;
-        let group = groups.get(style);
-        if (!group) {
-            group = { axis, fixed, normalA, normalB, light, units: [] };
-            groups.set(style, group);
-        }
-        group.units.push([edge.start[axis], edge.end[axis]]);
-    }
-
-    const runs: any[] = [];
-    for (const group of groups.values()) {
-        group.units.sort((a: any, b: any) => a[0] - b[0]);
-        let start = group.units[0][0];
-        let end = group.units[0][1];
-        const push = () => {
-            const p0 = [0, 0, 0],
-                p1 = [0, 0, 0];
-            let f = 0;
-            for (let axis = 0; axis < 3; axis++) {
-                if (axis === group.axis) {
-                    p0[axis] = start;
-                    p1[axis] = end;
-                } else {
-                    p0[axis] = p1[axis] = group.fixed[f++];
-                }
-            }
-            runs.push({ ...group, start: p0, end: p1 });
-        };
-
-        for (let i = 1; i < group.units.length; i++) {
-            const unit = group.units[i];
-            if (unit[0] === end) {
-                end = unit[1];
-            } else {
-                push();
-                start = unit[0];
-                end = unit[1];
-            }
-        }
-        push();
-    }
-
-    // A round cap is normally what closes small cracks where several runs meet.
-    // At a mixed-colour joint, however, a dark cap protrudes half a stroke past
-    // the vertex and visibly bites into the pale run. Give the pale run ownership
-    // of that joint and terminate every incident dark run at the vertex plane.
-    const joints = new Map();
-    const addJoint = (run: any, cap: any) => {
-        const point = cap === 'roundStart' ? run.start : run.end;
-        const key = point.join(',');
-        let joint = joints.get(key);
-        if (!joint) {
-            joint = [];
-            joints.set(key, joint);
-        }
-        joint.push({ run, cap });
-    };
-    for (const run of runs) {
-        run.roundStart = true;
-        run.roundEnd = true;
-        addJoint(run, 'roundStart');
-        addJoint(run, 'roundEnd');
-    }
-    for (const joint of joints.values()) {
-        if (!joint.some(({ run }: any) => run.light)) continue;
-        for (const { run, cap } of joint) {
-            if (!run.light) run[cap] = false;
-        }
-    }
-    return runs;
-}
-
-function makeEdgeMaterial() {
-    const CORE_WIDTH = 0.7;
-    const AA_PAD = 0.8;
-    const material = new THREE.ShaderMaterial({
-        uniforms: {
-            resolution: { value: new THREE.Vector2(1, 1) },
-            // The geometry extends past the visible stroke so the fragment shader
-            // has a full pixel in which to resolve analytic coverage.
-            linewidth: { value: CORE_WIDTH + AA_PAD * 2.0 },
-            uCoreWidth: { value: CORE_WIDTH },
-            uFogDensity: { value: 0.0 },
-            uWaterLevel: { value: WATER.level },
-            /** How much of a stroke survives below the waterline. */
-            uSubmergedInk: { value: 0.0 },
-            uMistBase: { value: 6.0 },
-            uMistH: { value: 8.0 },
-            uMistDens: { value: 0.022 },
-            uMistMax: { value: 0.55 },
-            tSceneDepth: { value: null },
-            uLodAlpha: { value: 1.0 },
-        },
-        vertexShader: /* glsl */ `
-      uniform vec2 resolution;
-      uniform float linewidth;
-      uniform float uFogDensity;
-      uniform float uMistBase, uMistH, uMistDens, uMistMax;
-
-      attribute vec3 instanceStart;
-      attribute vec3 instanceEnd;
-      attribute vec3 instanceNormalA;
-      attribute vec3 instanceNormalB;
-      attribute float instanceLightEligible;
-      attribute vec2 instanceRoundCaps;
-
-      // These are constant for every vertex of an edge instance. Measuring
-      // against them in framebuffer pixels avoids all perspective-varying
-      // interpolation, so camera distance cannot affect stroke width.
-      varying vec2 vScreenStart;
-      varying vec2 vScreenEnd;
-      varying float vWindowDepthStart;
-      varying float vWindowDepthEnd;
-      varying float vLightEdge;
-      varying float vFogVisibility;
-      varying vec2 vRoundCaps;
-      varying float vEdgeY;
-
-      float trimSegmentAlpha(vec4 start, vec4 end) {
-        float a = projectionMatrix[2][2];
-        float b = projectionMatrix[3][2];
-        float nearEstimate = a > 0.0 ? -b / (a + 1.0) : -0.5 * b / a;
-        return (nearEstimate - start.z) / (end.z - start.z);
-      }
-
-      float heightAverage(float y0, float y1) {
-        float a = clamp((y0 - uMistBase) / uMistH, -4.0, 20.0);
-        float b = clamp((y1 - uMistBase) / uMistH, -4.0, 20.0);
-        if (abs(b - a) < 0.02) return exp(-a);
-        return (exp(-a) - exp(-b)) / (b - a);
-      }
-
-      void main() {
-        vec4 start = modelViewMatrix * vec4(instanceStart, 1.0);
-        vec4 end = modelViewMatrix * vec4(instanceEnd, 1.0);
-
-        bool perspective = projectionMatrix[2][3] == -1.0;
-        if (perspective) {
-          if (start.z < 0.0 && end.z >= 0.0) {
-            end.xyz = mix(start.xyz, end.xyz, trimSegmentAlpha(start, end));
-          } else if (end.z < 0.0 && start.z >= 0.0) {
-            start.xyz = mix(end.xyz, start.xyz, trimSegmentAlpha(end, start));
-          }
-        }
-
-        vec4 clipStart = projectionMatrix * start;
-        vec4 clipEnd = projectionMatrix * end;
-        vec2 ndcStart = clipStart.xy / clipStart.w;
-        vec2 ndcEnd = clipEnd.xy / clipEnd.w;
-        vScreenStart = (ndcStart * 0.5 + 0.5) * resolution;
-        vScreenEnd = (ndcEnd * 0.5 + 0.5) * resolution;
-        vWindowDepthStart = clipStart.z / clipStart.w * 0.5 + 0.5;
-        vWindowDepthEnd = clipEnd.z / clipEnd.w * 0.5 + 0.5;
-        vRoundCaps = instanceRoundCaps;
-
-        float aspect = resolution.x / resolution.y;
-        vec2 dir = ndcEnd - ndcStart;
-        dir.x *= aspect;
-        dir = length(dir) > 1e-7 ? normalize(dir) : vec2(1.0, 0.0);
-
-        vec2 offset = vec2(dir.y, -dir.x);
-        dir.x /= aspect;
-        offset.x /= aspect;
-        if (position.x < 0.0) offset *= -1.0;
-        if (position.y < 0.0) offset -= dir;
-        else if (position.y > 1.0) offset += dir;
-
-        offset *= linewidth / resolution.y;
-        vec4 clip = position.y < 0.5 ? clipStart : clipEnd;
-        clip.xy += offset * clip.w;
-        gl_Position = clip;
-
-        // A short transition at grazing angles prevents a one-frame colour
-        // pop as the camera rotates across a face plane.
-        float frontA = smoothstep(0.0, 0.08,
-                                  (normalMatrix * instanceNormalA).z);
-        float frontB = smoothstep(0.0, 0.08,
-                                  (normalMatrix * instanceNormalB).z);
-        vLightEdge = instanceLightEligible * frontA * frontB;
-
-        float fogDepth = -(position.y < 0.5 ? start.z : end.z);
-        float fogTerm = uFogDensity * max(fogDepth, 0.0);
-        float aerialVisibility = exp(-fogTerm * fogTerm);
-        // Through the model matrix, not raw: the world edge mesh sits at the
-        // origin so the two agree there, but a character part's endpoints are
-        // local to an animated node, and reading them as world coordinates put
-        // the figure hundreds of units away and let the mist eat its outline.
-        vec3 edgeWorld = (modelMatrix * vec4(
-          position.y < 0.5 ? instanceStart : instanceEnd, 1.0)).xyz;
-        vEdgeY = edgeWorld.y;
-        float worldDistance = distance(cameraPosition, edgeWorld);
-        float mist = 1.0 - exp(-uMistDens * worldDistance
-                              * heightAverage(cameraPosition.y, edgeWorld.y));
-        mist = clamp(mist, 0.0, 1.0) * uMistMax;
-        vFogVisibility = aerialVisibility * (1.0 - mist);
-      }
-    `,
-        fragmentShader: /* glsl */ `
-      uniform sampler2D tSceneDepth;
-      uniform vec2 resolution;
-      uniform float uCoreWidth;
-      uniform float uLodAlpha;
-
-      varying vec2 vScreenStart;
-      varying vec2 vScreenEnd;
-      varying float vWindowDepthStart;
-      varying float vWindowDepthEnd;
-      varying float vLightEdge;
-      varying float vFogVisibility;
-      varying vec2 vRoundCaps;
-      varying float vEdgeY;
-      uniform float uWaterLevel, uSubmergedInk;
-
-      void main() {
-        // Exact framebuffer-pixel distance to the projected segment. Most
-        // ends are round; dark runs use a butt cap where a pale run owns the
-        // shared joint. The SDF contains no world-space or camera-distance
-        // term, so both cap shape and stroke width remain stable at any zoom.
-        vec2 segment = vScreenEnd - vScreenStart;
-        float segmentLengthSq = max(dot(segment, segment), 1e-4);
-        float segmentLength = sqrt(segmentLengthSq);
-        float alongPx = dot(gl_FragCoord.xy - vScreenStart, segment)
-                        / segmentLength;
-        float along = clamp(alongPx / segmentLength, 0.0, 1.0);
-        vec2 nearest = vScreenStart + segment * along;
-
-        // Visibility belongs to the mathematical edge centerline, not to the
-        // expanded coverage quad. A fixed-function depth test compares every
-        // fragment of that quad against a sloping owner face; close to the
-        // camera the face then clips away most of its own outline. Sample the
-        // populated scene depth on both sides of the centerline instead. A
-        // genuinely nearer object wins at all three samples, while either
-        // owning face is enough to keep the full-width stroke visible.
-        vec2 lineDirection = segment / segmentLength;
-        vec2 lineNormal = vec2(-lineDirection.y, lineDirection.x);
-        vec2 depthUv = nearest / resolution;
-        vec2 depthStep = lineNormal * 0.75 / resolution;
-        float sceneDepth = texture2D(tSceneDepth, depthUv).x;
-        sceneDepth = max(sceneDepth,
-                         texture2D(tSceneDepth, depthUv + depthStep).x);
-        sceneDepth = max(sceneDepth,
-                         texture2D(tSceneDepth, depthUv - depthStep).x);
-        float edgeDepth = mix(vWindowDepthStart, vWindowDepthEnd, along);
-        float alongDepthSlope = abs(vWindowDepthEnd - vWindowDepthStart)
-                                / max(length(segment), 1.0);
-        // Fixed bias covers near-edge precision; distance term scales with
-        // edgeDepth² to compensate for the depth buffer's non-linear precision
-        // loss at large view distances (near=0.1, far=6000 compresses most
-        // precision into the first few units).
-        float depthBias = 2e-5 + alongDepthSlope + edgeDepth * edgeDepth * 1e-5;
-        if (edgeDepth > sceneDepth + depthBias) discard;
-
-        float halfWidth = uCoreWidth * 0.5;
-        float acrossPx = dot(gl_FragCoord.xy - vScreenStart, lineNormal);
-        float signedDistance = abs(acrossPx) - halfWidth;
-        if (alongPx < 0.0) {
-          signedDistance = vRoundCaps.x > 0.5
-            ? length(vec2(alongPx, acrossPx)) - halfWidth
-            : max(signedDistance, -alongPx);
-        } else if (alongPx > segmentLength) {
-          float beyondEnd = alongPx - segmentLength;
-          signedDistance = vRoundCaps.y > 0.5
-            ? length(vec2(beyondEnd, acrossPx)) - halfWidth
-            : max(signedDistance, beyondEnd);
-        }
-        float aa = max(fwidth(signedDistance) * 0.65, 0.50);
-        float coverage = 1.0 - smoothstep(-aa, aa, signedDistance);
-        coverage *= clamp(vFogVisibility, 0.0, 1.0);
-        coverage *= uLodAlpha;
-        /* A hard stop at the surface, not a ramp.
-         *
-         * Fading over a depth left every vertical edge trailing off into the
-         * water, and a stroke that dims along its length reads as a smudge
-         * rather than as a line that ends. Cutting it clean lets the water's
-         * own dark waterline become the terminator instead.
-         *
-         * The only softness is one pixel of antialiasing, taken from the
-         * screen-space rate of change of height so the cut stays a single
-         * pixel at any distance rather than a fixed slab of world space. */
-        float waterAa = max(fwidth(vEdgeY) * 0.5, 1e-5);
-        float aboveWater = smoothstep(uWaterLevel - waterAa,
-                                      uWaterLevel + waterAa, vEdgeY);
-        coverage *= mix(uSubmergedInk, 1.0, aboveWater);
-        if (coverage <= 0.001) discard;
-
-        float light = clamp(vLightEdge, 0.0, 1.0);
-        gl_FragColor = vec4(coverage * (1.0 - light),
-                            coverage * light,
-                            0.0,
-                            coverage);
-      }
-    `,
-        // Hidden-line removal is performed against the already-rendered scene
-        // depth at the edge centerline. Fixed-function testing would let sloping
-        // owner faces cut a zoom-dependent amount from the coverage quad.
-        depthTest: false,
-        depthWrite: false,
-        transparent: true,
-        toneMapped: false,
-        blending: THREE.CustomBlending,
-        blendEquation: THREE.MaxEquation,
-        blendSrc: THREE.OneFactor,
-        blendDst: THREE.OneFactor,
-        blendEquationAlpha: THREE.MaxEquation,
-        blendSrcAlpha: THREE.OneFactor,
-        blendDstAlpha: THREE.OneFactor,
-        extensions: { derivatives: true } as any,
-    });
-
-    // Preserve the small public surface used by settings and LineSegments2,
-    // while keeping the authored width separate from the invisible AA skirt.
-    let coreWidth = CORE_WIDTH;
-    let pixelRatio = 1.0;
-    const syncPhysicalWidth = () => {
-        const physicalWidth = coreWidth * pixelRatio;
-        material.uniforms.uCoreWidth.value = physicalWidth;
-        material.uniforms.linewidth.value = physicalWidth + AA_PAD * 2.0;
-    };
-    Object.defineProperties(material, {
-        linewidth: {
-            get: () => coreWidth,
-            set: (value) => {
-                coreWidth = Math.max(0.35, value);
-                syncPhysicalWidth();
-            },
-        },
-        resolution: {
-            get: () => material.uniforms.resolution.value,
-        },
-    });
-    (material as any).worldUnits = false;
-    material.userData.setPixelRatio = (value: any) => {
-        const next = Math.max(0.25, value || 1.0);
-        if (next === pixelRatio) return;
-        pixelRatio = next;
-        syncPhysicalWidth();
-    };
-    return material;
-}
-
-function buildEdgeLines(edgeMap: any, material = makeEdgeMaterial(), chunkBounds: any = null) {
-    const runs = mergeEdgeRuns(edgeMap);
-
-    if (chunkBounds) {
-        // Runs parallel to a chunk axis continue in the neighbouring chunk. A
-        // flat endpoint lets the two analytic strokes meet at the exact vertex;
-        // round caps would overlap there and create a dark bead at every seam.
-        for (const run of runs) {
-            if (run.axis === 0) {
-                if (chunkBounds.x0 > 0 && run.start[0] === chunkBounds.x0) run.roundStart = false;
-                if (chunkBounds.x1 < chunkBounds.sx && run.end[0] === chunkBounds.x1) run.roundEnd = false;
-            } else if (run.axis === 2) {
-                if (chunkBounds.z0 > 0 && run.start[2] === chunkBounds.z0) run.roundStart = false;
-                if (chunkBounds.z1 < chunkBounds.sz && run.end[2] === chunkBounds.z1) run.roundEnd = false;
-            }
-        }
-    }
-
-    const positions = new Float32Array(runs.length * 6);
-    const normalsA = new Int8Array(runs.length * 3);
-    const normalsB = new Int8Array(runs.length * 3);
-    const light = new Uint8Array(runs.length);
-    const roundCaps = new Uint8Array(runs.length * 2);
-
-    for (let i = 0; i < runs.length; i++) {
-        const run = runs[i];
-        positions.set([...run.start, ...run.end], i * 6);
-        for (let axis = 0; axis < 3; axis++) {
-            normalsA[i * 3 + axis] = run.normalA[axis] * 127;
-            normalsB[i * 3 + axis] = run.normalB[axis] * 127;
-        }
-        light[i] = run.light ? 255 : 0;
-        roundCaps[i * 2] = run.roundStart ? 255 : 0;
-        roundCaps[i * 2 + 1] = run.roundEnd ? 255 : 0;
-    }
-
-    const geometry = new LineSegmentsGeometry();
-    geometry.setPositions(positions);
-    geometry.setAttribute('instanceNormalA', new THREE.InstancedBufferAttribute(normalsA, 3, true));
-    geometry.setAttribute('instanceNormalB', new THREE.InstancedBufferAttribute(normalsB, 3, true));
-    geometry.setAttribute('instanceLightEligible', new THREE.InstancedBufferAttribute(light, 1, true));
-    geometry.setAttribute('instanceRoundCaps', new THREE.InstancedBufferAttribute(roundCaps, 2, true));
-
-    const edges = new LineSegments2(geometry, material as any);
-    edges.name = 'voxel-edges';
-    edges.matrixAutoUpdate = false;
-    prepareEdgeObject(edges);
-    return edges;
-}
-
-/**
- * Shared setup for anything that draws into the edge mask.
- *
- * The layer is what keeps these strokes out of the beauty pass: the scene
- * camera only ever looks at layer 0, and the edge pass flips to EDGE_LAYER for
- * the one render that consumes them. Living in the main scene rather than in a
- * private one is what lets an edge object be parented to an animated node and
- * still arrive with a correct world matrix.
- */
-function prepareEdgeObject(edges: any) {
-    edges.castShadow = false;
-    edges.receiveShadow = false;
-    edges.renderOrder = 2;
-    edges.layers.set(EDGE_LAYER);
-    // LineSegments2's default callback reports the renderer's logical viewport,
-    // not the active offscreen target. Use the physical target viewport so the
-    // SDF and gl_FragCoord stay in the same pixel coordinate system at any DPR.
-    const edgeViewport = new THREE.Vector4();
-    edges.onBeforeRender = (renderer: any) => {
-        renderer.getCurrentViewport(edgeViewport);
-        edges.material.resolution.set(edgeViewport.z, edgeViewport.w);
-    };
-    return edges;
-}
 
 const COMMON_GLSL = /* glsl */ `
   float vxHash(vec2 p) {
@@ -1655,27 +497,6 @@ const COMMON_GLSL = /* glsl */ `
  * bilinear, no mips. Built once and shared by every voxel material.
  */
 let _noiseTex: THREE.DataTexture | null = null;
-export function voxelNoiseTexture(): THREE.DataTexture {
-    if (_noiseTex) return _noiseTex;
-    const N = 256;
-    const data = new Uint8Array(N * N);
-    // Deterministic, well-mixed values (mulberry32), so the look is stable.
-    let a = 0x2f6b4c1d;
-    for (let i = 0; i < data.length; i++) {
-        a = (a + 0x6d2b79f5) | 0;
-        let t = Math.imul(a ^ (a >>> 15), 1 | a);
-        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-        data[i] = ((t ^ (t >>> 14)) >>> 0) & 255;
-    }
-    const tex = new THREE.DataTexture(data, N, N, THREE.RedFormat, THREE.UnsignedByteType);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.magFilter = THREE.LinearFilter;
-    tex.minFilter = THREE.LinearFilter;
-    tex.generateMipmaps = false;
-    tex.needsUpdate = true;
-    _noiseTex = tex;
-    return tex;
-}
 
 const VERT_DECL = /* glsl */ `
   attribute vec3 aTint;
@@ -2403,6 +1224,1187 @@ const FRAG_BODY = /* glsl */ `
  */
 const FAR_CELL = 4;
 const FAR_WALL_MIN = 4;
+
+function createMeshRoots() {
+    const solidGroup = new THREE.Group();
+    const glowGroup = new THREE.Group();
+    const edgeGroup = new THREE.Group();
+    solidGroup.name = 'terrain';
+    glowGroup.name = 'glow';
+    edgeGroup.name = 'voxel-edges';
+
+    const solidMat = makeVoxelMaterial();
+    // Leaves: the same voxel material, double-sided, sharing every uniform object
+    // (wind, fade, lighting) so the two stay in lockstep.
+    const leafMat = makeVoxelMaterial();
+    leafMat.side = THREE.DoubleSide;
+    leafMat.userData.uniforms = solidMat.userData.uniforms;
+    const glowMat = makeGlowMaterial();
+    const edgeMat = makeEdgeMaterial();
+    // Preserve the former single-edge-object access path for developer tools.
+    (edgeGroup as any).material = edgeMat;
+
+    return {
+        solid: solidGroup,
+        glow: glowGroup,
+        edges: edgeGroup,
+        material: solidMat,
+        /** [front-sided solid, double-sided leaves] — chunk geometry groups 0 and 1. */
+        materials: [solidMat, leafMat],
+        leafMaterial: leafMat,
+        glowMaterial: glowMat,
+        edgeMaterial: edgeMat,
+    };
+}
+
+/** Build one sphere chunk. ci/ck are chunk indices within the face. */
+function buildSphereMeshChunk(
+    grid: SphereVoxelGrid,
+    face: number,
+    ci: number,
+    ck: number,
+    meshes: ReturnType<typeof createMeshRoots>,
+    /** Collect outline edges (costly: ~40% of build time). Only near chunks on tiers that draw outlines. */
+    wantEdges = true,
+) {
+    const u0 = ci * CHUNK,
+        v0 = ck * CHUNK;
+    const u1 = Math.min(u0 + CHUNK, FACE_RES);
+    const v1 = Math.min(v0 + CHUNK, FACE_RES);
+    const solid = new MeshBuffer(),
+        glow = new MeshBuffer(),
+        leaves = new MeshBuffer(),
+        edgeMap = wantEdges ? new Map() : null;
+    meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1, leaves);
+    // Leaf faces ride in the solid mesh as a second, double-sided draw group: from
+    // inside a bush or canopy the outward-facing faces are back faces, and front-
+    // sided culling made the plant see-through. Only leaves pay the double side.
+    solid.append(leaves);
+    const record: any = { solid: null, glow: null, edges: null };
+    if (!solid.empty) {
+        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.materials);
+        record.solid.name = `terrain-${face}-${ci}-${ck}`;
+        record.solid.castShadow = true;
+        record.solid.receiveShadow = true;
+        record.solid.matrixAutoUpdate = false;
+        meshes.solid.add(record.solid);
+    }
+    if (!glow.empty) {
+        record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
+        record.glow.name = `glow-${face}-${ci}-${ck}`;
+        record.glow.matrixAutoUpdate = false;
+        // Gems cast too: spire/obelisk caps, and the crystal grove (almost all gem),
+        // which otherwise threw no shadow at all. They are lit by their own glow, so
+        // they don't receive.
+        record.glow.castShadow = true;
+        meshes.glow.add(record.glow);
+    }
+    if (edgeMap && edgeMap.size > 0) {
+        record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial);
+        record.edges.name = `voxel-edges-${face}-${ci}-${ck}`;
+        meshes.edges.add(record.edges);
+    }
+    return record;
+}
+
+function removeMeshChunk(meshes: any, record: any) {
+    for (const [root, object] of [
+        [meshes.solid, record.solid],
+        [meshes.glow, record.glow],
+        [meshes.edges, record.edges],
+    ]) {
+        if (!object) continue;
+        root.remove(object);
+        object.geometry.dispose();
+    }
+}
+
+/**
+ * Collect edge entries for the sphere mesher.
+ * ponytail: no cross-face seam dedup — add if seam artifacts become visible
+ */
+function _collectSphereFaceEdges(
+    edgeMap: any,
+    face: number,
+    u: number,
+    v: number,
+    layer: number,
+    F: any,
+    nrm: [number, number, number],
+    mask: number,
+    col: any,
+    isConcave: boolean,
+    forceLight: boolean,
+    cornerPos: (uc: number, vc: number, lc: number) => [number, number, number],
+) {
+    if (mask === 0) return;
+    const uA = AXIS_VEC[F.uAxis],
+        vA = AXIS_VEC[F.vAxis];
+    const borders = [
+        { bit: 1, cIdx: [0, 1] },
+        { bit: 2, cIdx: [2, 3] },
+        { bit: 4, cIdx: [0, 3] },
+        { bit: 8, cIdx: [1, 2] },
+    ];
+    for (const { bit, cIdx } of borders) {
+        if (!(mask & bit)) continue;
+        const c0 = F.corners[cIdx[0]],
+            c1 = F.corners[cIdx[1]];
+        const p0 = cornerPos(u + c0[0], v + c0[2], layer + c0[1]);
+        const p1 = cornerPos(u + c1[0], v + c1[2], layer + c1[1]);
+        addEdgeFace(edgeMap, p0, p1, nrm, forceLight || isLightFace(col), isConcave, forceLight);
+    }
+}
+
+function isLightFace(color: any) {
+    const cached = faceLightCache.get(color);
+    if (cached !== undefined) return cached;
+    const hex = color.getHex(THREE.SRGBColorSpace);
+    const r = ((hex >> 16) & 255) / 255;
+    const g = ((hex >> 8) & 255) / 255;
+    const b = (hex & 255) / 255;
+    const light = r * 0.2126 + g * 0.7152 + b * 0.0722 >= LIGHT_FACE_LUMA;
+    faceLightCache.set(color, light);
+    return light;
+}
+
+function pointOrder(a: any, b: any) {
+    for (let i = 0; i < 3; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
+}
+
+/** Add one face's ownership of a unit edge, deduplicated across both faces. */
+function addEdgeFace(edgeMap: any, p0: any, p1: any, normal: any, light: any, concave: any, forceLight: any) {
+    let start = p0,
+        end = p1;
+    if (pointOrder(start, end) > 0) [start, end] = [end, start];
+    const key = `${start.join(',')}|${end.join(',')}`;
+    let edge = edgeMap.get(key);
+    if (!edge) {
+        edge = { start, end, faces: [], concave: false };
+        edgeMap.set(key, edge);
+    }
+    // If either owning face identifies this as an inward fold, the shared edge
+    // is concave. Concave edges always use the dark ink.
+    edge.concave ||= concave;
+
+    const normalKey = normal.join(',');
+    const existing = edge.faces.find((face: any) => face.key === normalKey);
+    if (existing) {
+        // A material boundary can contribute the same plane twice. Be
+        // conservative: both contributors must be pale for the face to be pale.
+        existing.light = existing.light && light;
+        existing.forceLight ||= forceLight;
+    } else {
+        edge.faces.push({ key: normalKey, normal: [...normal], light, forceLight });
+    }
+}
+
+/** Merge adjacent unit edges with identical topology into clean long runs. */
+function mergeEdgeRuns(edgeMap: any) {
+    const groups = new Map();
+
+    for (const edge of edgeMap.values()) {
+        const faces = [...edge.faces].sort((a, b) => a.key.localeCompare(b.key));
+        const normalA = faces[0]?.normal || [0, 0, 0];
+        const normalB = faces[1]?.normal || [0, 0, 0];
+        // A grass top explicitly promotes its convex perimeter to the light ink;
+        // otherwise both owning faces must belong to the pale palette. Concave
+        // and non-manifold connections remain dark without exception.
+        const light =
+            faces.length === 2 &&
+            !edge.concave &&
+            ((faces[0].light && faces[1].light) || faces.some((face) => face.forceLight));
+        const axis = edge.start.findIndex((value: any, i: any) => value !== edge.end[i]);
+        const fixed = edge.start.filter((_: any, i: any) => i !== axis);
+        const style = `${axis}|${fixed.join(',')}|${normalA.join(',')}|${normalB.join(',')}|${light ? 1 : 0}`;
+        let group = groups.get(style);
+        if (!group) {
+            group = { axis, fixed, normalA, normalB, light, units: [] };
+            groups.set(style, group);
+        }
+        group.units.push([edge.start[axis], edge.end[axis]]);
+    }
+
+    const runs: any[] = [];
+    for (const group of groups.values()) {
+        group.units.sort((a: any, b: any) => a[0] - b[0]);
+        let start = group.units[0][0];
+        let end = group.units[0][1];
+        const push = () => {
+            const p0 = [0, 0, 0],
+                p1 = [0, 0, 0];
+            let f = 0;
+            for (let axis = 0; axis < 3; axis++) {
+                if (axis === group.axis) {
+                    p0[axis] = start;
+                    p1[axis] = end;
+                } else {
+                    p0[axis] = p1[axis] = group.fixed[f++];
+                }
+            }
+            runs.push({ ...group, start: p0, end: p1 });
+        };
+
+        for (let i = 1; i < group.units.length; i++) {
+            const unit = group.units[i];
+            if (unit[0] === end) {
+                end = unit[1];
+            } else {
+                push();
+                start = unit[0];
+                end = unit[1];
+            }
+        }
+        push();
+    }
+
+    // A round cap is normally what closes small cracks where several runs meet.
+    // At a mixed-colour joint, however, a dark cap protrudes half a stroke past
+    // the vertex and visibly bites into the pale run. Give the pale run ownership
+    // of that joint and terminate every incident dark run at the vertex plane.
+    const joints = new Map();
+    const addJoint = (run: any, cap: any) => {
+        const point = cap === 'roundStart' ? run.start : run.end;
+        const key = point.join(',');
+        let joint = joints.get(key);
+        if (!joint) {
+            joint = [];
+            joints.set(key, joint);
+        }
+        joint.push({ run, cap });
+    };
+    for (const run of runs) {
+        run.roundStart = true;
+        run.roundEnd = true;
+        addJoint(run, 'roundStart');
+        addJoint(run, 'roundEnd');
+    }
+    for (const joint of joints.values()) {
+        if (!joint.some(({ run }: any) => run.light)) continue;
+        for (const { run, cap } of joint) {
+            if (!run.light) run[cap] = false;
+        }
+    }
+    return runs;
+}
+
+function makeEdgeMaterial() {
+    const CORE_WIDTH = 0.7;
+    const AA_PAD = 0.8;
+    const material = new THREE.ShaderMaterial({
+        uniforms: {
+            resolution: { value: new THREE.Vector2(1, 1) },
+            // The geometry extends past the visible stroke so the fragment shader
+            // has a full pixel in which to resolve analytic coverage.
+            linewidth: { value: CORE_WIDTH + AA_PAD * 2.0 },
+            uCoreWidth: { value: CORE_WIDTH },
+            uFogDensity: { value: 0.0 },
+            uWaterLevel: { value: WATER.level },
+            /** How much of a stroke survives below the waterline. */
+            uSubmergedInk: { value: 0.0 },
+            uMistBase: { value: 6.0 },
+            uMistH: { value: 8.0 },
+            uMistDens: { value: 0.022 },
+            uMistMax: { value: 0.55 },
+            tSceneDepth: { value: null },
+            uLodAlpha: { value: 1.0 },
+        },
+        vertexShader: /* glsl */ `
+      uniform vec2 resolution;
+      uniform float linewidth;
+      uniform float uFogDensity;
+      uniform float uMistBase, uMistH, uMistDens, uMistMax;
+
+      attribute vec3 instanceStart;
+      attribute vec3 instanceEnd;
+      attribute vec3 instanceNormalA;
+      attribute vec3 instanceNormalB;
+      attribute float instanceLightEligible;
+      attribute vec2 instanceRoundCaps;
+
+      // These are constant for every vertex of an edge instance. Measuring
+      // against them in framebuffer pixels avoids all perspective-varying
+      // interpolation, so camera distance cannot affect stroke width.
+      varying vec2 vScreenStart;
+      varying vec2 vScreenEnd;
+      varying float vWindowDepthStart;
+      varying float vWindowDepthEnd;
+      varying float vLightEdge;
+      varying float vFogVisibility;
+      varying vec2 vRoundCaps;
+      varying float vEdgeY;
+
+      float trimSegmentAlpha(vec4 start, vec4 end) {
+        float a = projectionMatrix[2][2];
+        float b = projectionMatrix[3][2];
+        float nearEstimate = a > 0.0 ? -b / (a + 1.0) : -0.5 * b / a;
+        return (nearEstimate - start.z) / (end.z - start.z);
+      }
+
+      float heightAverage(float y0, float y1) {
+        float a = clamp((y0 - uMistBase) / uMistH, -4.0, 20.0);
+        float b = clamp((y1 - uMistBase) / uMistH, -4.0, 20.0);
+        if (abs(b - a) < 0.02) return exp(-a);
+        return (exp(-a) - exp(-b)) / (b - a);
+      }
+
+      void main() {
+        vec4 start = modelViewMatrix * vec4(instanceStart, 1.0);
+        vec4 end = modelViewMatrix * vec4(instanceEnd, 1.0);
+
+        bool perspective = projectionMatrix[2][3] == -1.0;
+        if (perspective) {
+          if (start.z < 0.0 && end.z >= 0.0) {
+            end.xyz = mix(start.xyz, end.xyz, trimSegmentAlpha(start, end));
+          } else if (end.z < 0.0 && start.z >= 0.0) {
+            start.xyz = mix(end.xyz, start.xyz, trimSegmentAlpha(end, start));
+          }
+        }
+
+        vec4 clipStart = projectionMatrix * start;
+        vec4 clipEnd = projectionMatrix * end;
+        vec2 ndcStart = clipStart.xy / clipStart.w;
+        vec2 ndcEnd = clipEnd.xy / clipEnd.w;
+        vScreenStart = (ndcStart * 0.5 + 0.5) * resolution;
+        vScreenEnd = (ndcEnd * 0.5 + 0.5) * resolution;
+        vWindowDepthStart = clipStart.z / clipStart.w * 0.5 + 0.5;
+        vWindowDepthEnd = clipEnd.z / clipEnd.w * 0.5 + 0.5;
+        vRoundCaps = instanceRoundCaps;
+
+        float aspect = resolution.x / resolution.y;
+        vec2 dir = ndcEnd - ndcStart;
+        dir.x *= aspect;
+        dir = length(dir) > 1e-7 ? normalize(dir) : vec2(1.0, 0.0);
+
+        vec2 offset = vec2(dir.y, -dir.x);
+        dir.x /= aspect;
+        offset.x /= aspect;
+        if (position.x < 0.0) offset *= -1.0;
+        if (position.y < 0.0) offset -= dir;
+        else if (position.y > 1.0) offset += dir;
+
+        offset *= linewidth / resolution.y;
+        vec4 clip = position.y < 0.5 ? clipStart : clipEnd;
+        clip.xy += offset * clip.w;
+        gl_Position = clip;
+
+        // A short transition at grazing angles prevents a one-frame colour
+        // pop as the camera rotates across a face plane.
+        float frontA = smoothstep(0.0, 0.08,
+                                  (normalMatrix * instanceNormalA).z);
+        float frontB = smoothstep(0.0, 0.08,
+                                  (normalMatrix * instanceNormalB).z);
+        vLightEdge = instanceLightEligible * frontA * frontB;
+
+        float fogDepth = -(position.y < 0.5 ? start.z : end.z);
+        float fogTerm = uFogDensity * max(fogDepth, 0.0);
+        float aerialVisibility = exp(-fogTerm * fogTerm);
+        // Through the model matrix, not raw: the world edge mesh sits at the
+        // origin so the two agree there, but a character part's endpoints are
+        // local to an animated node, and reading them as world coordinates put
+        // the figure hundreds of units away and let the mist eat its outline.
+        vec3 edgeWorld = (modelMatrix * vec4(
+          position.y < 0.5 ? instanceStart : instanceEnd, 1.0)).xyz;
+        vEdgeY = edgeWorld.y;
+        float worldDistance = distance(cameraPosition, edgeWorld);
+        float mist = 1.0 - exp(-uMistDens * worldDistance
+                              * heightAverage(cameraPosition.y, edgeWorld.y));
+        mist = clamp(mist, 0.0, 1.0) * uMistMax;
+        vFogVisibility = aerialVisibility * (1.0 - mist);
+      }
+    `,
+        fragmentShader: /* glsl */ `
+      uniform sampler2D tSceneDepth;
+      uniform vec2 resolution;
+      uniform float uCoreWidth;
+      uniform float uLodAlpha;
+
+      varying vec2 vScreenStart;
+      varying vec2 vScreenEnd;
+      varying float vWindowDepthStart;
+      varying float vWindowDepthEnd;
+      varying float vLightEdge;
+      varying float vFogVisibility;
+      varying vec2 vRoundCaps;
+      varying float vEdgeY;
+      uniform float uWaterLevel, uSubmergedInk;
+
+      void main() {
+        // Exact framebuffer-pixel distance to the projected segment. Most
+        // ends are round; dark runs use a butt cap where a pale run owns the
+        // shared joint. The SDF contains no world-space or camera-distance
+        // term, so both cap shape and stroke width remain stable at any zoom.
+        vec2 segment = vScreenEnd - vScreenStart;
+        float segmentLengthSq = max(dot(segment, segment), 1e-4);
+        float segmentLength = sqrt(segmentLengthSq);
+        float alongPx = dot(gl_FragCoord.xy - vScreenStart, segment)
+                        / segmentLength;
+        float along = clamp(alongPx / segmentLength, 0.0, 1.0);
+        vec2 nearest = vScreenStart + segment * along;
+
+        // Visibility belongs to the mathematical edge centerline, not to the
+        // expanded coverage quad. A fixed-function depth test compares every
+        // fragment of that quad against a sloping owner face; close to the
+        // camera the face then clips away most of its own outline. Sample the
+        // populated scene depth on both sides of the centerline instead. A
+        // genuinely nearer object wins at all three samples, while either
+        // owning face is enough to keep the full-width stroke visible.
+        vec2 lineDirection = segment / segmentLength;
+        vec2 lineNormal = vec2(-lineDirection.y, lineDirection.x);
+        vec2 depthUv = nearest / resolution;
+        vec2 depthStep = lineNormal * 0.75 / resolution;
+        float sceneDepth = texture2D(tSceneDepth, depthUv).x;
+        sceneDepth = max(sceneDepth,
+                         texture2D(tSceneDepth, depthUv + depthStep).x);
+        sceneDepth = max(sceneDepth,
+                         texture2D(tSceneDepth, depthUv - depthStep).x);
+        float edgeDepth = mix(vWindowDepthStart, vWindowDepthEnd, along);
+        float alongDepthSlope = abs(vWindowDepthEnd - vWindowDepthStart)
+                                / max(length(segment), 1.0);
+        // Fixed bias covers near-edge precision; distance term scales with
+        // edgeDepth² to compensate for the depth buffer's non-linear precision
+        // loss at large view distances (near=0.1, far=6000 compresses most
+        // precision into the first few units).
+        float depthBias = 2e-5 + alongDepthSlope + edgeDepth * edgeDepth * 1e-5;
+        if (edgeDepth > sceneDepth + depthBias) discard;
+
+        float halfWidth = uCoreWidth * 0.5;
+        float acrossPx = dot(gl_FragCoord.xy - vScreenStart, lineNormal);
+        float signedDistance = abs(acrossPx) - halfWidth;
+        if (alongPx < 0.0) {
+          signedDistance = vRoundCaps.x > 0.5
+            ? length(vec2(alongPx, acrossPx)) - halfWidth
+            : max(signedDistance, -alongPx);
+        } else if (alongPx > segmentLength) {
+          float beyondEnd = alongPx - segmentLength;
+          signedDistance = vRoundCaps.y > 0.5
+            ? length(vec2(beyondEnd, acrossPx)) - halfWidth
+            : max(signedDistance, beyondEnd);
+        }
+        float aa = max(fwidth(signedDistance) * 0.65, 0.50);
+        float coverage = 1.0 - smoothstep(-aa, aa, signedDistance);
+        coverage *= clamp(vFogVisibility, 0.0, 1.0);
+        coverage *= uLodAlpha;
+        /* A hard stop at the surface, not a ramp.
+         *
+         * Fading over a depth left every vertical edge trailing off into the
+         * water, and a stroke that dims along its length reads as a smudge
+         * rather than as a line that ends. Cutting it clean lets the water's
+         * own dark waterline become the terminator instead.
+         *
+         * The only softness is one pixel of antialiasing, taken from the
+         * screen-space rate of change of height so the cut stays a single
+         * pixel at any distance rather than a fixed slab of world space. */
+        float waterAa = max(fwidth(vEdgeY) * 0.5, 1e-5);
+        float aboveWater = smoothstep(uWaterLevel - waterAa,
+                                      uWaterLevel + waterAa, vEdgeY);
+        coverage *= mix(uSubmergedInk, 1.0, aboveWater);
+        if (coverage <= 0.001) discard;
+
+        float light = clamp(vLightEdge, 0.0, 1.0);
+        gl_FragColor = vec4(coverage * (1.0 - light),
+                            coverage * light,
+                            0.0,
+                            coverage);
+      }
+    `,
+        // Hidden-line removal is performed against the already-rendered scene
+        // depth at the edge centerline. Fixed-function testing would let sloping
+        // owner faces cut a zoom-dependent amount from the coverage quad.
+        depthTest: false,
+        depthWrite: false,
+        transparent: true,
+        toneMapped: false,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.MaxEquation,
+        blendSrc: THREE.OneFactor,
+        blendDst: THREE.OneFactor,
+        blendEquationAlpha: THREE.MaxEquation,
+        blendSrcAlpha: THREE.OneFactor,
+        blendDstAlpha: THREE.OneFactor,
+        extensions: { derivatives: true } as any,
+    });
+
+    // Preserve the small public surface used by settings and LineSegments2,
+    // while keeping the authored width separate from the invisible AA skirt.
+    let coreWidth = CORE_WIDTH;
+    let pixelRatio = 1.0;
+    const syncPhysicalWidth = () => {
+        const physicalWidth = coreWidth * pixelRatio;
+        material.uniforms.uCoreWidth.value = physicalWidth;
+        material.uniforms.linewidth.value = physicalWidth + AA_PAD * 2.0;
+    };
+    Object.defineProperties(material, {
+        linewidth: {
+            get: () => coreWidth,
+            set: (value) => {
+                coreWidth = Math.max(0.35, value);
+                syncPhysicalWidth();
+            },
+        },
+        resolution: {
+            get: () => material.uniforms.resolution.value,
+        },
+    });
+    (material as any).worldUnits = false;
+    material.userData.setPixelRatio = (value: any) => {
+        const next = Math.max(0.25, value || 1.0);
+        if (next === pixelRatio) return;
+        pixelRatio = next;
+        syncPhysicalWidth();
+    };
+    return material;
+}
+
+function buildEdgeLines(edgeMap: any, material = makeEdgeMaterial(), chunkBounds: any = null) {
+    const runs = mergeEdgeRuns(edgeMap);
+
+    if (chunkBounds) {
+        // Runs parallel to a chunk axis continue in the neighbouring chunk. A
+        // flat endpoint lets the two analytic strokes meet at the exact vertex;
+        // round caps would overlap there and create a dark bead at every seam.
+        for (const run of runs) {
+            if (run.axis === 0) {
+                if (chunkBounds.x0 > 0 && run.start[0] === chunkBounds.x0) run.roundStart = false;
+                if (chunkBounds.x1 < chunkBounds.sx && run.end[0] === chunkBounds.x1) run.roundEnd = false;
+            } else if (run.axis === 2) {
+                if (chunkBounds.z0 > 0 && run.start[2] === chunkBounds.z0) run.roundStart = false;
+                if (chunkBounds.z1 < chunkBounds.sz && run.end[2] === chunkBounds.z1) run.roundEnd = false;
+            }
+        }
+    }
+
+    const positions = new Float32Array(runs.length * 6);
+    const normalsA = new Int8Array(runs.length * 3);
+    const normalsB = new Int8Array(runs.length * 3);
+    const light = new Uint8Array(runs.length);
+    const roundCaps = new Uint8Array(runs.length * 2);
+
+    for (let i = 0; i < runs.length; i++) {
+        const run = runs[i];
+        positions.set([...run.start, ...run.end], i * 6);
+        for (let axis = 0; axis < 3; axis++) {
+            normalsA[i * 3 + axis] = run.normalA[axis] * 127;
+            normalsB[i * 3 + axis] = run.normalB[axis] * 127;
+        }
+        light[i] = run.light ? 255 : 0;
+        roundCaps[i * 2] = run.roundStart ? 255 : 0;
+        roundCaps[i * 2 + 1] = run.roundEnd ? 255 : 0;
+    }
+
+    const geometry = new LineSegmentsGeometry();
+    geometry.setPositions(positions);
+    geometry.setAttribute('instanceNormalA', new THREE.InstancedBufferAttribute(normalsA, 3, true));
+    geometry.setAttribute('instanceNormalB', new THREE.InstancedBufferAttribute(normalsB, 3, true));
+    geometry.setAttribute('instanceLightEligible', new THREE.InstancedBufferAttribute(light, 1, true));
+    geometry.setAttribute('instanceRoundCaps', new THREE.InstancedBufferAttribute(roundCaps, 2, true));
+
+    const edges = new LineSegments2(geometry, material as any);
+    edges.name = 'voxel-edges';
+    edges.matrixAutoUpdate = false;
+    prepareEdgeObject(edges);
+    return edges;
+}
+
+/**
+ * Shared setup for anything that draws into the edge mask.
+ *
+ * The layer is what keeps these strokes out of the beauty pass: the scene
+ * camera only ever looks at layer 0, and the edge pass flips to EDGE_LAYER for
+ * the one render that consumes them. Living in the main scene rather than in a
+ * private one is what lets an edge object be parented to an animated node and
+ * still arrive with a correct world matrix.
+ */
+function prepareEdgeObject(edges: any) {
+    edges.castShadow = false;
+    edges.receiveShadow = false;
+    edges.renderOrder = 2;
+    edges.layers.set(EDGE_LAYER);
+    // LineSegments2's default callback reports the renderer's logical viewport,
+    // not the active offscreen target. Use the physical target viewport so the
+    // SDF and gl_FragCoord stay in the same pixel coordinate system at any DPR.
+    const edgeViewport = new THREE.Vector4();
+    edges.onBeforeRender = (renderer: any) => {
+        renderer.getCurrentViewport(edgeViewport);
+        edges.material.resolution.set(edgeViewport.z, edgeViewport.w);
+    };
+    return edges;
+}
+
+/** Convert (face, u, v) where u or v may be out of [0, FACE_RES) to the canonical face+UV. */
+export function crossFaceUV(face: number, u: number, v: number): [number, number, number] {
+    const n = _FN[face],
+        tu = _FTU[face],
+        tv = _FTV[face];
+    // Column centre in cube space (unnormalised — dominant axis determines new face)
+    const pu = (2 * (u + 0.5)) / FACE_RES - 1;
+    const pv = (2 * (v + 0.5)) / FACE_RES - 1;
+    const cx = n[0] + tu[0] * pu + tv[0] * pv;
+    const cy = n[1] + tu[1] * pu + tv[1] * pv;
+    const cz = n[2] + tu[2] * pu + tv[2] * pv;
+    // Find dominant axis → new face
+    const ax = Math.abs(cx),
+        ay = Math.abs(cy),
+        az = Math.abs(cz);
+    let axis = 0;
+    if (ay > ax) axis = 1;
+    if (az > Math.max(ax, ay)) axis = 2;
+    const comp = axis === 0 ? cx : axis === 1 ? cy : cz;
+    const f2 = axis * 2 + (comp < 0 ? 1 : 0);
+    // Project cube vector onto new face plane
+    const n2 = _FN[f2],
+        tu2 = _FTU[f2],
+        tv2 = _FTV[f2];
+    const dn = cx * n2[0] + cy * n2[1] + cz * n2[2];
+    const du = cx * tu2[0] + cy * tu2[1] + cz * tu2[2];
+    const dv = cx * tv2[0] + cy * tv2[1] + cz * tv2[2];
+    const u2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((du / dn + 1) * FACE_RES) / 2)));
+    const v2 = Math.max(0, Math.min(FACE_RES - 1, Math.floor(((dv / dn + 1) * FACE_RES) / 2)));
+    return [f2, u2, v2];
+}
+
+export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number; edges?: boolean } = {}) {
+    const tierEdges = opts.edges ?? true;
+    const meshes = createMeshRoots();
+    const loaded = new Map<string, any>();
+    const fadingMeshes = new Set<any>();
+    let loadQueue: Array<{ face: number; ci: number; ck: number; dot: number }> = [];
+    let disposed = false;
+    const maxRadius = opts.loadRadius ?? 10;
+    let radius = maxRadius;
+    let loadCos = 1,
+        unloadCos = 1;
+    const fadeUniforms = meshes.material.userData.uniforms;
+    let detailCos = 1;
+    const setCos = () => {
+        loadCos = Math.cos(radius * CHUNK_ANGLE);
+        unloadCos = Math.cos((radius + UNLOAD_MARGIN) * CHUNK_ANGLE);
+        detailCos = Math.cos(Math.min(DETAIL_RADIUS, radius) * CHUNK_ANGLE);
+        // Fade band in world units along the ground (chord ≈ arc at these angles).
+        // Measured from the camera, so it fades against what's on screen.
+        const surf = PLANET_RADIUS + 14;
+        fadeUniforms.uFadeFar.value = radius * CHUNK_ANGLE * surf;
+        fadeUniforms.uFadeNear.value = radius * (1 - FADE_BAND) * CHUNK_ANGLE * surf;
+    };
+    let listener: ChunkListener | null = null;
+    /** Chunks whose detail state (outlines/shadow) last applied; flipped as the player moves. */
+    const detailed = new Map<string, boolean>();
+    setCos();
+    const lastScan = new THREE.Vector3();
+    let forceScan = true;
+
+    // Chunk centre directions never change — compute all 3,750 once.
+    const chunkDirs = new Float32Array(6 * CHUNKS_PER_FACE_EDGE * CHUNKS_PER_FACE_EDGE * 3);
+    {
+        const n = new THREE.Vector3(),
+            tu = new THREE.Vector3(),
+            tv = new THREE.Vector3(),
+            d = new THREE.Vector3();
+        let o = 0;
+        for (let face = 0; face < 6; face++) {
+            basisFromCode(face, n, tu, tv);
+            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
+                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
+                    const u = (ci + 0.5) * CHUNK,
+                        v = (ck + 0.5) * CHUNK;
+                    d.copy(n)
+                        .addScaledVector(tu, (2 * u) / FACE_RES - 1)
+                        .addScaledVector(tv, (2 * v) / FACE_RES - 1)
+                        .normalize();
+                    chunkDirs[o++] = d.x;
+                    chunkDirs[o++] = d.y;
+                    chunkDirs[o++] = d.z;
+                }
+            }
+        }
+    }
+
+    const keyOf = (face: number, ci: number, ck: number) => `${face},${ci},${ck}`;
+
+    const initFade = (record: any) => {
+        const uniforms = meshes.material.userData.uniforms;
+        for (const mesh of [record.solid, record.glow]) {
+            if (!mesh) continue;
+            mesh.userData.lodAlpha = 0.0;
+            mesh.userData.lodFading = true;
+            fadingMeshes.add(mesh);
+            mesh.onBeforeRender = () => {
+                uniforms.uLodAlpha.value = mesh.userData.lodAlpha;
+            };
+            mesh.onAfterRender = () => {
+                uniforms.uLodAlpha.value = 1.0;
+            };
+        }
+    };
+
+    const setDetail = (record: any, on: boolean) => {
+        if (record.edges) record.edges.visible = on;
+        if (record.solid) record.solid.castShadow = on;
+        if (record.glow) record.glow.castShadow = on;
+    };
+
+    const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
+        const key = keyOf(face, ci, ck);
+        if (loaded.has(key) || disposed) return;
+        const near = dot >= detailCos;
+        const record = buildSphereMeshChunk(grid, face, ci, ck, meshes, tierEdges && near);
+        record.hasEdges = tierEdges && near;
+        if (fade) initFade(record);
+        setDetail(record, near);
+        detailed.set(key, near);
+        loaded.set(key, record);
+        listener?.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
+    };
+
+    const unloadChunk = (key: string) => {
+        const record = loaded.get(key);
+        if (!record) return;
+        for (const mesh of [record.solid, record.glow, record.edges]) {
+            if (!mesh) continue;
+            fadingMeshes.delete(mesh);
+        }
+        removeMeshChunk(meshes, record);
+        loaded.delete(key);
+        detailed.delete(key);
+        const [face, ci, ck] = key.split(',').map(Number);
+        listener?.chunkUnloaded(face, ci * CHUNK, ck * CHUNK);
+    };
+
+    const scan = (playerDir: THREE.Vector3) => {
+        lastScan.copy(playerDir);
+        forceScan = false;
+        loadQueue = [];
+        const keep = new Set<string>();
+        let o = 0;
+        for (let face = 0; face < 6; face++) {
+            for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
+                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++, o += 3) {
+                    const dot =
+                        chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
+                    if (dot < unloadCos) continue;
+                    const key = keyOf(face, ci, ck);
+                    keep.add(key);
+                    const record = loaded.get(key);
+                    if (record) {
+                        const near = dot >= detailCos;
+                        if (near && tierEdges && !record.hasEdges) {
+                            // Built far (no outlines) and now near: re-mesh it with
+                            // edges through the normal budgeted queue.
+                            unloadChunk(key);
+                            loadQueue.push({ face, ci, ck, dot });
+                            continue;
+                        }
+                        if (detailed.get(key) !== near) {
+                            setDetail(record, near);
+                            detailed.set(key, near);
+                        }
+                    } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
+                }
+            }
+        }
+        // Closest first; popped from the end.
+        loadQueue.sort((a, b) => a.dot - b.dot);
+        for (const key of loaded.keys()) if (!keep.has(key)) unloadChunk(key);
+    };
+
+    return {
+        meshes,
+        get loadRadius() {
+            return radius;
+        },
+        /** World-unit distances of the near terrain's dither-out band. */
+        get fadeBand(): [number, number] {
+            return [fadeUniforms.uFadeNear.value, fadeUniforms.uFadeFar.value];
+        },
+        get loadedCount() {
+            return loaded.size;
+        },
+        get pendingCount() {
+            return loadQueue.length;
+        },
+        /** Something that tracks chunk load/unload — the vegetation layer. */
+        setListener(l: ChunkListener) {
+            listener = l;
+            for (const key of loaded.keys()) {
+                const [face, ci, ck] = key.split(',').map(Number);
+                l.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
+            }
+        },
+        setLoadRadius(r: number) {
+            const next = Math.max(3, Math.min(maxRadius, Math.round(r)));
+            if (next === radius) return;
+            radius = next;
+            setCos();
+            forceScan = true;
+        },
+
+        /**
+         * @param budgetMs main-thread meshing budget this call. Pass Infinity at
+         *        startup to fill the view before the first frame (no fade-in then).
+         */
+        update(playerDir: THREE.Vector3, budgetMs = BUILD_BUDGET_MS) {
+            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
+            const fade = Number.isFinite(budgetMs);
+            const t0 = performance.now();
+            do {
+                const next = loadQueue.pop();
+                if (!next) break;
+                loadChunk(next.face, next.ci, next.ck, next.dot, fade);
+            } while (performance.now() - t0 < budgetMs);
+        },
+
+        /**
+         * Build, synchronously and without fade, every queued chunk within
+         * `radiusChunks` of `playerDir` (closest first); the rest stream in on the
+         * normal per-frame budget. Used for the first view, teleports and palette
+         * rebuilds — a full-radius synchronous fill was 1,400-2,200 chunks there.
+         */
+        fillNear(playerDir: THREE.Vector3, radiusChunks = NEAR_FILL) {
+            if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
+            const minDot = Math.cos(radiusChunks * CHUNK_ANGLE);
+            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
+                const next = loadQueue.pop()!;
+                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+            }
+        },
+
+        /** Queued chunks with dot >= minDot (i.e. within a radius), for boot progress. */
+        pendingNear(minDot: number) {
+            let n = 0;
+            for (let i = loadQueue.length - 1; i >= 0 && loadQueue[i].dot >= minDot; i--) n++;
+            return n;
+        },
+        /** Build near chunks (dot >= minDot, closest first) for up to budgetMs, no fade. */
+        fillNearSlice(minDot: number, budgetMs: number) {
+            const t0 = performance.now();
+            while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
+                const next = loadQueue.pop()!;
+                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+                if (performance.now() - t0 >= budgetMs) break;
+            }
+        },
+
+        tick(dt: number) {
+            for (const mesh of fadingMeshes) {
+                mesh.userData.lodAlpha = Math.min(1, mesh.userData.lodAlpha + dt * 3);
+                if (mesh.userData.lodAlpha >= 1) {
+                    mesh.userData.lodFading = false;
+                    fadingMeshes.delete(mesh);
+                }
+            }
+        },
+
+        /**
+         * Drop every chunk and reload around `playerDir`. Block colours are baked into
+         * the meshes, so a palette switch must rebuild them. Fills the view at once.
+         */
+        rebuildAll(playerDir: THREE.Vector3) {
+            for (const key of [...loaded.keys()]) unloadChunk(key);
+            forceScan = true;
+            this.fillNear(playerDir);
+        },
+
+        dispose() {
+            disposed = true;
+            for (const key of loaded.keys()) unloadChunk(key);
+        },
+    };
+}
+
+/**
+ * Fills solid/glow MeshBuffers for a patch of a cube face.
+ *
+ * Coordinate mapping from the flat mesher: x→u (column U), y→layer (radial), z→v (column V).
+ * FACES[f].n = [nu, nl, nv]; FACES[f].corners[i] = [du, dl, dv].
+ */
+export function meshSphereFaceRegion(
+    grid: SphereVoxelGrid,
+    face: number,
+    u0: number,
+    v0: number,
+    u1: number,
+    v1: number,
+    solid: any,
+    glow: any,
+    edgeMap: any,
+    uHalo = 0,
+    /** Optional buffer for leaf (sway) faces, drawn double-sided; falls back to `solid`. */
+    leaves: MeshBuffer | null = null,
+) {
+    const _fn = new THREE.Vector3(),
+        _ftu = new THREE.Vector3(),
+        _ftv = new THREE.Vector3();
+    basisFromCode(face, _fn, _ftu, _ftv);
+    const fnx = _fn.x,
+        fny = _fn.y,
+        fnz = _fn.z;
+    const ftux = _ftu.x,
+        ftuy = _ftu.y,
+        ftuz = _ftu.z;
+    const ftvx = _ftv.x,
+        ftvy = _ftv.y,
+        ftvz = _ftv.z;
+
+    function cornerPos(uc: number, vc: number, layerc: number): [number, number, number] {
+        const cx = fnx + ftux * ((2 * uc) / FACE_RES - 1) + ftvx * ((2 * vc) / FACE_RES - 1);
+        const cy = fny + ftuy * ((2 * uc) / FACE_RES - 1) + ftvy * ((2 * vc) / FACE_RES - 1);
+        const cz = fnz + ftuz * ((2 * uc) / FACE_RES - 1) + ftvz * ((2 * vc) / FACE_RES - 1);
+        const len = Math.sqrt(cx * cx + cy * cy + cz * cz);
+        const r = PLANET_RADIUS + layerc;
+        return [(cx / len) * r, (cy / len) * r, (cz / len) * r];
+    }
+
+    function radialDir(u: number, v: number): [number, number, number] {
+        const cx = fnx + ftux * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvx * ((2 * (v + 0.5)) / FACE_RES - 1);
+        const cy = fny + ftuy * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvy * ((2 * (v + 0.5)) / FACE_RES - 1);
+        const cz = fnz + ftuz * ((2 * (u + 0.5)) / FACE_RES - 1) + ftvz * ((2 * (v + 0.5)) / FACE_RES - 1);
+        const len = Math.sqrt(cx * cx + cy * cy + cz * cz);
+        return [cx / len, cy / len, cz / len];
+    }
+
+    /** Sway multiplier 0..1 for a leaf block, from the nearest bark below it (≤ 12 layers). */
+    const swayOfColumn = (g: SphereVoxelGrid, f: number, cu: number, cv: number, layer: number) => {
+        for (let l = layer - 1; l >= Math.max(0, layer - 12); l--) {
+            const b = BLOCK_BY_ID[g.get(f, cu, cv, l)] as any;
+            if (b?.isTrunk) return SWAY_BY_BARK[b.barkStyle ?? 0] ?? 0.55;
+            if (b && !b.sway) break; // reached ground with no trunk under this leaf
+        }
+        // A side branch of canopy with no trunk directly below: use the default.
+        return 0.55;
+    };
+
+    const aoOf = (occ: boolean[]) => {
+        if (occ[0] && occ[1]) return 0;
+        return (3 - (+occ[0] + +occ[1] + +occ[2])) / 3;
+    };
+
+    const ao = new Array(4);
+    const localV = new Array(4);
+    const uvs: [number, number][] = [
+        [0, 0],
+        [0, 0],
+        [0, 0],
+        [0, 0],
+    ];
+    const verts: [number, number, number][] = [
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+    ];
+
+    const scanU0 = Math.max(0, u0 - uHalo);
+    const scanV0 = Math.max(0, v0 - uHalo);
+    const scanU1 = Math.min(FACE_RES, u1 + uHalo);
+    const scanV1 = Math.min(FACE_RES, v1 + uHalo);
+
+    for (let v = scanV0; v < scanV1; v++) {
+        for (let u = scanU0; u < scanU1; u++) {
+            const top = grid.columnTop(face, u, v);
+            if (top < 0) continue;
+
+            for (let layer = 0; layer <= top; layer++) {
+                const id = grid.get(face, u, v, layer);
+                if (id === 0) continue;
+                const block = BLOCK_BY_ID[id];
+                if (!block) continue;
+                // Leaves go to their own buffer (drawn double-sided; see buildSphereMeshChunk).
+                const target = (block as any).emissive ? glow : (block as any).sway && leaves ? leaves : solid;
+                const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
+                const isWaterBlk = !!(block as any).isWater;
+
+                const [rdx, rdy, rdz] = radialDir(u, v);
+
+                for (let f = 0; f < 6; f++) {
+                    const F = FACES[f];
+                    const nu = u + F.n[0],
+                        nlayer = layer + F.n[1],
+                        nv = v + F.n[2];
+                    if (grid.isSolidGlobal(face, nu, nv, nlayer)) {
+                        // Ground beside/under a bush keeps its face: the bush's base sways, and a
+                        // culled face let the sky show through the gap it opens.
+                        if ((block as any).sway) continue;
+                        const nb = BLOCK_BY_ID[
+                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
+                                ? grid.get(face, nu, nv, nlayer)
+                                : grid.get(...crossFaceUV(face, nu, nv), nlayer)
+                        ] as any;
+                        if (!(nb?.sway && nb.solid)) continue;
+                    }
+                    // Water draws every face that meets AIR — the surface, and the side
+                    // faces where a river steps down a layer or ends — so it never reads
+                    // as a floating sheet. Faces against other water (internal) and
+                    // against solid ground (hidden by the bank) are skipped.
+                    if (isWaterBlk) {
+                        if (F.n[1] === -1) continue; // the bed is beneath, always
+                        const nId =
+                            nu >= 0 && nu < FACE_RES && nv >= 0 && nv < FACE_RES
+                                ? grid.get(face, nu, nv, nlayer)
+                                : grid.get(...crossFaceUV(face, nu, nv), nlayer);
+                        if (nId === id) continue;
+                    }
+
+                    const isTop = F.n[1] === 1;
+                    const isBottom = F.n[1] === -1;
+                    const baseCol = isTop
+                        ? (block as any).top
+                        : isBottom
+                          ? (block as any).bottom || (block as any).side
+                          : (block as any).side;
+                    const pattern = isTop
+                        ? ((block as any).topPattern ?? (block as any).pattern)
+                        : (block as any).pattern;
+                    const tintCol =
+                        (isTop ? (block as any).topTint || (block as any).tint : (block as any).tint) || baseCol;
+                    // Leaves carry their tree's sway stiffness in aFringe.r (leaves have no
+                    // grass fringe, so the channel is free): soft for willow/palm/birch,
+                    // stiff for scaly conifers. Read from the bark under the canopy.
+                    const fringeCol = (block as any).sway
+                        ? _swayCol.setRGB(swayOfColumn(grid, face, u, v, layer), 0, 0)
+                        : (block as any).fringeColor || (block as any).top || baseCol;
+
+                    let nrm: [number, number, number];
+                    if (isTop) nrm = [rdx, rdy, rdz];
+                    else if (isBottom) nrm = [-rdx, -rdy, -rdz];
+                    else if (F.n[0] !== 0) nrm = [F.n[0] * ftux, F.n[0] * ftuy, F.n[0] * ftuz];
+                    else nrm = [F.n[2] * ftvx, F.n[2] * ftvy, F.n[2] * ftvz];
+
+                    const uA = AXIS_VEC[F.uAxis],
+                        vA = AXIS_VEC[F.vAxis];
+
+                    let convexMask = 0,
+                        concaveMask = 0;
+                    if (edgeMap) {
+                        const dirs: [number, number, number, number][] = [
+                            [-uA[0], -uA[1], -uA[2], 1],
+                            [uA[0], uA[1], uA[2], 2],
+                            [-vA[0], -vA[1], -vA[2], 4],
+                            [vA[0], vA[1], vA[2], 8],
+                        ];
+                        for (const [dx, dy, dz, bit] of dirs) {
+                            const sdu = u + dx,
+                                sdv = v + dz,
+                                sdl = layer + dy;
+                            if (!grid.isSolidGlobal(face, sdu, sdv, sdl)) {
+                                convexMask |= bit;
+                            } else if (grid.isSolidGlobal(face, sdu + F.n[0], sdv + F.n[2], sdl + F.n[1])) {
+                                concaveMask |= bit;
+                            }
+                        }
+                    }
+
+                    const forceLightEdge = isTop && (block as any).lightEdge === true;
+                    if (edgeMap)
+                        _collectSphereFaceEdges(
+                            edgeMap,
+                            face,
+                            u,
+                            v,
+                            layer,
+                            F,
+                            nrm,
+                            convexMask,
+                            baseCol,
+                            false,
+                            forceLightEdge,
+                            cornerPos,
+                        );
+                    if (edgeMap)
+                        _collectSphereFaceEdges(
+                            edgeMap,
+                            face,
+                            u,
+                            v,
+                            layer,
+                            F,
+                            nrm,
+                            concaveMask,
+                            baseCol,
+                            true,
+                            forceLightEdge,
+                            cornerPos,
+                        );
+
+                    if (!emitGeometry) continue;
+
+                    for (let i = 0; i < 4; i++) {
+                        const c = F.corners[i];
+                        verts[i] = cornerPos(u + c[0], v + c[2], layer + c[1]);
+
+                        const su = c[F.uAxis] === 1 ? 1 : -1;
+                        const sv = c[F.vAxis] === 1 ? 1 : -1;
+                        const s1 = grid.isSolidGlobal(face, nu + uA[0] * su, nv + uA[2] * su, nlayer + uA[1] * su);
+                        const s2 = grid.isSolidGlobal(face, nu + vA[0] * sv, nv + vA[2] * sv, nlayer + vA[1] * sv);
+                        const cn = grid.isSolidGlobal(
+                            face,
+                            nu + uA[0] * su + vA[0] * sv,
+                            nv + uA[2] * su + vA[2] * sv,
+                            nlayer + uA[1] * su + vA[1] * sv,
+                        );
+                        ao[i] = aoOf([s1, s2, cn]);
+
+                        const ucorner = u + c[0],
+                            vcorner = v + c[2],
+                            lcorner = layer + c[1];
+                        uvs[i][0] = F.uAxis === 0 ? ucorner : F.uAxis === 2 ? vcorner : lcorner;
+                        uvs[i][1] = F.vAxis === 0 ? ucorner : F.vAxis === 2 ? vcorner : lcorner;
+
+                        localV[i] = isTop ? 1 : isBottom ? 0 : c[1];
+                    }
+
+                    // Bit 3 = sway (leaves); 16 = fresh water (shader draws ripples, skips terrain detail).
+                    const patternPacked = isWaterBlk ? 16 : (pattern || 0) | ((block as any).sway ? 8 : 0);
+                    // Reverse winding: x→u, y→layer, z→v swaps two axes (det=-1), flipping face orientation
+                    target.quad(
+                        [verts[3], verts[2], verts[1], verts[0]],
+                        nrm,
+                        baseCol,
+                        tintCol,
+                        fringeCol,
+                        [uvs[3], uvs[2], uvs[1], uvs[0]],
+                        [ao[3], ao[2], ao[1], ao[0]],
+                        patternPacked,
+                        // Negative fringe values are flags (fringe is otherwise >= 0):
+                        //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
+                        //   -(10 + s)   natural stone style s for patRock (0 marble .. 6 quartzite)
+                        (block as any).rockStyle !== undefined
+                            ? -(10 + (block as any).rockStyle)
+                            : (block as any).barkStyle !== undefined
+                              ? -(2 + (block as any).barkStyle)
+                              : (block as any).fringe || 0,
+                        [localV[3], localV[2], localV[1], localV[0]],
+                    );
+                }
+            }
+        }
+    }
+}
+
+export function voxelNoiseTexture(): THREE.DataTexture {
+    if (_noiseTex) return _noiseTex;
+    const N = 256;
+    const data = new Uint8Array(N * N);
+    // Deterministic, well-mixed values (mulberry32), so the look is stable.
+    let a = 0x2f6b4c1d;
+    for (let i = 0; i < data.length; i++) {
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        data[i] = ((t ^ (t >>> 14)) >>> 0) & 255;
+    }
+    const tex = new THREE.DataTexture(data, N, N, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    _noiseTex = tex;
+    return tex;
+}
+
 export function createFarField(grid: SphereVoxelGrid, nearMaterial: THREE.MeshLambertMaterial, seaLayer: number) {
     const mat = makeVoxelMaterial();
     // Share every uniform object with the near material (sun, tints, wind…), so the

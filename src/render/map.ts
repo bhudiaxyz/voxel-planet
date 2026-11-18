@@ -3,13 +3,14 @@ import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
 import { BLOCK_BY_ID, WATER } from '../core/palette';
 
+import { LandmarkRecord, LANDMARK_COLOR } from '../world/landmarks';
+
 /** Player marker: bright orange fill, dark rim (easy to spot on any terrain). */
 /** Map colour grading vs raw block tops (linear): a little darker and richer, like in-game. */
 const MAP_EXPOSURE = 0.82;
 const MAP_SATURATION = 1.15;
 const PLAYER_ORANGE = '#ff8c1a';
 const PLAYER_RIM = '#3a1a00';
-import { LandmarkRecord, LANDMARK_COLOR } from '../world/landmarks';
 
 const SEA_LAYER = 11; // must match world/terrain.ts and world/landmarks.ts
 
@@ -30,6 +31,26 @@ export interface SphereMap {
 
 // Icon draw functions — each receives a pre-translated/scaled ctx with origin at icon centre
 const ICON_R = 8; // icon radius in map pixels
+
+const GLYPHS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) => void> = {
+    spire: iconSpire,
+    obelisk: iconObelisk,
+    ring: iconRing,
+    tombs: iconTombs,
+    biosphere: iconBiosphere,
+    well: iconWell,
+    arch: iconArch,
+    ziggurat: iconZiggurat,
+    tower: iconTower,
+    grove: iconGrove,
+    aqueduct: iconAqueduct,
+};
+
+/** One saturated, clearly different colour per landmark kind (badge fill). */
+const BADGE = Object.fromEntries(
+    Object.entries(LANDMARK_COLOR).map(([k, hex]) => [k, '#' + hex.toString(16).padStart(6, '0')]),
+) as Record<LandmarkRecord['kind'], string>;
+const BADGE_R = ICON_R * 1.35;
 
 function iconSpire(ctx: CanvasRenderingContext2D) {
     ctx.beginPath();
@@ -181,26 +202,6 @@ function iconArch(ctx: CanvasRenderingContext2D) {
     ctx.fill();
     ctx.stroke();
 }
-
-const GLYPHS: Record<LandmarkRecord['kind'], (ctx: CanvasRenderingContext2D) => void> = {
-    spire: iconSpire,
-    obelisk: iconObelisk,
-    ring: iconRing,
-    tombs: iconTombs,
-    biosphere: iconBiosphere,
-    well: iconWell,
-    arch: iconArch,
-    ziggurat: iconZiggurat,
-    tower: iconTower,
-    grove: iconGrove,
-    aqueduct: iconAqueduct,
-};
-
-/** One saturated, clearly different colour per landmark kind (badge fill). */
-const BADGE = Object.fromEntries(
-    Object.entries(LANDMARK_COLOR).map(([k, hex]) => [k, '#' + hex.toString(16).padStart(6, '0')]),
-) as Record<LandmarkRecord['kind'], string>;
-const BADGE_R = ICON_R * 1.35;
 
 /**
  * Landmark marker: a bright coloured badge with a dark rim and a soft glow,

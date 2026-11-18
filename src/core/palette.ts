@@ -352,14 +352,6 @@ export const ROCK = {
 } as const;
 
 let _nextBlockId = 60;
-export function registerBlock(name: any, def: any) {
-    if ((BLOCKS as any)[name]) return (BLOCKS as any)[name];
-    if (_nextBlockId > 250) throw new Error('block id space exhausted');
-    const b = { id: _nextBlockId++, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, ...def, name };
-    (BLOCKS as any)[name] = b;
-    BLOCK_BY_ID[b.id] = b;
-    return b;
-}
 
 /* ------------------------------------------------------------------ *
  * Water  (colours initialised to zero; filled by setVoxelPalette)
@@ -928,6 +920,14 @@ const NATURAL = {
     maxContrast: 1.12,
 };
 const _nat = new THREE.Color();
+
+// Initialise all palette-driven exports. `?palette=Desert` (any key above) picks
+// the starting theme, before the world is generated, so it applies everywhere.
+{
+    const fromUrl = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('palette') : null;
+    setVoxelPalette(fromUrl && VOXEL_PALETTES[fromUrl] ? fromUrl : 'Spring');
+}
+
 function naturalise(c: THREE.Color): THREE.Color {
     const l = c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722;
     c.r = c.r + (l - c.r) * NATURAL.desat + NATURAL.warm * l;
@@ -939,6 +939,15 @@ function naturalise(c: THREE.Color): THREE.Color {
 /** Darken a Three.js Color by a factor (0..1 = darker) in linear space. */
 function darken(src: THREE.Color, factor: number): THREE.Color {
     return new THREE.Color(src.r * factor, src.g * factor, src.b * factor);
+}
+
+export function registerBlock(name: any, def: any) {
+    if ((BLOCKS as any)[name]) return (BLOCKS as any)[name];
+    if (_nextBlockId > 250) throw new Error('block id space exhausted');
+    const b = { id: _nextBlockId++, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, ...def, name };
+    (BLOCKS as any)[name] = b;
+    BLOCK_BY_ID[b.id] = b;
+    return b;
 }
 
 /** Apply a VoxelPalette — mutates all palette-driven exports in place. */
@@ -1020,11 +1029,4 @@ export function setVoxelPalette(name: string): void {
     GRADE.bloom.strength = p.grade.bloom.strength;
     GRADE.bloom.radius = p.grade.bloom.radius;
     GRADE.bloom.threshold = p.grade.bloom.threshold;
-}
-
-// Initialise all palette-driven exports. `?palette=Desert` (any key above) picks
-// the starting theme, before the world is generated, so it applies everywhere.
-{
-    const fromUrl = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('palette') : null;
-    setVoxelPalette(fromUrl && VOXEL_PALETTES[fromUrl] ? fromUrl : 'Spring');
 }

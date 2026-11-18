@@ -30,6 +30,9 @@ const LILY_P = 0.09;
 const REED_P = 0.75;
 /** Per canopy column in warm zones: vines / moss strands from the underside. */
 const HANG_P = 0.12;
+/** Vines hang at most this share of the way from canopy to ground, and no longer than VINE_MAX_LEN. */
+const VINE_MAX_DROP = 0.6;
+const VINE_MAX_LEN = 5;
 /** Noise frequencies are per world unit, sampled in 3D so patches cross cube seams. */
 const MEADOW_FREQ = 0.026;
 const FLOWER_FREQ = 0.055;
@@ -48,6 +51,81 @@ const canopyWind = {
 };
 /** Phase offset that marks hanging growth (vines): it rides the canopy's sway. */
 const HANGING = 100;
+
+const _centre = new THREE.Vector3();
+const _dark = new THREE.Color();
+const _light = new THREE.Color();
+const _root = new THREE.Color();
+/** Blade root brightness relative to its authored base colour (contact shadow). */
+const ROOT_SHADE = 0.72;
+
+/**
+ * Ground-cover plants recorded by the terrain step (grid.plants), each drawn
+ * from its block's own colours so the palette stays authored in one place.
+ * Bottom colour = block.side (shaded base), tip = block.topTint ?? block.top.
+ */
+const YUCCA_BLOOM = new THREE.Color(0xf2ecd0);
+const _pDark = new THREE.Color();
+const _pLight = new THREE.Color();
+
+/** Per-patch palette snapshot — palette colours are only filled once the palette loads. */
+interface DetailColours {
+    flowers: THREE.Color[];
+    pebbles: THREE.Color[];
+    bark: THREE.Color[];
+    caps: THREE.Color[];
+    stem: THREE.Color;
+    moss: THREE.Color;
+    lily: THREE.Color;
+    lilyFlower: THREE.Color;
+    reedBase: THREE.Color;
+    reedTip: THREE.Color;
+    cattail: THREE.Color;
+    vine: THREE.Color;
+    vineTip: THREE.Color;
+}
+const readColours = (): DetailColours => ({
+    // Flowers use the theme's petal colours, not its leaves: canopies are mostly
+    // green now, and a meadow of green flowers would vanish into the grass.
+    flowers: PETAL_COLORS as THREE.Color[],
+    pebbles: [BLOCKS.STONE, BLOCKS.STONE_PALE, BLOCKS.STONE_WARM].map((b: any) => b.top),
+    bark: [BLOCKS.TRUNK, BLOCKS.TRUNK_PALE].map((b: any) => b.side),
+    // Same caps as the flat world's damp-grove mushrooms.
+    caps: [PETAL_COLORS[0], PETAL_COLORS[2], PETAL_COLORS[3], BLOCKS.STONE_WARM.top] as THREE.Color[],
+    stem: BLOCKS.STONE_PALE.top as THREE.Color,
+    moss: BLOCKS.GRASS_DEEP.top as THREE.Color,
+    // Waterside colours come off the theme's own greens and petals.
+    lily: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.5),
+    lilyFlower: (PETAL_COLORS[3] as THREE.Color).clone().lerp(new THREE.Color(1, 1, 1), 0.4),
+    reedBase: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.8),
+    reedTip: (BLOCKS.GRASS_LIGHT.top as THREE.Color).clone().lerp(BLOCKS.SAND.top, 0.35),
+    cattail: new THREE.Color(0.22, 0.13, 0.07),
+    vine: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.75),
+    vineTip: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.4),
+});
+
+/* ---- ground details: fallen logs, mushrooms (boulders: rocks.ts) ---------
+ * Drawn from their own RNG stream so turning them on or off (tier setting)
+ * never shifts where the grass and flowers land. */
+const LOG_P = 0.006; // per column next to a tree trunk
+const MUSHROOM_P = 0.05; // per column next to a tree trunk; ×0.25 in open lush meadow
+
+const NEIGHBOURS4: Array<[number, number]> = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+];
+
+/* ---- waterside, canopy floor and hanging growth -------------------------- */
+
+const _flat = new THREE.Color();
+const _pad = new THREE.Color();
+const _padRim = new THREE.Color();
+
+const LITTER_BROWN = new THREE.Color(0.32, 0.22, 0.12);
+
+const _down = new THREE.Vector3();
 
 function makeVegMaterial(windAmp: number) {
     const uniforms = {
@@ -122,13 +200,6 @@ function makeVegMaterial(windAmp: number) {
     return { mat, uniforms };
 }
 
-const _centre = new THREE.Vector3();
-const _dark = new THREE.Color();
-const _light = new THREE.Color();
-const _root = new THREE.Color();
-/** Blade root brightness relative to its authored base colour (contact shadow). */
-const ROOT_SHADE = 0.72;
-
 /**
  * A crossed pair of blades rooted at `base`, standing along `up`.
  * `ox`/`oy` are tangent offsets for the root; `lean` tilts the tip.
@@ -172,14 +243,6 @@ function tuft(
     }
 }
 
-/**
- * Ground-cover plants recorded by the terrain step (grid.plants), each drawn
- * from its block's own colours so the palette stays authored in one place.
- * Bottom colour = block.side (shaded base), tip = block.topTint ?? block.top.
- */
-const YUCCA_BLOOM = new THREE.Color(0xf2ecd0);
-const _pDark = new THREE.Color();
-const _pLight = new THREE.Color();
 function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number) {
     const b = BLOCK_BY_ID[id] as any;
     _pLight.copy(b.topTint ?? b.top);
@@ -298,55 +361,6 @@ function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number)
     }
 }
 
-/** Per-patch palette snapshot — palette colours are only filled once the palette loads. */
-interface DetailColours {
-    flowers: THREE.Color[];
-    pebbles: THREE.Color[];
-    bark: THREE.Color[];
-    caps: THREE.Color[];
-    stem: THREE.Color;
-    moss: THREE.Color;
-    lily: THREE.Color;
-    lilyFlower: THREE.Color;
-    reedBase: THREE.Color;
-    reedTip: THREE.Color;
-    cattail: THREE.Color;
-    vine: THREE.Color;
-    vineTip: THREE.Color;
-}
-const readColours = (): DetailColours => ({
-    // Flowers use the theme's petal colours, not its leaves: canopies are mostly
-    // green now, and a meadow of green flowers would vanish into the grass.
-    flowers: PETAL_COLORS as THREE.Color[],
-    pebbles: [BLOCKS.STONE, BLOCKS.STONE_PALE, BLOCKS.STONE_WARM].map((b: any) => b.top),
-    bark: [BLOCKS.TRUNK, BLOCKS.TRUNK_PALE].map((b: any) => b.side),
-    // Same caps as the flat world's damp-grove mushrooms.
-    caps: [PETAL_COLORS[0], PETAL_COLORS[2], PETAL_COLORS[3], BLOCKS.STONE_WARM.top] as THREE.Color[],
-    stem: BLOCKS.STONE_PALE.top as THREE.Color,
-    moss: BLOCKS.GRASS_DEEP.top as THREE.Color,
-    // Waterside colours come off the theme's own greens and petals.
-    lily: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.5),
-    lilyFlower: (PETAL_COLORS[3] as THREE.Color).clone().lerp(new THREE.Color(1, 1, 1), 0.4),
-    reedBase: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.8),
-    reedTip: (BLOCKS.GRASS_LIGHT.top as THREE.Color).clone().lerp(BLOCKS.SAND.top, 0.35),
-    cattail: new THREE.Color(0.22, 0.13, 0.07),
-    vine: (BLOCKS.GRASS_DEEP.top as THREE.Color).clone().multiplyScalar(0.75),
-    vineTip: (BLOCKS.LEAF_MINT.top as THREE.Color).clone().lerp(BLOCKS.GRASS_DEEP.top, 0.4),
-});
-
-/* ---- ground details: fallen logs, mushrooms (boulders: rocks.ts) ---------
- * Drawn from their own RNG stream so turning them on or off (tier setting)
- * never shifts where the grass and flowers land. */
-const LOG_P = 0.006; // per column next to a tree trunk
-const MUSHROOM_P = 0.05; // per column next to a tree trunk; ×0.25 in open lush meadow
-
-const NEIGHBOURS4: Array<[number, number]> = [
-    [1, 0],
-    [-1, 0],
-    [0, 1],
-    [0, -1],
-];
-
 function scatterGroundDetail(
     buf: QuadBuffer,
     centre: THREE.Vector3,
@@ -386,12 +400,6 @@ function scatterGroundDetail(
         }
     }
 }
-
-/* ---- waterside, canopy floor and hanging growth -------------------------- */
-
-const _flat = new THREE.Color();
-const _pad = new THREE.Color();
-const _padRim = new THREE.Color();
 
 /**
  * A flat surface-aligned quad (a leaf on the ground, a lily pad on the water),
@@ -478,7 +486,6 @@ function drawLeafLitter(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, leaf: 
         flatQuad(buf, r, _up, rng.range(0.1, 0.18), rng.range(0.14, 0.24), _flat, rng() * 6.28, 0);
     }
 }
-const LITTER_BROWN = new THREE.Color(0.32, 0.22, 0.12);
 
 /**
  * Hanging growth under a canopy block: vines and moss strands drooping from the
@@ -500,7 +507,9 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
                 : kind < 0.85
                   ? [rng.range(0.9, 2.2), rng.range(0.06, 0.11)]
                   : [rng.range(2.2, 4.0), rng.range(0.08, 0.14)];
-        const maxLen = Math.max(0.3, clearance - 0.6); // never reach the ground
+        // Never more than VINE_MAX_DROP of the way to the ground, nor longer than
+        // VINE_MAX_LEN: tall crowns used to trail lianas to within 0.6 of the floor.
+        const maxLen = Math.max(0.3, Math.min(clearance * VINE_MAX_DROP, VINE_MAX_LEN));
         const L = (x: number) => Math.min(maxLen, x * reach);
         // A tuft grown DOWN: base at the leaf underside, tip below it.
         const r = root(under, rng.range(-0.4, 0.4), rng.range(-0.4, 0.4));
@@ -542,7 +551,6 @@ function drawHanging(buf: QuadBuffer, under: THREE.Vector3, rng: Rng, cols: Deta
         );
     }
 }
-const _down = new THREE.Vector3();
 
 /**
  * @param lush   0..1 meadow field: lush shelves vs close-cropped ones

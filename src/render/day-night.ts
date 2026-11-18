@@ -71,23 +71,6 @@ const TWILIGHT = {
 };
 const _c = new THREE.Color();
 
-function keyframe(t: number): { i: number; a: number } {
-    for (let i = 0; i < TIMES.length - 1; i++) {
-        if (t <= TIMES[i + 1]) {
-            return { i, a: (t - TIMES[i]) / (TIMES[i + 1] - TIMES[i]) };
-        }
-    }
-    return { i: TIMES.length - 2, a: 1 };
-}
-
-function lerpColor(arr: THREE.Color[], ia: { i: number; a: number }, out: THREE.Color): THREE.Color {
-    return out.lerpColors(arr[ia.i], arr[ia.i + 1], ia.a);
-}
-
-function lerpScalar(arr: number[], ia: { i: number; a: number }): number {
-    return arr[ia.i] * (1 - ia.a) + arr[ia.i + 1] * ia.a;
-}
-
 /** Radians the sun moves before the shadow light follows (~0.11°): stable shadow texels. */
 const SHADOW_DIR_STEP = 0.002;
 
@@ -270,4 +253,21 @@ export class DayNight {
             vu['uAmbientTint'].value.set(1.0 - night * 0.08, 1.0 - night * 0.04, 1.0 + night * 0.12);
         }
     }
+}
+
+function keyframe(t: number): { i: number; a: number } {
+    for (let i = 0; i < TIMES.length - 1; i++) {
+        if (t <= TIMES[i + 1]) {
+            return { i, a: (t - TIMES[i]) / (TIMES[i + 1] - TIMES[i]) };
+        }
+    }
+    return { i: TIMES.length - 2, a: 1 };
+}
+
+function lerpColor(arr: THREE.Color[], ia: { i: number; a: number }, out: THREE.Color): THREE.Color {
+    return out.lerpColors(arr[ia.i], arr[ia.i + 1], ia.a);
+}
+
+function lerpScalar(arr: number[], ia: { i: number; a: number }): number {
+    return arr[ia.i] * (1 - ia.a) + arr[ia.i + 1] * ia.a;
 }

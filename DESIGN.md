@@ -211,7 +211,7 @@ Seed handling (`main.ts`): `?seed=<word>` overrides the default `currentSeedWord
 1. Domain warp: `w = 0.25`, warp frequency `q = 1.6*0.8`; each axis is displaced by `noise2` sampled at offset lattice positions.
 2. `base = noise.fbm(warped * 1.6, 5 octaves, lacunarity 2, gain 0.5) * 1.1`
 3. `hills = noise.get(warped * 1.6*3.1 + 9) * 0.06`
-4. A mountain mask `mm = smoothstep(-0.1, 0.35, noise2(warped * 1.6*0.6 + 7))` multiplies a ridged term `ridged^2` (`ridged = max(0, 1 - |2*noise2.fbm(warped*1.6*1.5)|)`).
+4. A mountain mask multiplies a ridged term `ridged^2` (`ridged = max(0, 1 - |2*noise2.fbm(warped*1.6*1.5)|)`). The mask is `mm = max(mm0, mm1 x MOUNTAIN_SCATTER)`: `mm0 = smoothstep(-0.1, 0.35, noise2(warped * 1.6*0.6 + 7))` gives the few large ranges; `mm1 = smoothstep(MOUNTAIN_EDGE, MOUNTAIN_EDGE + 0.3, noise(warped * 1.6*1.7 + offset)) x smoothstep(0, 0.12, base)` is a finer mask that scatters smaller ranges between them, on land only (so it raises inland massifs, not new islands). `MOUNTAIN_EDGE = 0.05` (lower = more ranges), `MOUNTAIN_SCATTER = 0.85` (strength relative to the main ranges). Over seeds 1337 and 42 this took separate ranges (15+ layers above sea, at least 8 sampled columns) from about 44 to about 70, and mountain land from 17-20% to 22-27%, with peaks unchanged at 36-37.
 5. `e = base + hills + 0.8*mm*ridged^2*0.8 - 0.05`; negative values are halved (`e < 0 ? e*0.5 : e`) so the sea floor is shallower than the land is high.
 
 ### Terracing
@@ -222,7 +222,7 @@ terraced = TERRACE_STEP * round(relief(e) * AMPLITUDE / TERRACE_STEP)
 surfaceLayer = clamp(SEA_LAYER + terraced, 1, SHELL_DEPTH - 10)
 ```
 
-with `TERRACE_STEP = 2`, `AMPLITUDE = 24`, `SEA_LAYER = 11`, `RELIEF_KNEE = 0.2` (about 5 layers above sea) and `RELIEF_GAIN = 1.8`. Relief leaves coasts and lowlands where the zones, deserts and rivers are tuned, and makes hills and mountains climb 1.8x faster. On seed 1337 the median land height stayed at 6 layers above sea while the 90th percentile rose from 14 to 20 and the highest peak from 26 to 39. The upper zone bands in `zoneOf` were widened to match (see Altitude-zoned trees); raise `RELIEF_GAIN` and those bands together. Land is a column with `surfaceLayer > SEA_LAYER`. Terraces are two layers tall, which is why the player's `MAX_STEP` and the dog's `maxUp` are tuned to 2.
+with `TERRACE_STEP = 2`, `AMPLITUDE = 24`, `SEA_LAYER = 11`, `RELIEF_KNEE = 0.2` (about 5 layers above sea) and `RELIEF_GAIN = 1.6`. Relief leaves coasts and lowlands where the zones, deserts and rivers are tuned, and makes hills and mountains climb 1.6x faster. On seed 1337 the median land height is 6 layers above sea (unchanged from no relief), the 90th percentile 18 (was 14), the 99th 28 (was 20) and the highest peak 36 (was 26). The gain was first 1.8 and then cut to 1.6, about 10% off the high ground, because some peaks stood too tall. The upper zone bands in `zoneOf` were widened to match (see Altitude-zoned trees); raise `RELIEF_GAIN` and those bands together. Land is a column with `surfaceLayer > SEA_LAYER`. Terraces are two layers tall, which is why the player's `MAX_STEP` and the dog's `maxUp` are tuned to 2.
 
 ### Column fill
 
@@ -291,7 +291,7 @@ Block `DEADWOOD` (`PATTERN.BARK`, `isTrunk`), weathered grey-brown. 20% are stum
 
 ### Altitude-zoned trees
 
-`rise = surfaceLayer - SEA_LAYER` (plus +/-4 layers of `zoneNoise` jitter in the scatter pass, so zone edges do not follow contours). `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=14` midland, `<=21` highland, else treeline. The midland and highland bands were widened from 11 and 15 when terrain relief was added. On seed 1337 land splits coast 23%, lowland 30%, midland 28%, highland 11%, treeline 8%.
+`rise = surfaceLayer - SEA_LAYER` (plus +/-4 layers of `zoneNoise` jitter in the scatter pass, so zone edges do not follow contours). `zoneOf(rise)`: `<=3` coast, `<=7` lowland, `<=14` midland, `<=21` highland, else treeline. The midland and highland bands were widened from 11 and 15 when terrain relief was added. On seed 1337 land splits coast 20%, lowland 26%, midland 32%, highland 14%, treeline 8%.
 
 | Zone | rise | `treeP` | Species mix (weights) | Size range |
 | --- | --- | --- | --- | --- |
@@ -343,7 +343,7 @@ Foliage blocks `LEAF_PINK, LEAF_BLUSH, LEAF_LILAC, LEAF_CREAM, LEAF_MINT, LEAF_R
 5. **Carve and fill.** The bed is cut to `surface - depth` (depth 1 at the rim, up to `RIVER_DEPTH = 3` at the centre), clearing everything above it including trees, and laid with `SAND`. `RIVER_WATER` fills from `max(bed + 1, sea + 1)` up to the surface; at or below sea level the sea sphere is the water.
 6. **Puddle cleanup.** Connected water bodies under `MIN_BODY = 4` columns (strays the relaxation leaves) are drained; their hollow stays as a dip. The flood fill always completes the whole body, so part of a large lake is never mistaken for a puddle.
 
-`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~29k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
+`RIVER_WATER` is a registered block with `isWater: true`: non-solid for the mesher; the player wades to the bed through `groundColumnTop`; the dog's pathfinder treats it as impassable, like the sea. A typical seed yields ~34k water columns across all six faces. `scripts/check-rivers.ts` asserts no water column's top is above any dry 4-neighbour's ground.
 
 **Rendering.** The mesher emits a water block's faces only where they meet air: the surface, plus side faces where a reach steps down a layer or ends. Faces against other water or solid ground, and bottoms, are skipped, so a channel never draws stacked internal walls and a step-down never reads as a floating sheet. Water quads carry `patternPacked = 16`; the fragment shader treats `vDataV.y > 15.5` as fresh water (no terrain or foliage detail; drifting three-plane ripples toward the block tint, timed by `uWindTime`), and the vertex sway test is `8 <= aData.y < 15.5`, so water never sways.
 

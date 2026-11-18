@@ -151,6 +151,41 @@ interface SettingsValues {
     windStrength: number;
 }
 
+const clamp = (n: number, a: number, b: number) => Math.min(b, Math.max(a, n));
+
+const fmt = {
+    inkWidth: (n: number) => `${(n / INK_BASE).toFixed(2)} px`,
+    zoomMin: (n: number) => String(Math.round(n)),
+    zoomMax: (n: number) => String(Math.round(n)),
+    fogStart: (n: number) => String(Math.round(n)),
+    shadowResolution: (n: number) => (n > 0 ? `${Math.round(n / 1024)}K` : 'Off'),
+    planetRadius: (n: number) => String(Math.round(n)),
+    daySpeed: (n: number) => `${n.toFixed(1)}×`,
+    windStrength: (n: number) => (n === 0 ? 'Off' : n.toFixed(2)),
+};
+
+interface SettingsDeps {
+    rig: { setZoomRange(a: number, b: number): void };
+    atmo: {
+        setAerialD(v: number): void;
+        setFogEnabled(v: boolean): void;
+        setShadowResolution(v: number): void;
+    };
+    input: { paused: boolean };
+    world: {
+        streaming?: {
+            loadRadius?: number;
+            loadedCount?: number;
+            pendingCount?: number;
+            setLoadRadius(r: number): void;
+        };
+        meshes?: { edgeMaterial?: { linewidth: number }; material?: { userData: Record<string, any> } };
+        allPlanetUnis: Array<{ uPlanetRadius: { value: number } }>;
+    };
+    dayNight: DayNight;
+    seed: { currentWord: () => string; push(word: string): void; gen(): string };
+}
+
 function load(): SettingsValues {
     try {
         const raw = localStorage.getItem(STORE_KEY);
@@ -223,41 +258,6 @@ function clampAll(v: SettingsValues): SettingsValues {
         Math.round(clamp(v.windStrength, RANGES.windStrength.min, RANGES.windStrength.max) / RANGES.windStrength.step) *
         RANGES.windStrength.step;
     return v;
-}
-
-const clamp = (n: number, a: number, b: number) => Math.min(b, Math.max(a, n));
-
-const fmt = {
-    inkWidth: (n: number) => `${(n / INK_BASE).toFixed(2)} px`,
-    zoomMin: (n: number) => String(Math.round(n)),
-    zoomMax: (n: number) => String(Math.round(n)),
-    fogStart: (n: number) => String(Math.round(n)),
-    shadowResolution: (n: number) => (n > 0 ? `${Math.round(n / 1024)}K` : 'Off'),
-    planetRadius: (n: number) => String(Math.round(n)),
-    daySpeed: (n: number) => `${n.toFixed(1)}×`,
-    windStrength: (n: number) => (n === 0 ? 'Off' : n.toFixed(2)),
-};
-
-interface SettingsDeps {
-    rig: { setZoomRange(a: number, b: number): void };
-    atmo: {
-        setAerialD(v: number): void;
-        setFogEnabled(v: boolean): void;
-        setShadowResolution(v: number): void;
-    };
-    input: { paused: boolean };
-    world: {
-        streaming?: {
-            loadRadius?: number;
-            loadedCount?: number;
-            pendingCount?: number;
-            setLoadRadius(r: number): void;
-        };
-        meshes?: { edgeMaterial?: { linewidth: number }; material?: { userData: Record<string, any> } };
-        allPlanetUnis: Array<{ uPlanetRadius: { value: number } }>;
-    };
-    dayNight: DayNight;
-    seed: { currentWord: () => string; push(word: string): void; gen(): string };
 }
 
 export function createSettings({ rig, atmo, input, world, dayNight, seed }: SettingsDeps) {

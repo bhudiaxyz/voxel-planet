@@ -1,6 +1,10 @@
 // src/core/geoutil.ts
 import * as THREE from 'three';
 
+const _gn = new THREE.Vector3(),
+    _gtu = new THREE.Vector3(),
+    _gtv = new THREE.Vector3();
+
 // Face codes: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z
 // Derived from planet-explorer/src/core/utilgeo.ts basisFromCode
 export function basisFromCode(code: number, normal: THREE.Vector3, tangentU: THREE.Vector3, tangentV: THREE.Vector3) {
@@ -10,10 +14,6 @@ export function basisFromCode(code: number, normal: THREE.Vector3, tangentU: THR
     else tangentU.set(0, 1, 0);
     tangentV.crossVectors(normal, tangentU);
 }
-
-const _gn = new THREE.Vector3(),
-    _gtu = new THREE.Vector3(),
-    _gtv = new THREE.Vector3();
 
 /** Unit direction of the centre of column (u, v) on cube face `code`. */
 export function columnDir(code: number, u: number, v: number, faceRes: number, target: THREE.Vector3): THREE.Vector3 {

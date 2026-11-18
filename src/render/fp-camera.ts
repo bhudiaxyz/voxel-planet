@@ -11,20 +11,6 @@ const _fwd = new THREE.Vector3();
 const _rgt = new THREE.Vector3();
 const _look = new THREE.Vector3();
 
-/**
- * Camera forward/right on the tangent plane at `up`, rotated by `yaw`.
- * Single source of truth for both movement and the view, so W is always
- * "visually forward" and D is always screen-right. Returns shared scratch vectors.
- */
-export function tangentBasis(up: THREE.Vector3, yaw: number): { fwd: THREE.Vector3; rgt: THREE.Vector3 } {
-    // Reference tangent: world-up projected onto the plane; (1,0,0) near the poles.
-    const ref = Math.abs(up.y) > 0.9 ? _X : _Y;
-    _fwd.copy(ref).addScaledVector(up, -ref.dot(up)).normalize().applyAxisAngle(up, yaw);
-    // Camera right = forward × up (three.js cameras look down -Z).
-    _rgt.crossVectors(_fwd, up).normalize();
-    return { fwd: _fwd, rgt: _rgt };
-}
-
 export class FPCamera {
     camera: THREE.PerspectiveCamera;
     yaw: number;
@@ -267,4 +253,18 @@ export class FPCamera {
         this.camera.aspect = aspect;
         this.camera.updateProjectionMatrix();
     }
+}
+
+/**
+ * Camera forward/right on the tangent plane at `up`, rotated by `yaw`.
+ * Single source of truth for both movement and the view, so W is always
+ * "visually forward" and D is always screen-right. Returns shared scratch vectors.
+ */
+export function tangentBasis(up: THREE.Vector3, yaw: number): { fwd: THREE.Vector3; rgt: THREE.Vector3 } {
+    // Reference tangent: world-up projected onto the plane; (1,0,0) near the poles.
+    const ref = Math.abs(up.y) > 0.9 ? _X : _Y;
+    _fwd.copy(ref).addScaledVector(up, -ref.dot(up)).normalize().applyAxisAngle(up, yaw);
+    // Camera right = forward × up (three.js cameras look down -Z).
+    _rgt.crossVectors(_fwd, up).normalize();
+    return { fwd: _fwd, rgt: _rgt };
 }

@@ -6,6 +6,19 @@
 const _ON = 'bdgklmnrstvz',
     _CO = 'lnrsk',
     _V = 'aeiou';
+
+export { hash2, hash3 };
+
+const fade = (t: any) => t * t * t * (t * (t * 6 - 15) + 10);
+const lerp = (a: any, b: any, t: any) => a + (b - a) * t;
+
+export const clamp = (v: any, lo: any, hi: any) => (v < lo ? lo : v > hi ? hi : v);
+export const smoothstep = (e0: any, e1: any, x: any) => {
+    const t = clamp((x - e0) / (e1 - e0), 0, 1);
+    return t * t * (3 - 2 * t);
+};
+export const mix = lerp;
+
 function _pick(pool: string) {
     return pool[Math.floor(Math.random() * pool.length)];
 }
@@ -18,6 +31,23 @@ function _word() {
     }
     return w;
 }
+
+/** Stable hash for a lattice point — used by the noise below and by shaders. */
+function hash2(x: any, y: any, seed: any) {
+    let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1);
+    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function hash3(x: any, y: any, z: any, seed: any) {
+    let h =
+        Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(z, 0x1b873593) ^ Math.imul(seed, 0x9e3779b1);
+    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 /** Generate a random pronounceable seed word (e.g. "ZibaKorel"). */
 export function genSeedWord(): string {
     const n = Math.random() > 0.8 ? 1 : Math.random() > 0.4 ? 2 : 3;
@@ -51,27 +81,6 @@ export function makeRng(seed = 1337) {
     fn.bell = () => (fn() + fn() + fn()) / 1.5 - 1;
     return fn;
 }
-
-/** Stable hash for a lattice point — used by the noise below and by shaders. */
-function hash2(x: any, y: any, seed: any) {
-    let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(seed, 0x9e3779b1);
-    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-function hash3(x: any, y: any, z: any, seed: any) {
-    let h =
-        Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1) ^ Math.imul(z, 0x1b873593) ^ Math.imul(seed, 0x9e3779b1);
-    h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-    h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-export { hash2, hash3 };
-
-const fade = (t: any) => t * t * t * (t * (t * 6 - 15) + 10);
-const lerp = (a: any, b: any, t: any) => a + (b - a) * t;
 
 /** Value noise in [-1,1]. Smooth enough for terrain; cheap. */
 export function makeNoise2D(seed = 1) {
@@ -147,10 +156,3 @@ export function ridge2(noise: any, x: any, y: any, octaves = 4) {
     }
     return sum / norm;
 }
-
-export const clamp = (v: any, lo: any, hi: any) => (v < lo ? lo : v > hi ? hi : v);
-export const smoothstep = (e0: any, e1: any, x: any) => {
-    const t = clamp((x - e0) / (e1 - e0), 0, 1);
-    return t * t * (3 - 2 * t);
-};
-export const mix = lerp;

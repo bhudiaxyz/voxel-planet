@@ -237,302 +237,12 @@ export const ZONE: Record<Zone, { treeP: number; mix: Array<[Species, number]>; 
 const WETLAND = new Set<Species>(['willow', 'mangrove', 'cypress']);
 const DRYLAND = new Set<Species>(['acacia', 'baobab']);
 
-export function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
-    let total = 0;
-    for (const [, w] of mix) total += w;
-    let r = rng() * total;
-    for (const [s, w] of mix) if ((r -= w) <= 0) return s;
-    return mix[mix.length - 1][0];
-}
-
 const dirs4: Array<[number, number]> = [
     [1, 0],
     [-1, 0],
     [0, 1],
     [0, -1],
 ];
-
-export function plantZoneTree(
-    grid: SphereVoxelGrid,
-    face: number,
-    u: number,
-    v: number,
-    surfaceLayer: number,
-    rng: ReturnType<typeof makeRng>,
-    zone: Zone,
-    roles: Record<'broad' | 'flowering' | 'conifer' | 'birch', any[]>,
-    /** -1..1 stand field: which species dominates this part of the forest. */
-    stand = 0,
-    /** Columns to the nearest water (0..WET_MAX). */
-    wetD = 4,
-    /** Forces a size (saplings); otherwise drawn from the zone range and age mix. */
-    sizeIn?: number,
-) {
-    const z = ZONE[zone];
-    // Stands: the stand field picks one species of the zone mix to dominate here
-    // (x4 weight), so forests come as birch groves and pine stands, not confetti.
-    // Water: wetland species near banks, savanna species far from them.
-    const lead = z.mix[Math.min(z.mix.length - 1, Math.floor(((stand + 1) / 2) * z.mix.length))]?.[0];
-    const mix = z.mix.map(([s, w]): [Species, number] => [
-        s,
-        w *
-            (s === lead ? 4 : 1) *
-            (WETLAND.has(s) ? (wetD <= 2 ? 3 : 0.15) : 1) *
-            (DRYLAND.has(s) ? (wetD <= 2 ? 0.1 : 1.5) : 1),
-    ]);
-    const species = weightedPick(mix, rng);
-    // Size variety: the zone range, a ±25% per-tree jitter, and a real age mix —
-    // ~10% young saplings (0.4-0.6x) and ~7% old giants (1.4-1.7x). A forest used to
-    // sit mostly in a 5-14 layer band, so stands read as uniform.
-    const age = rng();
-    const ageK = age < 0.1 ? rng.range(0.4, 0.6) : age > 0.93 ? rng.range(1.4, 1.7) : rng.range(0.75, 1.25);
-    const size = sizeIn ?? Math.min(1.7, rng.range(z.size[0], z.size[1]) * ageK);
-    if (species === 'broadleaf') {
-        // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
-        const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;
-        plantSphereTree(grid, face, u, v, surfaceLayer, rng, leaves, size);
-        return;
-    }
-    const role = FORM_SPECIES[species];
-    if (role) {
-        plantSphereTree(grid, face, u, v, surfaceLayer, rng, roles[role], size, species as TreeForm);
-        return;
-    }
-    const set = (du: number, dl: number, dv: number, id: number) => {
-        const nu = u + du,
-            nv = v + dv,
-            nl = surfaceLayer + 1 + dl;
-        if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
-        if (grid.get(face, nu, nv, nl) !== 0) return false;
-        grid.set(face, nu, nv, nl, id);
-        return true;
-    };
-    // Crown lean (shape variety): about a third of trees drift their canopy one
-    // or two columns downwind as it rises. Trunks stay vertical; the shift grows
-    // with height, so a tall crown curves and a short one barely moves.
-    // Only open-crowned species lean: conifers (whose trunk runs up through the
-    // tiers) and the palm/dragon/aspen builders that place their own crown tops
-    // stay true, or the crown would detach from the trunk.
-    const LEANS = species === 'emergent' || species === 'maple' || species === 'cherry' || species === 'jacaranda';
-    const leaning = LEANS && rng() < 0.33;
-    const [leanU, leanV] = leaning ? dirs4[Math.floor(rng() * 4)] : [0, 0];
-    const leanK = leaning ? rng.range(0.05, 0.11) : 0; // columns of drift per layer
-    /** A flat disc of leaves (radius r, Chebyshev with clipped corners) at height dl. */
-    const disc = (cu: number, dl: number, cv: number, r: number, id: number, ragged = 0.0) => {
-        const drift = Math.round(Math.max(0, dl) * leanK);
-        cu += leanU * drift;
-        cv += leanV * drift;
-        for (let dv = -r; dv <= r; dv++)
-            for (let du = -r; du <= r; du++) {
-                const d = Math.abs(du) + Math.abs(dv);
-                if (d > r + Math.floor(r / 2)) continue; // round off the square
-                if (ragged && d >= r && rng() < ragged) continue;
-                set(cu + du, dl, cv + dv, id);
-            }
-    };
-    const pick = (arr: any[]) => arr[Math.floor(rng() * arr.length)].id;
-    const dirs: Array<[number, number]> = [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-    ];
-
-    switch (species) {
-        case 'palm': {
-            // Slim trunk curving one way as it climbs, a crown of drooping fronds.
-            const h = Math.round(6 + size * 7);
-            const [lu, lv] = dirs[Math.floor(rng() * 4)];
-            let ou = 0,
-                ov = 0;
-            for (let l = 0; l < h; l++) {
-                if (l > h * 0.45 && l % 3 === 0) {
-                    set(ou + lu, l - 1, ov + lv, BARK_RINGED.id); // joint, so the bend reads as one trunk
-                    ou += lu;
-                    ov += lv;
-                }
-                set(ou, l, ov, BARK_RINGED.id);
-            }
-            const leaf = pick(roles.broad);
-            const len = Math.round(2 + size * 3);
-            set(ou, h, ov, leaf);
-            for (const [du, dv] of [...dirs, [1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>)
-                for (let r = 1; r <= len; r++) set(ou + du * r, h - (r > len / 2 ? 1 : 0), ov + dv * r, leaf); // fronds droop at the tips
-            return;
-        }
-        case 'emergent': {
-            // Rainforest giant: tall bare trunk (2×2 when big), buttress roots, a wide
-            // flat-topped layered crown above the canopy around it.
-            const h = Math.round(11 + size * 9);
-            const thick = size > 0.55;
-            const trunk = BLOCKS.TRUNK.id;
-            for (let l = 0; l < h; l++) {
-                set(0, l, 0, trunk);
-                if (thick) {
-                    set(1, l, 0, trunk);
-                    set(0, l, 1, trunk);
-                    set(1, l, 1, trunk);
-                }
-            }
-            for (const [du, dv] of dirs) set(du * (thick ? 2 : 1), 0, dv * (thick ? 2 : 1), trunk); // buttresses
-            const leaf = pick(roles.broad),
-                leaf2 = pick(roles.broad);
-            const r = Math.round(3 + size * 3);
-            disc(0, h, 0, r, leaf, 0.35);
-            disc(rng.int(-1, 1), h + 1, rng.int(-1, 1), r - 1, leaf2, 0.25);
-            disc(0, h + 2, 0, Math.max(1, r - 3), leaf, 0.2);
-            // A lower, smaller tier partway up — the canopy's layered look.
-            const mid = Math.round(h * 0.6);
-            const [bu, bv] = dirs[Math.floor(rng() * 4)];
-            disc(bu * 2, mid, bv * 2, Math.max(1, r - 3), leaf2, 0.3);
-            return;
-        }
-        case 'birch': {
-            // Slim pale trunk, light open crown in pale/cream leaves.
-            const h = Math.round(5 + size * 6);
-            for (let l = 0; l < h; l++) set(0, l, 0, BIRCH.id);
-            const leaf = pick(roles.birch);
-            const r = size > 0.5 ? 2 : 1;
-            for (let l = Math.round(h * 0.55); l <= h; l++) disc(0, l, 0, l === h ? Math.max(1, r - 1) : r, leaf, 0.45);
-            set(0, h + 1, 0, leaf);
-            return;
-        }
-        case 'fir':
-        case 'spruce': {
-            // Conifer: tiers that shrink toward a pointed top. Firs are taller and
-            // narrower with gaps between tiers; spruces are denser and wider.
-            const fir = species === 'fir';
-            const h = Math.round((fir ? 8 : 6) + size * (fir ? 10 : 7));
-            const base = fir ? 2 : 1; // bare trunk below the lowest tier
-            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
-            const leaf = pick(roles.conifer);
-            const maxR = Math.max(1, Math.round((fir ? 2 : 3) * (0.5 + size * 0.6)));
-            for (let l = base; l <= h; l++) {
-                const t = (l - base) / Math.max(1, h - base); // 0 at the bottom tier, 1 at the top
-                if (fir && l % 2 === 1 && t < 0.85) continue; // gaps between fir tiers
-                const r = Math.max(0, Math.round(maxR * (1 - t)));
-                if (r === 0) set(0, l, 0, leaf);
-                else disc(0, l, 0, r, leaf, fir ? 0.15 : 0.08);
-            }
-            set(0, h + 1, 0, leaf); // the point
-            return;
-        }
-        case 'krummholz': {
-            // Treeline pine: short, gnarled, crown swept to one side by the wind.
-            const h = Math.round(2 + size * 3);
-            const [wu, wv] = dirs[Math.floor(rng() * 4)];
-            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
-            const leaf = pick(roles.conifer);
-            for (let l = 1; l <= h; l++) {
-                set(0, l, 0, leaf);
-                for (let r = 1; r <= 1 + (l < h ? 1 : 0); r++) set(wu * r, l, wv * r, leaf); // downwind flag
-            }
-            return;
-        }
-        case 'maple': {
-            // Dense, rounded crown in autumn reds and oranges, on a sturdy trunk.
-            const h = Math.round(4 + size * 4);
-            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
-            const r = Math.max(2, Math.round(2 + size * 2));
-            const [a, b] = LEAF_MAPLE;
-            // A tall ellipsoid crown (about 1.5x as tall as wide), not a squat ball.
-            const H = Math.round(r * 3);
-            for (let l = 0; l <= H; l++) {
-                const t = (l - H / 2) / (H / 2 + 0.5);
-                const rr = Math.round(r * Math.sqrt(Math.max(0, 1 - t * t)));
-                disc(0, h - 1 + l, 0, Math.max(1, rr), rng() < 0.5 ? a.id : b.id, 0.18);
-            }
-            return;
-        }
-        case 'cherry': {
-            // Wide, low, spreading crown — blossom pink — on a short smooth trunk.
-            const h = Math.round(3 + size * 2);
-            const [lu, lv] = dirs[Math.floor(rng() * 4)];
-            for (let l = 0; l < h; l++) set(l > h - 2 ? lu : 0, l, l > h - 2 ? lv : 0, BARK_SMOOTH.id);
-            const r = Math.round(3 + size * 3);
-            const [a, b] = LEAF_CHERRY;
-            // Spreading but domed: a broad base tapering over 4-6 layers to a
-            // rounded top, not a flat disc.
-            const tiers = 4 + Math.round(size * 2);
-            for (let k = 0; k < tiers; k++)
-                disc(
-                    lu,
-                    h + k,
-                    lv,
-                    Math.max(1, Math.round(r * (1 - (k / tiers) ** 1.6))),
-                    k & 1 ? b.id : a.id,
-                    0.3 + k * 0.03,
-                );
-            return;
-        }
-        case 'redwood': {
-            // Very tall straight trunk (2x2 when big), bare most of the way, a short
-            // narrow conical crown high up.
-            const h = Math.round(16 + size * 12);
-            const thick = size > 0.5;
-            for (let l = 0; l < h; l++) {
-                set(0, l, 0, BARK_REDWOOD.id);
-                if (thick) {
-                    set(1, l, 0, BARK_REDWOOD.id);
-                    set(0, l, 1, BARK_REDWOOD.id);
-                    set(1, l, 1, BARK_REDWOOD.id);
-                }
-            }
-            const leaf = pick(roles.conifer);
-            const crown = Math.round(5 + size * 4);
-            for (let k = 0; k < crown; k++) {
-                const r = Math.max(1, Math.round((crown - k) * 0.45) + (thick ? 1 : 0));
-                disc(0, h - crown + k + 2, 0, r, leaf, 0.12);
-            }
-            set(0, h + 2, 0, leaf);
-            return;
-        }
-        case 'jacaranda': {
-            // Open umbrella crown of violet blossom on a leaning, forked trunk.
-            const h = Math.round(5 + size * 3);
-            const [lu, lv] = dirs[Math.floor(rng() * 4)];
-            for (let l = 0; l < h; l++) set(l > h / 2 ? lu : 0, l, l > h / 2 ? lv : 0, BARK_SMOOTH.id);
-            // Fork: two limbs to opposite sides of the crown.
-            set(lu + lv, h - 1, lv - lu, BARK_SMOOTH.id);
-            set(lu - lv, h - 1, lv + lu, BARK_SMOOTH.id);
-            const r = Math.round(4 + size * 3);
-            const [a, b] = LEAF_JACARANDA;
-            disc(lu, h, lv, r, a.id, 0.4);
-            disc(lu, h + 1, lv, Math.max(2, r - 2), b.id, 0.45);
-            return;
-        }
-        case 'dragon': {
-            // Dragon tree: thick trunk forking into radiating arms, each ending in a
-            // flat rosette of stiff leaves — an upturned umbrella.
-            const h = Math.round(3 + size * 3);
-            for (let l = 0; l < h; l++) set(0, l, 0, BARK_RINGED.id);
-            const leaf = pick(roles.broad);
-            const arms: Array<[number, number]> = [...dirs, [1, 1], [-1, 1], [1, -1], [-1, -1]];
-            const reach = Math.round(2 + size * 2);
-            for (const [du, dv] of arms) {
-                if (rng() < 0.25) continue;
-                for (let k = 1; k <= reach; k++) set(du * k, h + k, dv * k, BARK_RINGED.id);
-                disc(du * reach, h + reach + 1, dv * reach, 1, leaf, 0.1);
-            }
-            return;
-        }
-        case 'aspen': {
-            // Slim white trunk, small trembling crown, grown in a small clonal stand.
-            const n = 1 + Math.floor(rng() * 3);
-            for (let t = 0; t < n; t++) {
-                const ou = t === 0 ? 0 : Math.round((rng() - 0.5) * 6),
-                    ov = t === 0 ? 0 : Math.round((rng() - 0.5) * 6);
-                const h = Math.round(6 + size * 6 + (rng() - 0.5) * 3);
-                for (let l = 0; l < h; l++) set(ou, l, ov, BIRCH.id);
-                const leaf = LEAF_ASPEN[rng() < 0.6 ? 0 : 1].id;
-                for (let l = Math.round(h * 0.6); l <= h; l++)
-                    disc(ou, l, ov, l === h ? 0 : 1, leaf, l === h ? 0 : 0.3);
-                set(ou, h + 1, ov, leaf);
-            }
-            return;
-        }
-    }
-}
 
 type TreeForm =
     | 'stack'
@@ -555,13 +265,6 @@ type TreeForm =
     | 'willow'
     | 'baobab'
     | 'juniper';
-
-function pickTreeForm(scale: number, rng: ReturnType<typeof makeRng>): TreeForm {
-    if (scale > 0.72)
-        return rng.pick(['stack', 'round', 'broad', 'weeping', 'twin', 'palm', 'umbrella', 'layered'] as TreeForm[]);
-    if (scale > 0.55) return rng.pick(['round', 'spire', 'twin', 'stack', 'broad', 'umbrella', 'tall'] as TreeForm[]);
-    return rng.pick(['round', 'spire', 'stack', 'nub', 'tall', 'layered'] as TreeForm[]);
-}
 
 /** Bare-trunk height for the forms ported from voxel-world: [min, + scale × extra]. */
 const FORM_TRUNK: Partial<Record<TreeForm, [number, number]>> = {
@@ -592,6 +295,13 @@ const DOMED = new Set<TreeForm>([
 ]);
 /** Forms whose silhouette the foliage tufts would blur. */
 const NO_TUFTS = new Set<TreeForm>(['spire', 'palm', 'pine', 'cypress', 'willow', 'layered']);
+
+function pickTreeForm(scale: number, rng: ReturnType<typeof makeRng>): TreeForm {
+    if (scale > 0.72)
+        return rng.pick(['stack', 'round', 'broad', 'weeping', 'twin', 'palm', 'umbrella', 'layered'] as TreeForm[]);
+    if (scale > 0.55) return rng.pick(['round', 'spire', 'twin', 'stack', 'broad', 'umbrella', 'tall'] as TreeForm[]);
+    return rng.pick(['round', 'spire', 'stack', 'nub', 'tall', 'layered'] as TreeForm[]);
+}
 
 function plantSphereTree(
     grid: SphereVoxelGrid,
@@ -983,6 +693,296 @@ function plantSphereTree(
                 sw,
                 rng.chance(0.55) ? li : leaf.id,
             );
+        }
+    }
+}
+
+export function weightedPick<T>(mix: Array<[T, number]>, rng: ReturnType<typeof makeRng>): T {
+    let total = 0;
+    for (const [, w] of mix) total += w;
+    let r = rng() * total;
+    for (const [s, w] of mix) if ((r -= w) <= 0) return s;
+    return mix[mix.length - 1][0];
+}
+
+export function plantZoneTree(
+    grid: SphereVoxelGrid,
+    face: number,
+    u: number,
+    v: number,
+    surfaceLayer: number,
+    rng: ReturnType<typeof makeRng>,
+    zone: Zone,
+    roles: Record<'broad' | 'flowering' | 'conifer' | 'birch', any[]>,
+    /** -1..1 stand field: which species dominates this part of the forest. */
+    stand = 0,
+    /** Columns to the nearest water (0..WET_MAX). */
+    wetD = 4,
+    /** Forces a size (saplings); otherwise drawn from the zone range and age mix. */
+    sizeIn?: number,
+) {
+    const z = ZONE[zone];
+    // Stands: the stand field picks one species of the zone mix to dominate here
+    // (x4 weight), so forests come as birch groves and pine stands, not confetti.
+    // Water: wetland species near banks, savanna species far from them.
+    const lead = z.mix[Math.min(z.mix.length - 1, Math.floor(((stand + 1) / 2) * z.mix.length))]?.[0];
+    const mix = z.mix.map(([s, w]): [Species, number] => [
+        s,
+        w *
+            (s === lead ? 4 : 1) *
+            (WETLAND.has(s) ? (wetD <= 2 ? 3 : 0.15) : 1) *
+            (DRYLAND.has(s) ? (wetD <= 2 ? 0.1 : 1.5) : 1),
+    ]);
+    const species = weightedPick(mix, rng);
+    // Size variety: the zone range, a ±25% per-tree jitter, and a real age mix —
+    // ~10% young saplings (0.4-0.6x) and ~7% old giants (1.4-1.7x). A forest used to
+    // sit mostly in a 5-14 layer band, so stands read as uniform.
+    const age = rng();
+    const ageK = age < 0.1 ? rng.range(0.4, 0.6) : age > 0.93 ? rng.range(1.4, 1.7) : rng.range(0.75, 1.25);
+    const size = sizeIn ?? Math.min(1.7, rng.range(z.size[0], z.size[1]) * ageK);
+    if (species === 'broadleaf') {
+        // The existing broadleaf forms, with zone-picked colours (a few flowering trees).
+        const leaves = rng.chance(0.12) ? roles.flowering.concat(roles.broad) : roles.broad;
+        plantSphereTree(grid, face, u, v, surfaceLayer, rng, leaves, size);
+        return;
+    }
+    const role = FORM_SPECIES[species];
+    if (role) {
+        plantSphereTree(grid, face, u, v, surfaceLayer, rng, roles[role], size, species as TreeForm);
+        return;
+    }
+    const set = (du: number, dl: number, dv: number, id: number) => {
+        const nu = u + du,
+            nv = v + dv,
+            nl = surfaceLayer + 1 + dl;
+        if (nu < 1 || nv < 1 || nu >= FACE_RES - 1 || nv >= FACE_RES - 1 || nl >= SHELL_DEPTH) return false;
+        if (grid.get(face, nu, nv, nl) !== 0) return false;
+        grid.set(face, nu, nv, nl, id);
+        return true;
+    };
+    // Crown lean (shape variety): about a third of trees drift their canopy one
+    // or two columns downwind as it rises. Trunks stay vertical; the shift grows
+    // with height, so a tall crown curves and a short one barely moves.
+    // Only open-crowned species lean: conifers (whose trunk runs up through the
+    // tiers) and the palm/dragon/aspen builders that place their own crown tops
+    // stay true, or the crown would detach from the trunk.
+    const LEANS = species === 'emergent' || species === 'maple' || species === 'cherry' || species === 'jacaranda';
+    const leaning = LEANS && rng() < 0.33;
+    const [leanU, leanV] = leaning ? dirs4[Math.floor(rng() * 4)] : [0, 0];
+    const leanK = leaning ? rng.range(0.05, 0.11) : 0; // columns of drift per layer
+    /** A flat disc of leaves (radius r, Chebyshev with clipped corners) at height dl. */
+    const disc = (cu: number, dl: number, cv: number, r: number, id: number, ragged = 0.0) => {
+        const drift = Math.round(Math.max(0, dl) * leanK);
+        cu += leanU * drift;
+        cv += leanV * drift;
+        for (let dv = -r; dv <= r; dv++)
+            for (let du = -r; du <= r; du++) {
+                const d = Math.abs(du) + Math.abs(dv);
+                if (d > r + Math.floor(r / 2)) continue; // round off the square
+                if (ragged && d >= r && rng() < ragged) continue;
+                set(cu + du, dl, cv + dv, id);
+            }
+    };
+    const pick = (arr: any[]) => arr[Math.floor(rng() * arr.length)].id;
+    const dirs: Array<[number, number]> = [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+    ];
+
+    switch (species) {
+        case 'palm': {
+            // Slim trunk curving one way as it climbs, a crown of drooping fronds.
+            const h = Math.round(6 + size * 7);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            let ou = 0,
+                ov = 0;
+            for (let l = 0; l < h; l++) {
+                if (l > h * 0.45 && l % 3 === 0) {
+                    set(ou + lu, l - 1, ov + lv, BARK_RINGED.id); // joint, so the bend reads as one trunk
+                    ou += lu;
+                    ov += lv;
+                }
+                set(ou, l, ov, BARK_RINGED.id);
+            }
+            const leaf = pick(roles.broad);
+            const len = Math.round(2 + size * 3);
+            set(ou, h, ov, leaf);
+            for (const [du, dv] of [...dirs, [1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>)
+                for (let r = 1; r <= len; r++) set(ou + du * r, h - (r > len / 2 ? 1 : 0), ov + dv * r, leaf); // fronds droop at the tips
+            return;
+        }
+        case 'emergent': {
+            // Rainforest giant: tall bare trunk (2×2 when big), buttress roots, a wide
+            // flat-topped layered crown above the canopy around it.
+            const h = Math.round(11 + size * 9);
+            const thick = size > 0.55;
+            const trunk = BLOCKS.TRUNK.id;
+            for (let l = 0; l < h; l++) {
+                set(0, l, 0, trunk);
+                if (thick) {
+                    set(1, l, 0, trunk);
+                    set(0, l, 1, trunk);
+                    set(1, l, 1, trunk);
+                }
+            }
+            for (const [du, dv] of dirs) set(du * (thick ? 2 : 1), 0, dv * (thick ? 2 : 1), trunk); // buttresses
+            const leaf = pick(roles.broad),
+                leaf2 = pick(roles.broad);
+            const r = Math.round(3 + size * 3);
+            disc(0, h, 0, r, leaf, 0.35);
+            disc(rng.int(-1, 1), h + 1, rng.int(-1, 1), r - 1, leaf2, 0.25);
+            disc(0, h + 2, 0, Math.max(1, r - 3), leaf, 0.2);
+            // A lower, smaller tier partway up — the canopy's layered look.
+            const mid = Math.round(h * 0.6);
+            const [bu, bv] = dirs[Math.floor(rng() * 4)];
+            disc(bu * 2, mid, bv * 2, Math.max(1, r - 3), leaf2, 0.3);
+            return;
+        }
+        case 'birch': {
+            // Slim pale trunk, light open crown in pale/cream leaves.
+            const h = Math.round(5 + size * 6);
+            for (let l = 0; l < h; l++) set(0, l, 0, BIRCH.id);
+            const leaf = pick(roles.birch);
+            const r = size > 0.5 ? 2 : 1;
+            for (let l = Math.round(h * 0.55); l <= h; l++) disc(0, l, 0, l === h ? Math.max(1, r - 1) : r, leaf, 0.45);
+            set(0, h + 1, 0, leaf);
+            return;
+        }
+        case 'fir':
+        case 'spruce': {
+            // Conifer: tiers that shrink toward a pointed top. Firs are taller and
+            // narrower with gaps between tiers; spruces are denser and wider.
+            const fir = species === 'fir';
+            const h = Math.round((fir ? 8 : 6) + size * (fir ? 10 : 7));
+            const base = fir ? 2 : 1; // bare trunk below the lowest tier
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
+            const leaf = pick(roles.conifer);
+            const maxR = Math.max(1, Math.round((fir ? 2 : 3) * (0.5 + size * 0.6)));
+            for (let l = base; l <= h; l++) {
+                const t = (l - base) / Math.max(1, h - base); // 0 at the bottom tier, 1 at the top
+                if (fir && l % 2 === 1 && t < 0.85) continue; // gaps between fir tiers
+                const r = Math.max(0, Math.round(maxR * (1 - t)));
+                if (r === 0) set(0, l, 0, leaf);
+                else disc(0, l, 0, r, leaf, fir ? 0.15 : 0.08);
+            }
+            set(0, h + 1, 0, leaf); // the point
+            return;
+        }
+        case 'krummholz': {
+            // Treeline pine: short, gnarled, crown swept to one side by the wind.
+            const h = Math.round(2 + size * 3);
+            const [wu, wv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_SCALY.id);
+            const leaf = pick(roles.conifer);
+            for (let l = 1; l <= h; l++) {
+                set(0, l, 0, leaf);
+                for (let r = 1; r <= 1 + (l < h ? 1 : 0); r++) set(wu * r, l, wv * r, leaf); // downwind flag
+            }
+            return;
+        }
+        case 'maple': {
+            // Dense, rounded crown in autumn reds and oranges, on a sturdy trunk.
+            const h = Math.round(4 + size * 4);
+            for (let l = 0; l < h; l++) set(0, l, 0, BLOCKS.TRUNK.id);
+            const r = Math.max(2, Math.round(2 + size * 2));
+            const [a, b] = LEAF_MAPLE;
+            // A tall ellipsoid crown (about 1.5x as tall as wide), not a squat ball.
+            const H = Math.round(r * 3);
+            for (let l = 0; l <= H; l++) {
+                const t = (l - H / 2) / (H / 2 + 0.5);
+                const rr = Math.round(r * Math.sqrt(Math.max(0, 1 - t * t)));
+                disc(0, h - 1 + l, 0, Math.max(1, rr), rng() < 0.5 ? a.id : b.id, 0.18);
+            }
+            return;
+        }
+        case 'cherry': {
+            // Wide, low, spreading crown — blossom pink — on a short smooth trunk.
+            const h = Math.round(3 + size * 2);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(l > h - 2 ? lu : 0, l, l > h - 2 ? lv : 0, BARK_SMOOTH.id);
+            const r = Math.round(3 + size * 3);
+            const [a, b] = LEAF_CHERRY;
+            // Spreading but domed: a broad base tapering over 4-6 layers to a
+            // rounded top, not a flat disc.
+            const tiers = 4 + Math.round(size * 2);
+            for (let k = 0; k < tiers; k++)
+                disc(
+                    lu,
+                    h + k,
+                    lv,
+                    Math.max(1, Math.round(r * (1 - (k / tiers) ** 1.6))),
+                    k & 1 ? b.id : a.id,
+                    0.3 + k * 0.03,
+                );
+            return;
+        }
+        case 'redwood': {
+            // Very tall straight trunk (2x2 when big), bare most of the way, a short
+            // narrow conical crown high up.
+            const h = Math.round(16 + size * 12);
+            const thick = size > 0.5;
+            for (let l = 0; l < h; l++) {
+                set(0, l, 0, BARK_REDWOOD.id);
+                if (thick) {
+                    set(1, l, 0, BARK_REDWOOD.id);
+                    set(0, l, 1, BARK_REDWOOD.id);
+                    set(1, l, 1, BARK_REDWOOD.id);
+                }
+            }
+            const leaf = pick(roles.conifer);
+            const crown = Math.round(5 + size * 4);
+            for (let k = 0; k < crown; k++) {
+                const r = Math.max(1, Math.round((crown - k) * 0.45) + (thick ? 1 : 0));
+                disc(0, h - crown + k + 2, 0, r, leaf, 0.12);
+            }
+            set(0, h + 2, 0, leaf);
+            return;
+        }
+        case 'jacaranda': {
+            // Open umbrella crown of violet blossom on a leaning, forked trunk.
+            const h = Math.round(5 + size * 3);
+            const [lu, lv] = dirs[Math.floor(rng() * 4)];
+            for (let l = 0; l < h; l++) set(l > h / 2 ? lu : 0, l, l > h / 2 ? lv : 0, BARK_SMOOTH.id);
+            // Fork: two limbs to opposite sides of the crown.
+            set(lu + lv, h - 1, lv - lu, BARK_SMOOTH.id);
+            set(lu - lv, h - 1, lv + lu, BARK_SMOOTH.id);
+            const r = Math.round(4 + size * 3);
+            const [a, b] = LEAF_JACARANDA;
+            disc(lu, h, lv, r, a.id, 0.4);
+            disc(lu, h + 1, lv, Math.max(2, r - 2), b.id, 0.45);
+            return;
+        }
+        case 'dragon': {
+            // Dragon tree: thick trunk forking into radiating arms, each ending in a
+            // flat rosette of stiff leaves — an upturned umbrella.
+            const h = Math.round(3 + size * 3);
+            for (let l = 0; l < h; l++) set(0, l, 0, BARK_RINGED.id);
+            const leaf = pick(roles.broad);
+            const arms: Array<[number, number]> = [...dirs, [1, 1], [-1, 1], [1, -1], [-1, -1]];
+            const reach = Math.round(2 + size * 2);
+            for (const [du, dv] of arms) {
+                if (rng() < 0.25) continue;
+                for (let k = 1; k <= reach; k++) set(du * k, h + k, dv * k, BARK_RINGED.id);
+                disc(du * reach, h + reach + 1, dv * reach, 1, leaf, 0.1);
+            }
+            return;
+        }
+        case 'aspen': {
+            // Slim white trunk, small trembling crown, grown in a small clonal stand.
+            const n = 1 + Math.floor(rng() * 3);
+            for (let t = 0; t < n; t++) {
+                const ou = t === 0 ? 0 : Math.round((rng() - 0.5) * 6),
+                    ov = t === 0 ? 0 : Math.round((rng() - 0.5) * 6);
+                const h = Math.round(6 + size * 6 + (rng() - 0.5) * 3);
+                for (let l = 0; l < h; l++) set(ou, l, ov, BIRCH.id);
+                const leaf = LEAF_ASPEN[rng() < 0.6 ? 0 : 1].id;
+                for (let l = Math.round(h * 0.6); l <= h; l++)
+                    disc(ou, l, ov, l === h ? 0 : 1, leaf, l === h ? 0 : 0.3);
+                set(ou, h + 1, ov, leaf);
+            }
+            return;
         }
     }
 }

@@ -95,20 +95,7 @@ const KIND_STONE: Record<Kind, number> = {
     grove: ROCK.QUARTZITE,
     aqueduct: ROCK.SANDSTONE,
 };
-/** A natural-stone block in a given style (reusable: any landmark or prop). */
-function rockBlock(name: string, style: number, look: [number, number, number, number], tintWith?: THREE.Color) {
-    const [t, s0, b0, v] = look.map(col);
-    if (tintWith) for (const c of [t, s0, b0]) c.lerp(tintWith, 0.55);
-    return registerBlock(name, {
-        top: t,
-        side: s0,
-        bottom: b0,
-        tint: v,
-        pattern: PATTERN.STONE,
-        rockStyle: style,
-        rough: style === ROCK.DARK_MARBLE || style === ROCK.MARBLE ? 0.3 : 0.6,
-    });
-}
+
 const BODY = {} as Record<Kind, { id: number }>;
 const ACCENT = {} as Record<Kind, { id: number }>;
 const GEM = {} as Record<Kind, { id: number }>;
@@ -143,6 +130,66 @@ const CLEAR_R: Record<Kind, number> = {
     aqueduct: 14,
 };
 
+const SEA_LAYER = 11;
+/** Ground landmarks across the planet, dealt round-robin to the faces. */
+// 27 = 2 full decks of the 11 kinds + 5 more, so every kind appears 2-3 times.
+const LANDMARK_TOTAL = 27;
+const MIN_SEP = 20; // minimum u/v distance between two landmarks on same face
+
+/* ---- sky islands ----------------------------------------------------------
+ * Extra floating islands spread through the sky, over land and sea, on top of
+ * the ground landmarks. Each is an inverted cone of rock under a grassy cap,
+ * with glowing drips and a tree or two; sizes and heights vary so the sky has
+ * depth. Kept below SHELL_DEPTH (the grid's ceiling) including the trees. */
+const SKY_ISLANDS = 10;
+const SKY_MIN_L = 46; // above the highest peaks (~layer 35)
+const SKY_MAX_L = 78; // leaves room for the cap + trees under SHELL_DEPTH (96)
+
+// ── Site picker & entry point ────────────────────────────────────────────────
+
+const BUILDERS = [
+    twistedSpire,
+    obelisk,
+    monolithRing,
+    tombstoneField,
+    floatingBiosphere,
+    ancientWell,
+    ruinedArch,
+    ziggurat,
+    watchtower,
+    crystalGrove,
+    aqueduct,
+];
+
+const KINDS: LandmarkRecord['kind'][] = [
+    'spire',
+    'obelisk',
+    'ring',
+    'tombs',
+    'biosphere',
+    'well',
+    'arch',
+    'ziggurat',
+    'tower',
+    'grove',
+    'aqueduct',
+];
+
+/** A natural-stone block in a given style (reusable: any landmark or prop). */
+function rockBlock(name: string, style: number, look: [number, number, number, number], tintWith?: THREE.Color) {
+    const [t, s0, b0, v] = look.map(col);
+    if (tintWith) for (const c of [t, s0, b0]) c.lerp(tintWith, 0.55);
+    return registerBlock(name, {
+        top: t,
+        side: s0,
+        bottom: b0,
+        tint: v,
+        pattern: PATTERN.STONE,
+        rockStyle: style,
+        rough: style === ROCK.DARK_MARBLE || style === ROCK.MARBLE ? 0.3 : 0.6,
+    });
+}
+
 /**
  * Clear trees, bushes, cacti and ground cover around a site (they were scattered
  * before landmarks are placed). Only foliage and trunk blocks go, so the land
@@ -164,12 +211,6 @@ function clearAround(grid: SphereVoxelGrid, face: number, cu: number, cv: number
             }
         }
 }
-
-const SEA_LAYER = 11;
-/** Ground landmarks across the planet, dealt round-robin to the faces. */
-// 27 = 2 full decks of the 11 kinds + 5 more, so every kind appears 2-3 times.
-const LANDMARK_TOTAL = 27;
-const MIN_SEP = 20; // minimum u/v distance between two landmarks on same face
 
 // Safe block setter — clips to grid bounds, never overwrites non-air
 function put(grid: SphereVoxelGrid, face: number, u: number, v: number, layer: number, id: number) {
@@ -568,15 +609,6 @@ function aqueduct(grid: SphereVoxelGrid, face: number, cu: number, cv: number, r
     }
 }
 
-/* ---- sky islands ----------------------------------------------------------
- * Extra floating islands spread through the sky, over land and sea, on top of
- * the ground landmarks. Each is an inverted cone of rock under a grassy cap,
- * with glowing drips and a tree or two; sizes and heights vary so the sky has
- * depth. Kept below SHELL_DEPTH (the grid's ceiling) including the trees. */
-const SKY_ISLANDS = 10;
-const SKY_MIN_L = 46; // above the highest peaks (~layer 35)
-const SKY_MAX_L = 78; // leaves room for the cap + trees under SHELL_DEPTH (96)
-
 function skyIsland(grid: SphereVoxelGrid, face: number, cu: number, cv: number, rng: ReturnType<typeof makeRng>) {
     const R = 3 + rng.int(0, 5); // 3..8
     const capL = SKY_MIN_L + rng.int(0, SKY_MAX_L - SKY_MIN_L);
@@ -636,36 +668,6 @@ function skyIsland(grid: SphereVoxelGrid, face: number, cu: number, cv: number, 
             for (let du = -1; du <= 1; du++) put(grid, face, tu + du, tv + dv, capL + h + 2, leaf.id);
     }
 }
-
-// ── Site picker & entry point ────────────────────────────────────────────────
-
-const BUILDERS = [
-    twistedSpire,
-    obelisk,
-    monolithRing,
-    tombstoneField,
-    floatingBiosphere,
-    ancientWell,
-    ruinedArch,
-    ziggurat,
-    watchtower,
-    crystalGrove,
-    aqueduct,
-];
-
-const KINDS: LandmarkRecord['kind'][] = [
-    'spire',
-    'obelisk',
-    'ring',
-    'tombs',
-    'biosphere',
-    'well',
-    'arch',
-    'ziggurat',
-    'tower',
-    'grove',
-    'aqueduct',
-];
 
 export function buildSphereLandmarks(grid: SphereVoxelGrid, rng: ReturnType<typeof makeRng>): LandmarkRecord[] {
     const records: LandmarkRecord[] = [];

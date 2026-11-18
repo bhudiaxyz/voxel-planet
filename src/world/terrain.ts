@@ -39,7 +39,7 @@ const AMPLITUDE = 24; // layers per unit of elevation
  * deserts and rivers are tuned — stay where they were. Sea floor unchanged.
  */
 const RELIEF_KNEE = 0.2;
-const RELIEF_GAIN = 1.8;
+const RELIEF_GAIN = 1.6; // was 1.8: high ground ~10% lower
 const relief = (e: number) => (e > RELIEF_KNEE ? RELIEF_KNEE + (e - RELIEF_KNEE) * RELIEF_GAIN : e);
 
 /** Minimum clear radius (columns) around a tree / a bush (see the spacing claim grid). */
@@ -64,6 +64,81 @@ const CACTUS_P = 0.006;
 
 /** Let the browser paint the loading screen between stages (no-op cost in node). */
 const paint = () => new Promise((r) => setTimeout(r, 0));
+
+/** Scattered ranges: mask threshold (lower = more ranges) and strength vs the main ranges. */
+const MOUNTAIN_EDGE = 0.05;
+const MOUNTAIN_SCATTER = 0.85;
+
+const smoothstep = (a: number, b: number, x: number) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+};
+
+function elevationAt(noise: Noise3, noise2: Noise3, x: number, y: number, z: number): number {
+    // Domain-warped FBM — identical to planet-explorer Planet.elevationAt()
+    const f = 1.6,
+        o = 5,
+        w = 0.25,
+        q = f * 0.8;
+    const wx = x + w * noise2.get(x * q + 11, y * q, z * q);
+    const wy = y + w * noise2.get(x * q, y * q + 17, z * q);
+    const wz = z + w * noise2.get(x * q, y * q, z * q + 23);
+    const base = noise.fbm(wx * f, wy * f, wz * f, o, 2.0, 0.5) * 1.1;
+    const hills = noise.get(wx * f * 3.1 + 9, wy * f * 3.1, wz * f * 3.1) * 0.06;
+    const mm0 = smoothstep(-0.1, 0.35, noise2.get(wx * f * 0.6 + 7, wy * f * 0.6, wz * f * 0.6));
+    // Second, finer mask: smaller ranges scattered between the big ones. Only on
+    // land (base > 0), so it raises inland massifs rather than new islands.
+    const mm1 =
+        smoothstep(MOUNTAIN_EDGE, MOUNTAIN_EDGE + 0.3, noise.get(wx * f * 1.7 + 31, wy * f * 1.7, wz * f * 1.7 - 13)) *
+        smoothstep(0, 0.12, base);
+    const mm = Math.max(mm0, mm1 * MOUNTAIN_SCATTER);
+    const ridged = Math.max(0, 1 - Math.abs(noise2.fbm(wx * f * 1.5, wy * f * 1.5, wz * f * 1.5, o, 2.0, 0.5) * 2));
+    const e = base + hills + 0.8 * mm * ridged * ridged * 0.8 - 0.05;
+    return e < 0 ? e * 0.5 : e;
+}
+
+/** Hot, dry, low land: the warmest band near the equator, close to sea level. */
+function isDesert(noise: Noise3, dir: THREE.Vector3, e: number, surfaceLayer: number): boolean {
+    const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
+    if (surfaceLayer > SEA_LAYER + DESERT_MAX_RISE) return false;
+    // Ragged edge: noise pushes the boundary in and out so dunes meet grass in tongues.
+    const edge = noise.get(dir.x * 9 + 40, dir.y * 9, dir.z * 9) * 0.08;
+    return temp + edge > DESERT_TEMP;
+}
+
+function selectSurface(
+    noise: Noise3,
+    dir: THREE.Vector3,
+    e: number,
+    grass: any,
+    grassLight: any,
+    stonePale: any,
+): number {
+    // ponytail: simple temp proxy from latitude (dir.y) + elevation
+    const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
+    if (temp > 0.6) return grass.id;
+    // -0.05 (was 0.2): grassland reaches further into the cold uplands — grass cover
+    // 46.7% → 61.4% of land (+31%, measured over three seeds), from pale rock.
+    if (temp > -0.05) return grassLight.id;
+    return stonePale.id;
+}
+
+function selectRock(noise: Noise3, dir: THREE.Vector3, layer: number, stone: any, stonePale: any): number {
+    const v = noise.get(dir.x * 12 + layer * 0.3, dir.y * 12, dir.z * 12);
+    return v > 0.2 ? stonePale.id : stone.id;
+}
+
+function findSpawn(grid: SphereVoxelGrid): { face: number; u: number; v: number } {
+    // Search face 0 near centre for a land column above sea level
+    for (let attempt = 0; attempt < 200; attempt++) {
+        const u = 160 + (attempt % 20) * 4;
+        const v = 160 + Math.floor(attempt / 20) * 4;
+        if (u >= FACE_RES || v >= FACE_RES) continue;
+        const top = grid.columnTop(0, u, v);
+        if (top > SEA_LAYER + 2 && !(BLOCK_BY_ID[grid.get(0, u, v, top)] as any)?.isWater) return { face: 0, u, v };
+    }
+    return { face: 0, u: 200, v: 200 };
+}
 
 export async function generateSphereTerrain(
     seed: number,
@@ -279,69 +354,4 @@ export async function generateSphereTerrain(
             }
 
     return { grid, spawn };
-}
-
-function elevationAt(noise: Noise3, noise2: Noise3, x: number, y: number, z: number): number {
-    // Domain-warped FBM — identical to planet-explorer Planet.elevationAt()
-    const f = 1.6,
-        o = 5,
-        w = 0.25,
-        q = f * 0.8;
-    const wx = x + w * noise2.get(x * q + 11, y * q, z * q);
-    const wy = y + w * noise2.get(x * q, y * q + 17, z * q);
-    const wz = z + w * noise2.get(x * q, y * q, z * q + 23);
-    const base = noise.fbm(wx * f, wy * f, wz * f, o, 2.0, 0.5) * 1.1;
-    const hills = noise.get(wx * f * 3.1 + 9, wy * f * 3.1, wz * f * 3.1) * 0.06;
-    const mm = smoothstep(-0.1, 0.35, noise2.get(wx * f * 0.6 + 7, wy * f * 0.6, wz * f * 0.6));
-    const ridged = Math.max(0, 1 - Math.abs(noise2.fbm(wx * f * 1.5, wy * f * 1.5, wz * f * 1.5, o, 2.0, 0.5) * 2));
-    const e = base + hills + 0.8 * mm * ridged * ridged * 0.8 - 0.05;
-    return e < 0 ? e * 0.5 : e;
-}
-
-const smoothstep = (a: number, b: number, x: number) => {
-    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-    return t * t * (3 - 2 * t);
-};
-
-/** Hot, dry, low land: the warmest band near the equator, close to sea level. */
-function isDesert(noise: Noise3, dir: THREE.Vector3, e: number, surfaceLayer: number): boolean {
-    const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
-    if (surfaceLayer > SEA_LAYER + DESERT_MAX_RISE) return false;
-    // Ragged edge: noise pushes the boundary in and out so dunes meet grass in tongues.
-    const edge = noise.get(dir.x * 9 + 40, dir.y * 9, dir.z * 9) * 0.08;
-    return temp + edge > DESERT_TEMP;
-}
-
-function selectSurface(
-    noise: Noise3,
-    dir: THREE.Vector3,
-    e: number,
-    grass: any,
-    grassLight: any,
-    stonePale: any,
-): number {
-    // ponytail: simple temp proxy from latitude (dir.y) + elevation
-    const temp = 1 - 1.1 * dir.y * dir.y - 1.2 * Math.max(e, 0);
-    if (temp > 0.6) return grass.id;
-    // -0.05 (was 0.2): grassland reaches further into the cold uplands — grass cover
-    // 46.7% → 61.4% of land (+31%, measured over three seeds), from pale rock.
-    if (temp > -0.05) return grassLight.id;
-    return stonePale.id;
-}
-
-function selectRock(noise: Noise3, dir: THREE.Vector3, layer: number, stone: any, stonePale: any): number {
-    const v = noise.get(dir.x * 12 + layer * 0.3, dir.y * 12, dir.z * 12);
-    return v > 0.2 ? stonePale.id : stone.id;
-}
-
-function findSpawn(grid: SphereVoxelGrid): { face: number; u: number; v: number } {
-    // Search face 0 near centre for a land column above sea level
-    for (let attempt = 0; attempt < 200; attempt++) {
-        const u = 160 + (attempt % 20) * 4;
-        const v = 160 + Math.floor(attempt / 20) * 4;
-        if (u >= FACE_RES || v >= FACE_RES) continue;
-        const top = grid.columnTop(0, u, v);
-        if (top > SEA_LAYER + 2 && !(BLOCK_BY_ID[grid.get(0, u, v, top)] as any)?.isWater) return { face: 0, u, v };
-    }
-    return { face: 0, u: 200, v: 200 };
 }

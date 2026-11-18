@@ -31,11 +31,7 @@ export let currentSeedWord = 'LusaliBenoruLezagi';
 const urlWord = new URLSearchParams(location.search).get('seed');
 if (urlWord) currentSeedWord = urlWord;
 const SEED = hashSeedWord(currentSeedWord);
-export function pushSeedUrl(word: string) {
-    const p = new URLSearchParams(location.search);
-    p.set('seed', word);
-    history.replaceState(null, '', '?' + p.toString());
-}
+
 pushSeedUrl(currentSeedWord);
 
 const _sunWorld = new THREE.Vector3();
@@ -81,6 +77,14 @@ const fail = (msg: string) => {
     (subEl as HTMLElement).classList.add('error');
     (barEl as HTMLElement).style.width = '0';
 };
+
+start().catch((err: unknown) => {
+    console.error(err);
+    // Say why: an out-of-memory RangeError, a shader error and a context failure
+    // otherwise all looked identical.
+    const why = err instanceof Error ? err.message : String(err);
+    fail(`Unable to start: ${why}. Try a lighter profile: add ?tier=low to the address.`);
+});
 
 async function start(): Promise<void> {
     // three r163+ is WebGL2-only; say so plainly instead of throwing deep in the renderer.
@@ -669,10 +673,8 @@ async function start(): Promise<void> {
     };
 }
 
-start().catch((err: unknown) => {
-    console.error(err);
-    // Say why: an out-of-memory RangeError, a shader error and a context failure
-    // otherwise all looked identical.
-    const why = err instanceof Error ? err.message : String(err);
-    fail(`Unable to start: ${why}. Try a lighter profile: add ?tier=low to the address.`);
-});
+export function pushSeedUrl(word: string) {
+    const p = new URLSearchParams(location.search);
+    p.set('seed', word);
+    history.replaceState(null, '', '?' + p.toString());
+}
