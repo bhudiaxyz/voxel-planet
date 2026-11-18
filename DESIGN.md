@@ -133,6 +133,8 @@ src/
     locations.ts              Locations panel: teleport to landmarks and sky islands
 ```
 
+**File order.** Every `.ts` file is laid out top to bottom as: imports (including `export ... from`), then constants, classes, types and top-level statements in their original order, then private functions, then exported functions. Only imports and function declarations were moved to get there; both are hoisted, so the order changes nothing at runtime. Constants, classes and statements keep their relative order because they are not hoisted, and because `registerBlock` assigns block ids in module-load order. Related constants sit together without blank lines between them.
+
 ---
 
 ## 2. Sphere grid (`core/voxel.ts`, `core/geoutil.ts`)
@@ -583,7 +585,7 @@ Every group draws a size `S = WEATHER.size x 0.6-1.3`, with 8% giants at 1.6x. E
 | Lily pads (`LILY_P = 0.09` x ground detail) | Fresh-water columns that are *still* (no 4-neighbour water surface lower, i.e. a lake, not a rapid) | 1-3 pads: two overlapping rotated flat quads (rim + face), low sway; 22% carry a pale flower |
 | Reed clumps (`REED_P = 0.75` x density) | Dry columns exactly 1 from water, inside a reed-noise stand (`field(reedNoise) > 0.55`) | 5-9 tall reeds; 30% carry a dark cattail head. Replaces the column's grass |
 | Leaf litter | Ground under a canopy column (`sway` top) | 2-5 flat flecks in the canopy's colour, dulled and browned |
-| Hanging growth (`HANG_P = 0.12`) | Canopy undersides with >= 3 layers of air below, coast and lowland zones (x0.35 midland) | 1-3 vines or moss strands, tufts grown downward, swaying at the tips |
+| Hanging growth (`HANG_P = 0.12`) | Canopy undersides with >= 3 layers of air below, coast and lowland zones (x0.35 midland) | 1-4 vines or moss strands, tufts grown downward, swaying at the tips: short wisps (50%, 0.3-0.9), medium strands (35%, 0.9-2.2) and long lianas (15%, 2.2-4.0, often a twisted pair). Lengths scale with canopy height (`reach = clearance / 3`) but are capped at `VINE_MAX_DROP = 0.6` of the gap to the ground and at `VINE_MAX_LEN = 5`, so tall crowns no longer trail vines to the floor |
 
 **Contact shadows.** Every blade's root vertices use `dark x ROOT_SHADE (0.72)`, so tufts sit in their own shade and read as rooted rather than pasted on.
 
