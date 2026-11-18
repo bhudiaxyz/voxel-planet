@@ -152,7 +152,7 @@ A voxel at `(face, u, v, layer)` occupies radius `PLANET_RADIUS + layer` to `+ l
 
 ### Face codes and bases
 
-Face codes: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z. `basisFromCode(code, normal, tangentU, tangentV)` in `geoutil.ts` produces the face basis: normal is +/- the axis `code >> 1`; `tangentU` is (0,1,0) except for the Y faces where it is (1,0,0); `tangentV = normal x tangentU`. `voxel.ts` keeps a precomputed copy (`_FN`, `_FTU`, `_FTV`) of the same table; the two must agree (they also match the GLSL copy in `shore-map.ts`).
+Face codes: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z. `basisFromCode(code, normal, tangentU, tangentV)` in `geoutil.ts` produces the face basis: normal is +/- the axis `code >> 1`; `tangentU` is (0,1,0) except for the Y faces where it is (1,0,0); `tangentV = normal x tangentU`. `voxel.ts` exports the same basis as precomputed tables, `FN`, `FTU` and `FTV` (one row per face). They are the only copy in TypeScript: the far-field builder in `voxel.ts` and the dog's pathfinder (`player/path.ts`) use them rather than keeping their own. They must agree with `basisFromCode`, which computes the basis instead of storing it, and with the GLSL copy in `shore-map.ts`.
 
 A column centre direction is `normalize(n + tu*(2(u+0.5)/FACE_RES - 1) + tv*(2(v+0.5)/FACE_RES - 1))` (`columnDir`). `dirToFaceUV(dir, faceRes)` inverts it: dominant axis picks the face, then `u, v` are `floor(((d.tu/d.n + 1) * faceRes) / 2)`, clamped to `[0, faceRes)`.
 
