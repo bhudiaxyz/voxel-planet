@@ -1,7 +1,38 @@
+/**
+ * Sphere map — equirectangular world map canvas with player marker and landmark badges.
+ *
+ * Purpose
+ *   Builds the 2D map shown in the map overlay: a baked image of the whole planet plus a
+ *   per-frame overlay of the player arrow, landmark badges/labels and a compass.
+ *
+ * Operations
+ *   - rebake() samples a MAP_W x MAP_H (1024x512) equirectangular grid; each pixel maps to a
+ *     direction, then dirToFaceUV to the cube-sphere grid. Sea (columnTop <= SEA_LAYER, 11)
+ *     is coloured by depth from WATER; land uses the ground block's mapColor/top/side with a
+ *     gentle canopy tint. A second pass applies hill shade from the north-west (sampled S = 3
+ *     px apart), an altitude lift, MAP_EXPOSURE/MAP_SATURATION in linear space, then
+ *     convertLinearToSRGB into the baked ImageData.
+ *   - update() blits the baked image, draws landmark badges (colour per kind from
+ *     LANDMARK_COLOR, white glyph from GLYPHS) with non-overlapping name labels, then the player
+ *     arrow (rotated by the forward direction projected onto east/north) or a dot when
+ *     stationary, then the compass. The player is drawn last so it is always on top.
+ *   - A mousemove tooltip hit-tests the cached landmark list; the last non-empty landmark list
+ *     is remembered so update() may omit it.
+ *
+ * Usage
+ *   main.ts: const sphereMap = createSphereMap(world.grid); mount sphereMap.el sized to
+ *   displayW x displayH; call sphereMap.update(playerDir, forwardDir, landmarks) while the map is
+ *   open and sphereMap.rebake() after a palette change (setVoxelPalette). dispose() removes the
+ *   tooltip element. SEA_LAYER must match world/terrain.ts and world/landmarks.ts.
+ *
+ * See also: world/landmarks.ts, core/geoutil.ts (dirToFaceUV), core/palette.ts; DESIGN.md
+ * "16. Controls, UI and map".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';
-import { BLOCK_BY_ID, WATER } from '../core/palette';
+import { WATER } from '../core/palette';
+import { BLOCK_BY_ID } from '../core/blocks';
 
 import { LandmarkRecord, LANDMARK_COLOR } from '../world/landmarks';
 

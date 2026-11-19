@@ -1,11 +1,38 @@
-// src/world/plants.ts
-// Ground cover: bush, shrub, cactus, fern/grass/moss blocks, the per-zone ground
-// cover table, and their builders (bushes, cacti, dead trunks, single plants).
-// Split out of terrain.ts; terrain.ts drives placement.
+/**
+ * Plants — ground-cover blocks, the per-zone cover table, and builders for bushes, cacti, snags
+ * and single plants.
+ *
+ * Purpose
+ *   Everything small that grows on the ground, split out of terrain.ts (which drives placement):
+ *   flowering and leafy bushes, shrubs, ferns, moss, lichen, reeds, desert scrub/yucca and
+ *   cacti, plus dead trunks.
+ *
+ * Operations
+ *   - Blocks are registered at module load with registerBlock (core/blocks.ts); ids come from
+ *     load order (60..250), so registration stays at top level and deterministic. Bushes
+ *     (shrub(): sway + solid leafy blocks; the BUSH_* and SCRUB blocks are patched to the same
+ *     with Object.assign) are voxel blobs. FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL,
+ *     GRASS_TALL, REED, SCRUB_DRY and YUCCA are the PLANT kinds: one marker block id stored in
+ *     the grid's plant layer and drawn as sprites by vegetation.ts (see plantSingle).
+ *   - GROUND[zone]: per altitude zone (trees.ts Zone) the chance per grass column of a bush,
+ *     fern and tall plant, and which blocks they draw from (lush ferns/grass at the coast,
+ *     flowering bushes in the lowlands, moss and scrub among the rocks up high).
+ *   - plantSphereBush: a mound of 1-2 layers, often lopsided or two-lobed, only on near-flat
+ *     ground. plantCactus: varied saguaro / barrel / prickly-pear shapes with crowns, flowers
+ *     and fruit. plantDeadTrunk: a 3-9 high weathered DEADWOOD snag with branch stubs, sometimes
+ *     leaning or a low stump. plantSingle: sets the plant-layer marker one layer above ground.
+ *
+ * Usage
+ *   terrain.ts imports the blocks, GROUND and the builders, and re-exports PLANT (vegetation.ts
+ *   reads it from there to draw plants). Imports DEADWOOD and Zone from trees.ts.
+ *
+ * See also: terrain.ts, trees.ts, vegetation.ts, core/blocks.ts; DESIGN.md "4. Terrain
+ * generation" (Ground cover as plants, Cacti, Dead trunks).
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { makeRng } from '../core/rng';
-import { PATTERN, registerBlock } from '../core/palette';
+import { PATTERN, registerBlock } from '../core/blocks';
 import { DEADWOOD } from './trees';
 import type { Zone } from './trees';
 

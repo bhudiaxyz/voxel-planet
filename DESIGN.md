@@ -12,6 +12,7 @@ All paths below are relative to `src/` unless noted. Palette colours are stored 
 - [Running](#running)
 - [1. Source layout](#1-source-layout)
 - [2. Sphere grid (core/voxel.ts, core/geoutil.ts)](#2-sphere-grid-corevoxelts-coregeoutilts)
+  - [2a. Voxel block management (architecture)](#2a-voxel-block-management-architecture)
 - [3. World assembly (world/world.ts)](#3-world-assembly-worldworldts)
 - [4. Terrain generation (world/terrain.ts, world/trees.ts, world/plants.ts)](#4-terrain-generation-worldterraints-worldtreests-worldplantsts)
   - [4a. Fresh water (world/rivers.ts)](#4a-fresh-water-worldriversts)
@@ -85,8 +86,9 @@ src/
   styles.css                  Boot screen, shared CSS variables
   global.d.ts
   core/
-    voxel.ts                  SphereVoxelGrid, crossFaceUV, chunk mesher, chunk streamer, voxel material/edge/glow shaders
-    palette.ts                Block library, PATTERN ids, VoxelPalette themes, setVoxelPalette, NATURAL filter
+    voxel.ts                  SphereVoxelGrid, crossFaceUV, MeshBuffer, chunk mesher, chunk streamer, far field, voxel material/edge/glow shaders
+    blocks.ts                 Block library: BLOCKS, BLOCK_BY_ID, BlockDef, PATTERN / ROCK / GROUND_MAT ids, registerBlock
+    palette.ts                Colour: SKY/LIGHT/FOG/WATER/GRADE, VoxelPalette themes, NATURAL filter, setVoxelPalette (recolours blocks.ts)
     rng.ts                    Seed words, mulberry32 makeRng, hash/value-noise helpers
     noise3.ts                 Perlin Noise3 with fbm (terrain)
     names.ts                  Landmark name pools per kind (ported from planet-explorer)
@@ -133,6 +135,8 @@ src/
     locations.ts              Locations panel: teleport to landmarks and sky islands
 ```
 
+**File headers.** Every source file opens with a JSDoc block in the same shape: a one-line purpose, then *Purpose*, *Operations* (how it works, invariants, ordering), *Usage* (exports, callers, an example) and *See also* (related files and the DESIGN.md section). When you change what a file does, update its header in the same edit.
+
 **File order.** Every `.ts` file is laid out top to bottom as: imports (including `export ... from`), then constants, classes, types and top-level statements in their original order, then private functions, then exported functions. Only imports and function declarations were moved to get there; both are hoisted, so the order changes nothing at runtime. Constants, classes and statements keep their relative order because they are not hoisted, and because `registerBlock` assigns block ids in module-load order. Related constants sit together without blank lines between them.
 
 ---
@@ -174,15 +178,81 @@ A column centre direction is `normalize(n + tu*(2(u+0.5)/FACE_RES - 1) + tv*(2(v
 
 Converts an out-of-range `(u, v)` on `face` to the canonical `[face, u, v]`. It builds the unnormalised cube-space vector for the (possibly out-of-range) column centre, picks the dominant axis for the new face, and re-projects onto that face's basis, clamping to `[0, FACE_RES-1]`. Cube faces are not isometric across seams (columns shrink toward corners), so this is a nearest-column mapping, not a bijection; the mesher's AO and the pathfinder accept that.
 
+### 2a. Voxel block management (architecture)
+
+How blocks are defined, stored, turned into GPU resources and released. The design goal: **one byte per voxel in the world, everything else derived on demand**, with every derived resource owned by exactly one module and rebuilt rather than patched.
+
+#### Three layers
+
+```
+ DEFINITIONS (core/blocks.ts)        STORAGE (core/voxel.ts)              RENDER RESOURCES (core/voxel.ts, world/vegetation.ts)
+ ─────────────────────────────       ──────────────────────────           ─────────────────────────────────────────────
+ BlockDef records, by id            SphereVoxelGrid                      per loaded chunk (ChunkRecord):
+   BLOCKS     built-ins 1..59         data      Uint8 id per voxel  ──►    solid mesh  (2 draw groups: solid | leaves)
+   registerBlock  60..250             surfaceLayer  Int16 per column       glow mesh   (emissive blocks)
+   BLOCK_BY_ID[id] → BlockDef         plants    Uint8 per column           edge lines  (outline tier only)
+ colours mutated in place by                                             per vegetation patch (32×32 columns):
+ setVoxelPalette (core/palette.ts)   written only during generation        grass / plants / rocks mesh
+                                     (terrain → rivers → scatter →       shared: 4 materials, 1 noise texture,
+                                      landmarks), read-only after          the far-field shell (1 mesh)
+```
+
+1. **Definitions** are plain objects (`BlockDef`), one per id, looked up through the dense array `BLOCK_BY_ID`. They hold colours (`THREE.Color`, linear), the surface `pattern`, and flags (`sway`, `solid`, `isTrunk`, `isWater`, `emissive`, `groundMat`, `rockStyle`, `barkStyle`, `fringe`...). Nothing per-voxel lives here.
+2. **Storage** is the `SphereVoxelGrid`: a single `Uint8Array` of ids for all 92 M voxels, plus two per-column arrays. Ids are the *only* thing the world stores; a voxel has no colour, light value or orientation. That keeps the world at ~94 MB total and makes every query (`isSolid`, `groundColumnTop`, the mesher's neighbour tests) a typed-array read followed by a `BLOCK_BY_ID` lookup.
+3. **Render resources** are derived from storage on demand, a chunk at a time, by the streamer (section 5). They are disposable: anything rendered can be thrown away and rebuilt from the grid and the definitions, which is how palette changes, teleports and tier-driven detail changes are handled.
+
+#### Lifecycle of a block id
+
+| Stage | Where | What happens |
+| --- | --- | --- |
+| Define | module load: `core/blocks.ts` (built-ins), then feature modules (`world/trees.ts`, `plants.ts`, `rivers.ts`, `landmarks.ts`) calling `registerBlock` at top level | Id assigned (sequential from 60), `BlockDef` stored in `BLOCKS[name]` and `BLOCK_BY_ID[id]` |
+| Colour | `setVoxelPalette` (`core/palette.ts`) at startup and on theme switch | Palette-driven blocks' `top/side/bottom/tint` mutated in place; constant blocks (wood, snow, landmark stone) untouched |
+| Place | generation passes, in order (section 3) | `grid.set(face, u, v, layer, id)`; `surfaceLayer` maintained incrementally; ground cover goes to `grid.plants`, not to a voxel |
+| Mesh | `buildSphereMeshChunk` → `meshSphereFaceRegion`, when a chunk enters the stream radius | Visible faces only; the def's colours and flags are baked into vertex attributes (see [Shading flags](#shading-flags)) |
+| Shade | voxel fragment shader | Flags decoded to one `pat*()` surface function, then shared lighting |
+| Release | `unloadChunk` when the chunk leaves the radius + `UNLOAD_MARGIN` | Meshes removed from their root group, `geometry.dispose()` frees the GPU buffers; the vegetation listener frees its patch |
+
+#### Ownership rules
+
+- **Generation owns the grid.** Only the generation passes write voxels; after `buildSphereWorld` returns, the grid is read-only. Rendering and gameplay can therefore cache anything derived from it (chunk meshes, the far field, the shore and wet maps, the pathfinder's view) without invalidation logic. If runtime editing is ever added, it needs a per-chunk dirty flag that re-queues the chunk *and its neighbours* (faces, AO and outlines read a 1-column halo).
+- **The streamer owns chunk resources**, keyed by integer `chunkId`. Nothing else holds a reference to a chunk mesh; the vegetation layer hears about chunks only through `ChunkListener` and owns its own patch meshes, reference-counted by the chunks under them.
+- **Materials are shared, never per chunk.** Every chunk uses the same `[solid, leaf]` material pair, glow and edge materials (`createMeshRoots`). Per-chunk state that the shader needs (the fade-in alpha) is set in `onBeforeRender`, not via material clones, so there is one shader program per variant no matter how many chunks are loaded.
+- **Definitions are global and append-only.** Ids are never freed or reused. Because ids depend on module-load order, they are not stable across code changes: never persist them (saves, URLs, caches across builds).
+
+#### Memory budget (desktop, `high`, seed 1337)
+
+| Resource | Size | Notes |
+| --- | --- | --- |
+| Voxel ids (`data`) | 92 MB | Fixed: `6 × 400² × 96` bytes. The dominant cost; tier-independent because generation is |
+| Column arrays | ~2.9 MB | `surfaceLayer` Int16 + `plants` Uint8, ×960k columns |
+| Generation temporaries | a few MB, transient | River maps (`half`, `surf`, `groundMemo` Int16 ×960k), claim grids, wet/shore distance arrays |
+| Chunk meshes | 31 bytes/vertex | ~1,300-2,000 chunks on `high` (radius 22), ~220 on `very-low` (radius 7) |
+| Mesher staging | one reusable set | `CHUNK_BUFFERS` grow to the largest chunk seen and stay; no per-chunk garbage |
+| Far field | 1 mesh | 1/4 resolution shell, rebuilt only on palette change |
+
+The grid is the floor on every device. A phone that can't allocate ~100 MB of typed arrays fails at generation with a `RangeError`, which the boot screen reports with the `?tier=low` hint. Streaming radius, not the world, is what tiers scale.
+
+#### Why chunks of 16 × 16 columns
+
+A chunk is one face patch, full height (96 layers), so its mesh never needs vertical paging and every column is meshed whole. 16 keeps a typical chunk well under the 65,535-vertex limit for 16-bit indices, makes one chunk a 2-5 ms build on desktop (fine-grained enough for a per-frame budget), and divides the 400-column face nearly evenly (25 chunks, the last one 0 columns short). Larger chunks halve draw calls but make each build a frame-budget problem; smaller ones double the scan, the draw calls and the per-mesh overhead.
+
+#### Adding a block
+
+1. Define it with `registerBlock('NAME', { top, side, bottom, tint, ...flags })` at the top level of the feature module that places it; export it if other modules place it too.
+2. Pick its look with flags rather than code where possible: `groundMat` (terrain materials), `rockStyle` (natural stone), `barkStyle` (trunks), `pattern` (planks, cactus...), `sway` (foliage). See [Shading flags](#shading-flags).
+3. Place it from a generation pass with `grid.set`. If it should be drawn as a sprite (ground cover), use `grid.setPlant` and add a case in the vegetation layer's `drawPlant` instead.
+4. If it is palette-driven, give it zeroed colours and add it to `setVoxelPalette`.
+5. Check the behaviour flags gameplay reads: `isSolid` (not air, not water) decides collision and face culling; `groundColumnTop` skips `sway` (unless `solid`), `isTrunk` and `isWater`.
+
 ---
 
 ## 3. World assembly (`world/world.ts`)
 
 `buildSphereWorld(seed, scene, onProgress, opts)` is async and yields to the browser between steps (`setTimeout 0`) so the boot label paints. `generateSphereTerrain` is async for the same reason: it reports `(p, stage)` and yields after each stage label, so its sub-steps actually appear on screen.
 
-**Boot never freezes the page.** The terrain column fill yields every 40 rows, so the bar paints and the tab is never flagged as hung. Only the *near* view (`NEAR_FILL = 9` chunks, about 250 units) is meshed before entry, in 24 ms slices with a paint between them (`streaming.pendingNear` / `fillNearSlice`). Everything farther streams in on the normal per-frame budget after entry, inside the fog. A full-radius synchronous fill used to mesh 1,400-2,200 chunks first. Teleports and palette rebuilds use the same near-only `fillNear`. Before the first frame `main.ts` awaits `renderer.compileAsync(scene, camera)` (the 'preparing shaders' step). Otherwise the big voxel shader and its shadow, depth and edge variants compiled synchronously on the first render, which was seconds of frozen screen on Mali and Adreno. In a headless software-rendered test, boot-to-ready went from 20 s to 8 s.
+**Boot never freezes the page.** The terrain column fill yields every 40 rows, the scatter pass once per face, and river carving (`carveFreshWater`, async) whenever 40 ms have passed, so the bar paints and the tab is never flagged as hung. The longest stretch without a yield is about 80 ms on desktop (it was ~2 s inside river carving before the bank search was memoised and given yields). Only the *near* view (`NEAR_FILL = 9` chunks, about 250 units) is meshed before entry, in 24 ms slices with a paint between them (`streaming.pendingNear` / `fillNearSlice`). Everything farther streams in on the normal per-frame budget after entry, inside the fog. A full-radius synchronous fill used to mesh 1,400-2,200 chunks first. Teleports and palette rebuilds use `fillNear`, which builds only the `NEAR_SYNC = 3`-chunk core synchronously (about 2 ms) and lets the rest of the `NEAR_FILL` disc stream back on a raised budget (section 5). Before the first frame `main.ts` awaits `renderer.compileAsync(scene, camera)` (the 'preparing shaders' step). Otherwise the big voxel shader and its shadow, depth and edge variants compiled synchronously on the first render, which was seconds of frozen screen on Mali and Adreno. In a headless software-rendered test, boot-to-ready went from 20 s to 8 s.
 
-Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); `setProgress` looks each label up in that list, so a new stage only needs its label added there, in order. `opts` carries tier-derived `streamRadius`, `grassDensity`, `groundDetail`, `shoreFoam`, `tier`.
+Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); `setProgress` looks each label up in that list, so a new stage only needs its label added there, in order. `opts` carries tier-derived `streamRadius`, `grassDensity`, `groundDetail`, `shoreFoam`, `edges`, `buildBudgetMs`, `tier`.
 
 | Progress | Label | Work |
 | --- | --- | --- |
@@ -190,7 +260,7 @@ Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); 
 | 0.43 | carving rivers & lakes | `carveFreshWater` (section 4a) |
 | 0.54 | growing forests | Scatter pass: trees, bushes, cacti, ground cover |
 | 0.72 | placing landmarks | `buildSphereLandmarks(grid, makeRng(seed ^ 0x4c2e9a1f))` |
-| 0.73 -> 0.90 | building terrain meshes | `createSphereChunkStreamer(grid, { loadRadius: streamRadius })`; vegetation created with `makeRng` seed `seed ^ 0x3b1e7f`, wind amplitude 0.1, registered via `streaming.setListener`; `streaming.update(spawnDir, Infinity)` fills the whole view synchronously |
+| 0.73 -> 0.90 | building terrain meshes | `createSphereChunkStreamer(grid, { loadRadius, edges, buildBudgetMs })`; vegetation created with seed `seed ^ 0x3b1e7f`, wind amplitude 0.1, registered via `streaming.setListener`; the `NEAR_FILL` disc is built in 24 ms slices (`fillNearSlice`) with a paint between |
 | 0.90 | adding ocean | `bakeShoreMap` (skipped on `very-low`) then `createSphereWater` |
 | 1.0 | ready | |
 
@@ -345,7 +415,7 @@ Foliage blocks `LEAF_PINK, LEAF_BLUSH, LEAF_LILAC, LEAF_CREAM, LEAF_MINT, LEAF_R
 
 ### 4a. Fresh water (`world/rivers.ts`)
 
-`carveFreshWater(grid, seaLayer, seed)` runs after the column fill and before the scatter pass. It is voxel-world's river carve adapted to the sphere: every neighbour lookup goes through `step(f, u, v, du, dv)`, which crosses face seams with `crossFaceUV`, so a river or lake straddling a seam carves on both sides.
+`async carveFreshWater(grid, seaLayer, seed)` runs after the column fill and before the scatter pass. It yields to the browser whenever 40 ms have passed (pure scheduling: the RNG stream and the result are unchanged), and memoises `groundColumnTop` per column for the bank search, which reads the grid ~50 times per channel column before phase 5 first writes it. It is voxel-world's river carve adapted to the sphere: every neighbour lookup goes through `step(f, u, v, du, dv)`, which crosses face seams with `crossFaceUV`, so a river or lake straddling a seam carves on both sides.
 
 1. **Channels.** `half: Map<columnKey, weight>` records each channel column with a depth weight (1 at the centre, ~0 at the rim), max-merged so the wider reach wins where streams join.
 2. **Rivers and streams** (`RIVERS = 180`). Each source is the highest of four random columns on one face, and must be grass or snow (snowmelt) at least 5 layers above the sea. Each traces downhill by steepest descent over the 8 neighbours, scored `height - preferred heading x inertia + jitter x 0.3`. Every river draws its own character so no two look alike: `maxW` (25% stay streams at 1.2-2 columns, the rest widen to 2.4-4.6), `grow` (0.015-0.035 columns of width per step), `inertia` (0.45-0.8), and a meander: the preferred heading is the current one rotated by `swing x sin(len x bendF + phase)` (`swing` 0.7-1.5 rad, wavelength 2pi x 10-26 columns), so traces swing in S-bends. Width grows downstream from 0.6 to `maxW`, wobbling +/-20% along the length. A trace (at most 1600 steps) ends at the sea; after `flatMax` (8-16) consecutive uphill-everywhere steps (a pit); or when it has no unvisited neighbour (boxed in by its own loops). The last two become lake seeds. On seed 1337 about two thirds of rivers reach the sea and the median length is about 80-95 columns: rivers are short because the land between ridge and coast is short. The heading resets when the trace crosses onto another face, because each face has its own u/v frame.
@@ -380,11 +450,15 @@ Per face it computes:
 - Water blocks emit only faces that meet air (never the bottom, never against other water); see section 4a.
 - Edge entries for the outline system (convex/concave masks from the 4 in-plane neighbours).
 
-`MeshBuffer.toGeometry()` packs vertex streams to cut memory: `normal` Int8 normalized, `color/aTint/aFringe` Uint8 normalized, `aUv` Int16, `position` Float32, `aData` Float32, indices Uint16 when a chunk has <= 65535 vertices. Winding is reversed because the (u, layer, v) -> axes mapping has determinant -1.
+**Buried voxels are skipped up front.** Most voxels a chunk visits are rock under the surface. Before any per-face work, an interior voxel whose six neighbours are all *opaque* (`_opaque[id]`: solid, not water, not solid-sway foliage; rebuilt per call because `registerBlock` can add ids) is skipped with six direct array reads. Such a voxel emits no faces and no edges in the full path either, so the output is byte-identical; median chunk build time roughly halved.
+
+**`MeshBuffer`: reusable staging in GPU formats.** Vertices are written straight into growable typed arrays in their final formats (31 bytes per vertex, 84 if everything were float): `position` Float32x3, `normal` Int8x3 normalized, `color/aTint/aFringe` Uint8x3 normalized, `aUv` Int16x2, `aData` Float32x4; indices Uint32 while staging, emitted as Uint16 when a chunk has <= 65535 vertices. The chunk mesher reuses one set of buffers for every chunk (`CHUNK_BUFFERS`, `reset()`): capacity grows by doubling and is never released, and `toGeometry()` copies out exactly `count` vertices with `slice()`. Previously each chunk built eight plain JS arrays with ~100k `push` calls and copied them, about a megabyte of short-lived garbage per chunk, which surfaced as GC pauses on phones while streaming. Winding is reversed because the (u, layer, v) -> axes mapping has determinant -1.
 
 ### Streamer
 
-`createSphereChunkStreamer(grid, { loadRadius })` returns `{ meshes, loadRadius, loadedCount, pendingCount, setListener, setLoadRadius, update, tick, rebuildAll, dispose }`.
+`createSphereChunkStreamer(grid, { loadRadius, edges, buildBudgetMs })` returns `{ meshes, loadRadius, fadeBand, loadedCount, pendingCount, setListener, setLoadRadius, update, fillNear, pendingNear, fillNearSlice, tick, rebuildAll, dispose }`.
+
+**Bookkeeping.** Each chunk has an integer id `chunkId(face, ci, ck) = (face * 25 + ci) * 25 + ck`, which is also its index into `chunkDirs` (the 3,750 precomputed centre directions), so a scan does no key building. Loaded chunks are `Map<number, ChunkRecord>`; a `ChunkRecord` holds `face, ci, ck`, its `solid / glow / edges` meshes (any may be null), `hasEdges` and `detailed`. The scan marks kept chunks in a generation-stamped `Uint32Array` instead of allocating a `Set` each time. A rescan costs about 0.7 ms (it was ~49 ms with string keys) and happens every third of a chunk of movement.
 
 | Constant | Value | Role |
 | --- | --- | --- |
@@ -392,14 +466,16 @@ Per face it computes:
 | load radius | `opts.loadRadius` (tier `streamRadius`); runtime value clamped to `[3, max]` by `setLoadRadius` | Great-circle radius in chunks |
 | `UNLOAD_MARGIN` | 1.5 chunks | Hysteresis: unload only past `radius + 1.5` |
 | `RESCAN_ANGLE` | `CHUNK_ANGLE / 3` | Rescan the 3,750 precomputed chunk directions only after the viewer has moved this far (or on `forceScan`) |
-| `BUILD_BUDGET_MS` | 4 | Main-thread meshing budget per `update`; at least one chunk always builds (`do ... while`) |
+| `buildBudgetMs` | tier: 5 / 3 / 4 / 3 / 2 ms (`BUILD_BUDGET_MS = 4` default) | Main-thread meshing budget per `update`. **Predictive**: `avgChunkMs` is a running mean of one build, and the loop stops when the next build would likely overrun. A chunk that alone exceeds the budget still builds after `STARVE_FRAMES = 3` frames, so streaming never stalls |
+| `NEAR_SYNC` | 3 chunks | Built synchronously by `fillNear` (teleport, palette rebuild): the ground underfoot |
+| `BURST_BUDGET_MS` | 10 | Per-frame budget after `fillNear` until the `NEAR_FILL` disc is back (`burstMinDot`) |
 | `FADE_BAND` | 0.28 | Outer fraction of the radius that dither-fades with distance |
 | `DETAIL_RADIUS` | 7 chunks | Within this: outlines visible and chunk casts shadows. Beyond: both off (`setDetail`) |
-| `NEAR_FILL` | 9 chunks | Radius meshed synchronously on boot, teleport and rebuild |
+| `NEAR_FILL` | 9 chunks | Radius meshed before entry at boot (in sliced, painted steps), and refilled on burst budget after teleport/rebuild |
 
 **Outline edges are built only where they are drawn.** Edge collection was about 40% of chunk build time. The streamer now takes `edges` (the tier's `edgeMask`, so only `high`) and builds edges only for chunks inside `DETAIL_RADIUS`. When a chunk built far, without edges, comes near, the scan unloads it and re-queues it, and the normal budgeted build re-meshes it with edges. The mesher skips the convex and concave mask work entirely when `edgeMap` is null.
 
-`scan(playerDir)` classifies each chunk by `dot(chunkDir, playerDir)` against `loadCos`, `unloadCos`, `detailCos`, builds a load queue sorted closest-first (popped from the end), flips detail on already-loaded chunks as the viewer moves, and unloads chunks outside the unload cone. `update(playerDir, budgetMs)` rescans if needed, then builds queued chunks until the budget is spent. `budgetMs = Infinity` (startup, `rebuildAll`) fills the view synchronously and skips the fade-in.
+`scan(playerDir)` classifies each chunk by `dot(chunkDir, playerDir)` against `loadCos`, `unloadCos`, `detailCos`, builds a load queue sorted closest-first (popped from the end), flips detail on already-loaded chunks as the viewer moves, and unloads chunks outside the unload cone. `update(playerDir, budgetMs)` rescans if needed, then builds queued chunks under the predictive budget above. `budgetMs = Infinity` (tests and tools) builds everything at once and skips the fade-in. Measured on desktop: per-frame build p99 went from 18 ms to 4-7 ms, and a full fill from 8.2 s to 3.2 s.
 
 Streaming centre is the walking `controller.dir`, or the drone/fly `dir` while airborne (`main.ts`).
 
@@ -420,13 +496,13 @@ Only the vegetation layer registers. `setListener` immediately replays `chunkLoa
 
 ### `rebuildAll(playerDir)`
 
-Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), forces a rescan and refills synchronously. Needed after a palette switch because block colours are baked into vertex attributes.
+Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), forces a rescan and calls `fillNear`: the ground underfoot at once, the rest over the next frames. Needed after a palette switch because block colours are baked into vertex attributes.
 
 ---
 
 ## 6. Voxel material shader (`core/voxel.ts`)
 
-`makeVoxelMaterial()` is a `MeshLambertMaterial` (vertex colours, no dithering) patched in `onBeforeCompile` (`customProgramCacheKey` `'VoxelWorld-voxel-v17'`; bump it whenever the shader text changes, with `-fol` appended when `FOLIAGE_DETAIL` is defined). Uniforms live in `material.userData.uniforms` and are updated by `DayNight`, the streamer and main.
+`makeVoxelMaterial()` is a `MeshLambertMaterial` (vertex colours, no dithering) patched in `onBeforeCompile` (`customProgramCacheKey` `'VoxelWorld-voxel-v27'`; bump it whenever the shader text changes, with `-fol` appended when `FOLIAGE_DETAIL` is defined). Uniforms live in `material.userData.uniforms` and are updated by `DayNight`, the streamer and main.
 
 ### Noise
 
@@ -434,9 +510,9 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 
 ### Patterns
 
-`PATTERN` ids (`core/palette.ts`): `NONE 0, BRICK 1, STONE 2, PLANK 3, BARK 4, GRASS 5, TILE 6, CACTUS 7`. The fragment shader takes `pat = mod(aData.y, 8.0)`; bit 3 (value 8) is the sway flag (leaf blocks), and the value 16 marks fresh water (`isFresh`). All eight 3-bit pattern slots are taken, so a new surface type needs a flag value like water's rather than a new `PATTERN` id.
+`PATTERN` ids (`core/blocks.ts`): `NONE 0, BRICK 1, STONE 2, PLANK 3, BARK 4, GRASS 5, TILE 6, CACTUS 7`. The fragment shader takes `pat = mod(aData.y, 8.0)`; bit 3 (value 8) is the sway flag (leaf blocks), and the value 16 marks fresh water (`isFresh`). All eight 3-bit pattern slots are taken, so a new surface type needs a flag value like water's rather than a new `PATTERN` id.
 
-**Fringe-channel flags.** `aData.z` (fringe) is >= 0 for real grass fringes, so negative values carry per-block style flags without a new attribute: `-(2 + s)` = bark style `s` from the block's `barkStyle` (0 furrowed, 1 papery, 2 scaly, 3 ringed, 4 smooth), `-(10 + s)` = natural stone style `s` (`rockStyle`, `patRock`). Leaf blocks have no fringe either, so the mesher uses `aFringe.r` on leaf vertices for canopy sway stiffness (below). The grass-fringe code only runs for `fringe > 0.001`, so flags never draw a fringe. Per-pattern functions:
+**Fringe-channel flags.** `aData.z` (fringe) is >= 0 for real grass/snow lips, so negative values carry per-block style flags without a new attribute; see [Shading flags](#shading-flags) for the full table. Leaf blocks have no fringe either, so the mesher uses `aFringe.r` on leaf vertices for canopy sway stiffness (below). The grass-fringe code only runs for `fringe > 0.001`, so flags never draw a fringe. Per-pattern functions:
 
 | Function | Used for |
 | --- | --- |
@@ -450,9 +526,31 @@ Unloads every chunk (firing `chunkUnloaded`, which frees vegetation patches), fo
 | `patBarkRinged` | Bark style 3 (palm): stacked leaf-scar rings, fibrous bands that bulge slightly |
 | `patBarkSmooth` | Bark style 4 (cypress, mangrove, willow, acacia): grey-green, faint streaks, mottling, pale lichen, moss at the foot |
 | `patBarkEnd` | Same condition, trunk top/bottom faces: growth rings with a bark rim |
-| `patRock(uv, base, tint, top, style)` | The shared natural-stone library (fringe flag `-(10 + style)`, block field `rockStyle`, styles in `ROCK` in `core/palette.ts`): `MARBLE`, `DARK_MARBLE`, `SLATE`, `SANDSTONE`, `GRANITE`, `BASALT`, `QUARTZITE`. Every style is built from the same layers in different strengths: cloudy body variation, wavy bedding or cleavage on side faces (sandstone broad, slate tight), veins (domain-warped noise ridges at two scales), crystal speckle, two-octave mineral grain, pits or vesicles, and a weathered foot. Veins draw pale when the block's tint is lighter than its base (dark marble, slate), dark otherwise. All smooth noise: no courses or grid |
+| `patGround(uv, col, base, tint, top, side, m)` | Under `FOLIAGE_DETAIL`, layered on `patTerrain` for blocks with a `groundMat` (fringe flag `-(30 + m)`), so materials differ in *texture*, not only colour. **0 grass**: blade flecks, worn bare patches, clover dots in the lowlands, sun-bleached cast toward the uplands (10-26 layers up). A grass block's *sides* use 1, the earth under the turf. **1 soil**: embedded pebbles (cells) and hanging root threads on cliffs, clods on tops. **2 sand**: wind ripples (one world-space direction, warped phase, so they run unbroken across blocks) with heavy-mineral streaks in the troughs; cross-bedded laminae on sides. **3 stone / 4 pale stone**: warped-cell joint cracks, a tone per fracture block, platy cleavage on pale sides, lichen (ochre-green on dark, pale rosettes on pale, gone above ~30 layers), rime frost toward the snowline (18-30 layers). **5 snow** (matched by colour, since snow keeps its positive lip fringe): sastrugi ridges, sun-facing crystal glints on tops, ice-glazed rock streaks on sides. **6 path**: compacted gravel. All materials: a damp, cooler band within 2.5 layers of the sea. Fine detail fades with `fwidth`, like `patTerrain` |
+| `patDeadwood(uv, base, side)` | `DEADWOOD` (ground material 7, applied after the bark branch): bleached silver-grey grain, long splits, weathered grey patches; faint rings and a dark rim on cut ends |
+| `patRock(uv, base, tint, top, style)` | The shared natural-stone library (fringe flag `-(10 + style)`, block field `rockStyle`, styles in `ROCK` in `core/blocks.ts`): `MARBLE`, `DARK_MARBLE`, `SLATE`, `SANDSTONE`, `GRANITE`, `BASALT`, `QUARTZITE`. Every style is built from the same layers in different strengths: cloudy body variation, wavy bedding or cleavage on side faces (sandstone broad, slate tight), veins (domain-warped noise ridges at two scales), crystal speckle, two-octave mineral grain, pits or vesicles, and a weathered foot. Veins draw pale when the block's tint is lighter than its base (dark marble, slate), dark otherwise. All smooth noise: no courses or grid |
 
 `FOLIAGE_DETAIL` is a `#define` set on the material by `main.ts` when the tier's `foliageDetail` is true (`voxMat.defines.FOLIAGE_DETAIL = 1`, `needsUpdate`); tiers without it pay nothing and render canopy and terrain as flat colour.
+
+### Shading flags
+
+How a block's definition reaches the fragment shader. The mesher (`meshSphereFaceRegion`, at its `target.quad(...)` call) bakes these per vertex; `FRAG_BODY` decodes them.
+
+| Channel | Value | Meaning | Set from |
+| --- | --- | --- | --- |
+| `aData.x` | 0..1 | Baked AO (0 dark, 1 open) | 3-neighbour test per corner |
+| `aData.y` | `pattern` 0..7 | `PATTERN` id (`mod(y, 8)`) | `block.pattern` / `topPattern` |
+| | `+ 8` | Sway: leaves and bushes (canopy shading, wind, double-sided) | `block.sway` |
+| | `16` | Fresh water (ripples; no terrain detail; never sways) | `block.isWater` |
+| `aData.z` | `>= 0` | Lip fraction draped down side faces in `aFringe` (grass caps, snow) | `block.fringe` |
+| | `-2 .. -6` | Bark style `-(2 + barkStyle)`: furrowed, papery, scaly, ringed, smooth | `block.barkStyle` |
+| | `-10 .. -16` | Natural stone `-(10 + rockStyle)`: marble .. quartzite (`patRock`) | `block.rockStyle` |
+| | `-30 .. -37` | Ground material `-(30 + groundMat)` (`patGround`, 7 = `patDeadwood`) | `block.groundMat` (ignored if the block has a positive `fringe`) |
+| `aData.w` | 0..1 | Local height within the block, for the lip | corner layer |
+| `aFringe` | rgb | Lip colour; on sway blocks `.r` = sway stiffness from the bark below | `fringeColor` / `SWAY_BY_BARK` |
+| `color`, `aTint` | rgb | Face colour (top/side/bottom) and the pattern's second colour | `top/side/bottom`, `tint/topTint` |
+
+Precedence in the mesher: `rockStyle`, then `barkStyle`, then `groundMat`, then `fringe`. To add a new surface look: write a `pat*()` in `FRAG_DECL`, pick a free fringe range (or a new `GROUND_MAT` entry), decode it in `FRAG_BODY`, add the block field to `BlockDef`, and bump the cache key.
 
 ### Face classification from derivatives
 
@@ -620,13 +718,14 @@ Why it exists: the water shader needs depth and a shore line without reading sce
 
 ### Sea sphere (`createSphereWater(tier, shoreMap, foam)`)
 
-A `SphereGeometry` at radius `PLANET_RADIUS + 11 - 0.5` (just under layer-11 voxel tops, to avoid z-fighting with shoreline voxel sides), subdivision `sub*2 x sub` with `sub = 128` on `high` and 64 otherwise (the tier field `waterSubdivision` is not used by this function). Transparent, `depthWrite: false`, polygon offset (1, 1), `renderOrder 1`, fog on.
+A `SphereGeometry` at radius `PLANET_RADIUS + 11 - 0.5` (just under layer-11 voxel tops, to avoid z-fighting with shoreline voxel sides), subdivision `sub*2 x sub` with `sub = 128` on `high` and 64 otherwise (the tier field `waterSubdivision` is not used by this function). With no displacement the mesh is only a carrier for per-pixel shading. Transparent, `depthWrite: false`, polygon offset (1, 1), `renderOrder 1`, fog on.
 
-- Waves: `waveField(p, t)` sums four directional sines (amplitudes 0.21/0.14/0.06/0.025, wave numbers 0.34/0.51/1.07/1.93) and returns height plus analytic slope. The vertex shader samples it at `vWorld.xz` ("reasonable approximation near any face centre") and displaces along the radial; the normal is the radial tilted by the slope. The fragment shader re-evaluates the same function so geometry and normals agree.
+- Waves: **per-pixel normals, no vertex displacement.** `waveGrad(p, t)` returns the world-space gradient of four 3D plane waves (amplitudes 0.21/0.14/0.06/0.025, wave numbers 0.34/0.51/1.07/1.93, directions spread over 3D), sampled at the fragment's world position, so the field is seamless everywhere on the sphere. The normal is `normalize(up - tangential(grad))`. The sphere's vertices are ~17 units apart, longer than the waves, so the old vertex displacement only aliased into facets; and the old `vWorld.xz` projection streaked into vertical lines along the equator. Far from the camera (250-900 units) the gradient is calmed by 60% so sub-pixel waves don't sparkle.
+- Detail (`WATER_DETAIL`, every tier except `low`/`very-low`): `rippleGrad` adds three fine wind ripples, faded out between 30 and 120 units before they alias; a broad sun path (`pow(N.H, 14) * 0.12`) on the swell; and glitter, cells that flash only near the mirror angle (faded out by 150 units).
 - Depth (with `USE_SHORE_MAP`): `shore = shoreDist(up)` (0 at coast, 1 far out). `depth = uSeaDepth(11) * mix(0.12, 1.6, smoothstep(0, 0.9, shore))`, then `*= 1 + (1 - N.V)*0.8` so grazing views see more water. Without a shore map (`very-low`): `shore = 1`, `depth = uSeaDepth`, a flat single-depth sea.
 - Colour: Beer-Lambert extinction `exp(-uExtinction * depth)` with `uExtinction = (0.28, 0.06, 0.02)` (tuned for the 11-layer sea; `WATER.extinction` would kill all colour at this depth and is not used). Colour ramps `shoal -> shallow` (smoothstep 0..0.35 of `depth/(uSeaDepth*1.6)`) `-> deep` (0.3..1.0), then multiplied by the extinction at 60%.
 - Caustics: a two-layer noise web evaluated in a tangent-plane frame built from the local up (`cT = normalize(cross(up, +Y or +X near the poles))`), not world XZ, scaled by `uCaustic` and faded out with shore distance (`1 - smoothstep(0.05, 0.6, shore)`).
-- Reflection: fresnel `pow(1 - N.V, 5)`; the sky term is `mix(uHorizon, uSky, max(dot(N, up), 0))` keyed on the local up (not world Y), mixed at `fresnel*0.6`; sun specular `pow(N.H, 80)*2`.
+- Reflection: fresnel `pow(1 - N.V, 5)`; the sky term is `mix(uHorizon, uSky, max(dot(N, up), 0))` keyed on the local up (not world Y), mixed at `fresnel*0.6`; sun specular `pow(N.H, 80)*2`. All sun terms are faded by `smoothstep(-0.05, 0.12, dot(up, sunDir))`, so there's no glint once the sun is below the *local* horizon, and `uSunColor` is the live sun colour (main.ts copies `atmo.sun.color` each frame), so the glitter path turns gold at sunset.
 - Alpha: `mix(opacity*0.55, opacity, smoothstep(0, 0.5, shore)) + fresnel*0.3` (clear shallows, opaque offshore).
 - Shore foam (`USE_SHORE_FOAM`, defined only if `foam && shoreMap`, i.e. tier `shoreFoam`): two bands roll toward the coast (phase `fract(0.22t + i/2)`, position `0.42*(1 - phase)` in `shoreDist` units), a steady lip at `sd < 0.06`, noise-masked into patches, faded out between 60 and 140 units from the camera, mixed at 0.85 into colour and 0.7 into alpha.
 
@@ -653,7 +752,7 @@ The sky model is authored with +Y up. On a sphere the viewer's up is the planet-
 - Fog: `THREE.FogExp2(hazeColor, 1/AERIAL_D)`, `AERIAL_D = 90`. The shared `THREE.ShaderChunk.fog_fragment` is patched once at module load to subtract `FOG_NEAR = 180` from the fog depth before squaring (raised from 96 so the clear radius spans the extended stream radius) (clear air near the camera; without it, FogExp2 bites from distance zero and washes the whole frame). If the chunk text changes shape the patch warns and is skipped. `setAerialD` and `setFogEnabled` (settings) keep `scene.fog.aerialD`, which postfx reads each frame. `hazeColor = SKY.haze.lerp(SKY.horizon, 0.35)`.
 - Sky dome: sphere radius `worldSize*2.6` (worldSize = 800), `BackSide`, `depthWrite: false`, `renderOrder -1000`, positioned on the camera each frame. Fragment adds a very faint banded cloud (+3.5% max) on top of `skyRadiance`.
 - Lights: shadow-casting `DirectionalLight` sun (intensity `RIG.sun = 1.85`), `HemisphereLight` (`RIG.hemi = 1.08`), a camera-side lavender `DirectionalLight` fill (`RIG.fill = 0.22`), `AmbientLight` in haze colour (`RIG.amb = 0.12`). Intensities are overwritten each frame by `DayNight`.
-- Shadows: VSM; map size, blur samples and frustum half-extent from the tier (`min(worldSize*0.42, tier.shadowExtent)`); resolution capped by `MAX_TEXTURE_SIZE`, read from the live renderer (`renderer.capabilities`, not a throwaway probe context, which leaked: mobile browsers cap live contexts); `bias -0.00018`, `normalBias 0.1`, radius 2.25, intensity 0.72 (raised from 0.48 in steps: shadows read too faint); `setShadowResolution` rounds to 1024-multiples within 1024..4096 (0 disables).
+- Shadows: VSM; map size, blur samples and frustum half-extent from the tier (`min(worldSize*0.42, tier.shadowExtent)`); resolution capped by `MAX_TEXTURE_SIZE`, read from the live renderer (`renderer.capabilities`, not a throwaway probe context, which leaked: mobile browsers cap live contexts); `bias -0.00018`, `normalBias 0.1`, radius 2.25, intensity 0.72 (raised from 0.48 in steps: shadows read too faint); `setShadowResolution` (the settings slider) rounds to 1024-multiples within 1024..4096 (0 disables) and is **capped at `shadowCap`**, the tier's `shadowRes` after the `MAX_TEXTURE_SIZE` cap. Without the cap, the stored default (3072) was applied at boot on every device, so very-low phones (tier 512) and low laptops (1024) ran a 3K VSM.
 - **Shadow stability (anti-shimmer).** Three things kept shadow edges crawling, and each is fixed:
   1. `followTarget(cameraPos)` centres the frustum on the viewer in **3D**. It used to move only along world X/Z, a flat-world holdover: away from the equator the viewer was hundreds of units off in Y, so near shadows were soft, faint or missing. At 86 degrees latitude the centre is now within one texel of the camera.
   2. The centre is **snapped to whole shadow texels** in the light's view plane, so moving doesn't slide the map by sub-texel amounts.
@@ -676,7 +775,7 @@ Keyframes at `TIMES = [0, 0.2, 0.27, 0.5, 0.73, 0.8, 1]` (midnight, predawn, sun
 | hemiIntensity | `0.1, 0.25, 0.55, 1.08, 0.55, 0.25, 0.1` |
 | fillIntensity | `0.01, 0.05, 0.12, 0.22, 0.12, 0.05, 0.01` |
 
-Sun direction: `a = t*2pi`; `sunDir = normalize(-cos a, sin a*1.1 - 0.1, 0.3)` (a fixed world-space arc; the sun is not tied to a latitude). Moon is the opposite. Each frame `update` sets: sun position (relative to the shadow target), light intensities/colours (fill colour = sun colour lerped 60% toward `0x8090c0`), sky dome uniforms (`uSkyZenith`, `uSkyHorizon`, `uSkyNadir` <- haze keyframe, `uSunDirWorld`, `uSunGlow` scaled by `max(0, sunDir.y)*intensity*0.087`, `uSunColor` scaled by `max(0, sunDir.y + 0.15)`), night uniforms (`uNight`, `uAurora = max(0, (night-0.5)/0.5)`, `uAuroraTime += dt*0.3`, `uMoonDir`, `uStarAngle += dt*0.0001`), fog colour and renderer clear colour <- haze keyframe, and, when `shadowMap.autoUpdate` is off (`low`, `very-low`), a manual shadow refresh whenever `sunDir.y` has moved more than 0.009.
+Sun direction: `a = t*2pi`; `sunDir = normalize(-cos a, sin a*1.1 - 0.1, 0.3)` (a fixed world-space arc; the sun is not tied to a latitude). Moon is the opposite. Each frame `update` sets: sun position (relative to the shadow target), light intensities/colours (fill colour = sun colour lerped 60% toward `0x8090c0`), sky dome uniforms (`uSkyZenith`, `uSkyHorizon`, `uSkyNadir` <- haze keyframe, `uSunDirWorld`, `uSunGlow` scaled by `max(0, sunDir.y)*intensity*0.087`, `uSunColor` scaled by `max(0, sunDir.y + 0.15)`), night uniforms (`uNight`, `uAurora = max(0, (night-0.5)/0.5)`, `uAuroraTime += dt*0.3`, `uMoonDir`, `uStarAngle += dt*0.0001`), fog colour and renderer clear colour <- haze keyframe, and, when `shadowMap.autoUpdate` is off (`low`, `very-low`), a manual shadow refresh whenever `sunDir.y` has moved more than 0.009 **or** the shadow frustum centre has moved more than `SHADOW_MOVE = 4` units (otherwise walking or flying at noon left a stale map whose shadows slid with the viewer).
 
 Voxel material tints pushed each frame via `voxelUniforms`: `uSunDir`; `uSunAmbient = 0.08 + elev*0.18`; `uFillAmbient = 0.04 + (1 - elev)*0.04` (`elev = max(0, sunDir.y)`); `uSunTint` = sun colour pulled toward neutral by `horizonWarm = max(0, 1 - 2.5 elev)^2 * 0.6`; `uAmbientTint = (1 - 0.08n, 1 - 0.04n, 1 + 0.12n)` with `n` the night factor.
 
@@ -699,13 +798,15 @@ Bracketed passes depend on tier flags. Everything before Grade is linear HDR.
 - Atmosphere pass (`haze`): one fullscreen shader off a single depth fetch: large-scale AO (rosette taps, `uAOTaps` from tier, radius 2.4, strength 0.24), voxel-cloud shadows (tier; section 13), distance desaturation (`uDesat 0.32`), per-pixel pull toward the true directional sky colour (`uSkyBlend 0.4`, uses `skyRadiance` with `uSkyUp`), analytic exponential height-fog ground mist (`uMistBase 8`, `uMistH 9`, `uMistDens 0.012`, `uMistMax 0.2`; the mist path starts at `0.75 x uFogNear`), sun in-scatter (0.28), four-tap defocus (`uDof` 1.2 px at full haze, 0 when tier `dof` is false). `uAerialD` mirrors the scene fog; `uFogNear = FOG_NEAR`.
 - Depth: the haze pass also dims the midground with distance (`uDepthDim 0.22`, rising from `0.35 x uFogNear` to `1.6 x uFogNear` and fading out where fog dominates), so near, mid and far separate into layers rather than all lightening toward the haze.
 - Bloom: runs after the atmosphere on purpose (haze acts as a light source). Overridden at construction to `threshold 1.25, strength 0.22, radius 0.9` because the palette's bloom numbers are display-space intuitions and the pass sees linear HDR. Added only if tier `bloom`. (The palette's `GRADE.bloom` is still copied onto the pass by `onPaletteChange`, which overrides these constants after the first palette switch. See section 18.)
-- Crepuscular rays: 8-tap radial blur toward the sun's screen position, `uTaps` from tier (0/4/8), active only when `uSunVisible > 0.01`. `main.ts` computes the sun NDC position and visibility each frame.
+- Crepuscular rays: radial blur toward the sun's screen position, `uTaps` from tier (0/4/4/0/0, 12 on high), active only when `uSunVisible > 0.01`. Taps beyond 8 subdivide the same ray length and total decay (`span = max(taps, 8)`, `decay^(8/span)`), so extra taps only remove banding and 4/8-tap tiers are unchanged. `main.ts` computes the sun NDC position and visibility each frame.
 - Grade (`GradeShader`): ACES tone mapping and sRGB conversion performed inside the shader (`material.toneMapped = false`; replaces a separate OutputPass), then lift/gamma/gain, saturation, contrast, vignette, grain (0.006), chromatic aberration (0.0008), a faint "milk" lilac lift (0.01), a highlight knee (0.8), and the edge ink composite (`tEdges` mask, `uEdgeDark (0.39, 0.32, 0.43)`, `uEdgeLight (0.94, 0.91, 0.93)`, opacities mixed in display space after tone mapping so pale ink cannot become an emitter). Grade values come from `GRADE` (palette). `B` toggles the opacities between 0 and (0.64 dark, 0.30 light). At night (`uNight`) both inks are scaled down: they are fixed display colours applied after tone mapping, so on the dark night scene even the dark ink read as a bright outline. The light ink dims to ~12% and mostly fades; the dark ink drops below the terrain to read as a shadow line.
 - AA: SMAA (`high`, `mobile-high`, `mid`), FXAA (`low`), none (`very-low`). `needsSwap = false` on these passes avoids the composer ping-pong that caused a depth-texture mismatch and a full-screen flash.
 
-Per-frame savings: the crepuscular pass is disabled while the sun is off-screen (`setSunScreenPos`), and the haze pass only calls `skyRadiance` where `fog x uSkyBlend > 0.003`. That lookup is costly at night (Milky Way) and invisible inside the clear radius.
+Per-frame savings: the AO and crepuscular loops `break` at the tier's tap count. A `step()`-weighted tap still paid its texture fetches, so 4-tap tiers had been fetching all 8 (16 depth reads for AO). The crepuscular pass is disabled while the sun is off-screen (`setSunScreenPos`), and the haze pass only calls `skyRadiance` where `fog x uSkyBlend > 0.003`. That lookup is costly at night (Milky Way) and invisible inside the clear radius.
 
 `render(dt)` per frame updates times, inverse projection/view, camera position, `uSkyUp`, fog sync (`uAerialD`, `uMistMax` zeroed when fog is disabled) and calls `composer.render`. `setSize` resizes all targets; `setSunScreenPos` feeds the crepuscular pass.
+
+**Dynamic resolution** (`main.ts` `govern()`, after entry, off with `?capture=1`). Over 2 s windows: if fps < 48 while main-thread time is under 60% of the frame (GPU-bound), render scale drops 10% (floor 70%) via `renderer.setRenderScale` + resize; after a run of windows at >= 57 fps it climbs back 5%. Each failed step up doubles the wait before the next try (3 -> 48 windows), so it settles instead of see-sawing (every change reallocates the render targets).
 
 **Frame cap.** On `mobile-high`, and on touch devices below `high`, the loop holds about 60 fps (skips a frame if under 15.5 ms since the last). A 120 Hz phone otherwise rendered everything, including a VSM update, twice as often and heated and throttled.
 
@@ -713,13 +814,15 @@ Per-frame savings: the crepuscular pass is disabled while the sun is off-screen 
 
 ---
 
-## 11. Palette system (`core/palette.ts`)
+## 11. Palette system (`core/palette.ts`, `core/blocks.ts`)
 
 ### Structure
 
+Two modules: **`core/blocks.ts`** says what each block *is* (ids, `BlockDef` fields, `PATTERN` / `ROCK` / `GROUND_MAT`, `registerBlock`); **`core/palette.ts`** says how the world is *coloured* (sky, light, grade, themes) and recolours the palette-driven blocks in `setVoxelPalette`. `palette.ts` imports `blocks.ts`, never the reverse. Every module imports block things from `core/blocks`.
+
 Atmosphere and block colours are exported as mutable objects that are zero-initialised and filled by `setVoxelPalette`: `SKY` (`zenith, horizon, ground, haze, sunTint`), `LIGHT` (sun/sky/ground/fill colours and intensities, `sunDir`), `FOG` (`color` is the same object as `SKY.haze`; `near 74, far 248, heightTop 30, heightFalloff 0.055, density 0.92`; only some fields are consumed), `WATER` (`shoal/shallow/deep` palette-driven; `warm, sheen, edge` constant; `level 24.35`, `opacity 0.88`, `extinction`, `density 0.23`, `saturation 1.2`, `cellTone`, `caustic 0.6`, `reflect 0.85`), `PETAL_COLORS` (6 slots), `MOTE_COLORS` (4 constant), `GRADE`. Systems read these objects every frame or at build time; they must not copy values at import time.
 
-`BLOCKS` is the block library (ids: AIR 0; `GRASS 1, GRASS_LIGHT 2, GRASS_DEEP 3, SOIL 4, SAND 5, GRASS_STONE 6, GRASS_LIGHT_STONE 7, GRASS_DEEP_STONE 8, STONE 10, STONE_PALE 11, STONE_WARM 12, PATH 13, PLANK 20, PLANK_PALE 21, BEAM 22, TRUNK 23, TRUNK_PALE 24, LEAF_PINK..LEAF_ROSE 30-35, LANTERN 40, CRYSTAL 41, CLOTH_PINK 42, CLOTH_CREAM 43, ROOF_ROSE 44, ROOF_LILAC 45`). Dynamic blocks are added with `registerBlock(name, def)` (ids 60..250, `Uint8`). `BLOCK_BY_ID` is the id lookup. Block flags the code relies on: `sway` (leaves; the sway bit), `isTrunk` (solid obstacle for player/dog), `emissive` (glow buffer), `grassCap`, `lightEdge`, `fringe`/`fringeColor`, `topPattern`, `topTint`, `mapColor`.
+`BLOCKS` (`core/blocks.ts`) is the block library (ids: AIR 0; `GRASS 1, GRASS_LIGHT 2, GRASS_DEEP 3, SOIL 4, SAND 5, GRASS_STONE 6, GRASS_LIGHT_STONE 7, GRASS_DEEP_STONE 8, STONE 10, STONE_PALE 11, STONE_WARM 12, PATH 13, PLANK 20, PLANK_PALE 21, BEAM 22, TRUNK 23, TRUNK_PALE 24, LEAF_PINK..LEAF_ROSE 30-35, LANTERN 40, CRYSTAL 41, CLOTH_PINK 42, CLOTH_CREAM 43, ROOF_ROSE 44, ROOF_LILAC 45`). Dynamic blocks are added with `registerBlock(name, def)` (ids 60..250, `Uint8`). `BLOCK_BY_ID` is the id lookup. Every field is declared and documented on the `BlockDef` interface: `sway` (leaves; the sway bit), `solid` (with sway: a bush obstacle), `isTrunk` (solid obstacle for player/dog), `isWater`, `emissive` (glow buffer), `grassCap`, `stoneSubstrate`, `lightEdge`, `fringe`/`fringeColor`, `topPattern`, `topTint`, `groundMat`, `rockStyle`, `barkStyle`, `mapColor`. Ground blocks carry a `groundMat`: GRASS* -> grass, SOIL -> soil, SAND -> sand, STONE/STONE_WARM -> stone, STONE_PALE -> pale stone, PATH -> path, DEADWOOD (trees.ts) -> deadwood.
 
 ### `VoxelPalette`
 
@@ -815,14 +918,14 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 | --- | --- | --- | --- | --- | --- | --- |
 | `dprCap` | 2 | 1.5 | 1.25 | 1 | 1 | Max device pixel ratio |
 | `maxMegapixels` | 4.2 | 2.0 | 2.4 | 1.6 | 1.0 | Drawing-buffer pixel budget; DPR is lowered to fit (HiDPI laptops and large iPads otherwise meant about 8 MP of HalfFloat post targets) |
-| `shadowRes` | 3072 | 2048 | 2048 | 1024 | 512 | VSM map size |
+| `shadowRes` | 3072 | 2048 | 2048 | 1024 | 512 | VSM map size; also the ceiling for the settings slider (`shadowCap`) |
 | `shadowBlurSamples` | 12 | 8 | 8 | 4 | 4 | VSM blur taps |
 | `shadowExtent` | 90 | 80 | 85 | 100 | 80 | Shadow frustum half-extent. Tightened on the top three tiers for texel density (high 12.8 to 17 texels/unit): sharper, steadier near shadows; beyond it shadows are small and in haze |
 | `cameraFar` | 6000 | 3000 | 3000 | 1500 | 1200 | Camera far plane |
 | `bloom` | yes | yes | yes | no | no | Bloom pass |
 | `aoTaps` | 8 | 4 | 4 | 0 | 0 | Large-scale AO taps |
 | `dof` | yes | yes | yes | no | no | Defocus in haze pass |
-| `crepuscularTaps` | 8 | 4 | 4 | 0 | 0 | God-ray taps |
+| `crepuscularTaps` | 12 | 4 | 4 | 0 | 0 | God-ray taps (above 8: finer steps over the same ray) |
 | `edgeMask` | yes | no | no | no | no | EdgeMaskPass (doubles scene draw calls); also gates building outline edges at all |
 | `cloudShadow` | yes | yes | yes | no | no | Voxel-cloud shadows (coverage map + haze pass; skipped at low sun) |
 | `nightSkyFull` | yes | yes | yes | no | no | Milky Way/nebula path |
@@ -836,7 +939,8 @@ Tiers: `high`, `mobile-high`, `mid`, `low`, `very-low`.
 | `critters` | 28 | 18 | 18 | 0 | 0 | Butterflies (fireflies = 2x) |
 | `groundDetail` | 1 | 0.7 | 0.8 | 0.45 | 0.25 | Boulder/log/mushroom multiplier |
 | `shoreFoam` | yes | yes | yes | no | no | Animated foam line |
-| `foliageDetail` | yes | yes | yes | yes | no | `FOLIAGE_DETAIL` define |
+| `foliageDetail` | yes | yes | yes | yes | no | `FOLIAGE_DETAIL` define (terrain, ground-material, bark and canopy detail) |
+| `buildBudgetMs` | 5 | 3 | 4 | 3 | 2 | Per-frame chunk meshing budget (predictive; section 5) |
 
 Trees are kept at every tier; only grass and ground clutter scale.
 
@@ -1058,6 +1162,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 - `SCRUB_DRY` plants are placed in deserts but `drawPlant` has no case for them, so nothing is rendered.
 - `particles.recolorPetals()` is not called on palette switch, so petal particles keep their original colours until reload. Butterfly colours do refresh.
 - The bloom pass is constructed with hard-coded `0.22 / 0.9 / 1.25` but `onPaletteChange` overwrites them with `GRADE.bloom` values after any palette switch.
-- Tier fields `waterSubdivision` and (above 300) `particleCount` are declared but do not drive geometry: the sea sphere uses 128/64 segments by tier name, and particles are capped at 300 in `main.ts`.
+- Tier fields `waterSubdivision` and (above 300) `particleCount` are declared but do not drive geometry: the sea sphere uses 128/64 segments by tier name (it is only a carrier for per-pixel waves now), and particles are capped at 300 in `main.ts`.
+- `low` tier: Chrome on Windows logs two HLSL warnings from three.js's own `FXAAShader` (`gradient instruction used in a loop`, `potentially uninitialized variable (f_ApplyFXAA)`). Harmless, and not from this project's shaders.
 - `WATER.level` (24.35) and `FOG.near/far/...` are legacy constants from the flat world; the sea level used everywhere is layer 11.
 - The default `LIGHT.sunDir` in `palette.ts` is only an initial value; `DayNight` overwrites it through uniforms each frame.

@@ -1,12 +1,31 @@
 /**
- * Butterflies by day, fireflies at dusk and night, around the player.
+ * Critters — butterflies by day, fireflies at dusk and night, around the player.
  *
- * Each critter has an anchor: a ground point within ~25 units of the player,
- * re-sampled on the CPU about once a second so they follow the player and sit
- * on the real terrain. Around its anchor it loops on a small wandering path in
- * the vertex shader. Butterflies are two hinged wing quads in flower colours;
- * fireflies are soft additive points that blink, so the bloom pass catches
- * them. One instanced draw each; both fade with the night factor.
+ * Purpose
+ *   Small moving life near the player that follows them over the real terrain and gathers where
+ *   it belongs (flower drifts, damp lush ground by water).
+ *
+ * Operations
+ *   - Each critter has an anchor: a ground point 3..3+SPREAD (14) units from the player, chosen on
+ *     the CPU. Around it the vertex shader moves the critter on a small wandering path.
+ *   - place(): tries CANDIDATES (4) random spots, drops water (GroundSampler.groundAt < 0), scores
+ *     the rest with butterflyPref / fireflyPref (plus a little jitter) and keeps the best; with
+ *     no habitat function the first dry spot wins. The first update seeds every anchor, then a
+ *     slice per frame refreshes the whole set every RESAMPLE (1.1) s.
+ *   - Butterflies: instanced geometry of a body plus fore- and hindwing panels on each side that
+ *     fold about the body axis; they flap in bursts, bank into turns, and take flower colours from
+ *     PETAL_COLORS. Fireflies: additive blinking points (default 2 per butterfly) that the bloom
+ *     pass catches.
+ *   - update(): `night` (0 noon .. 1 midnight) fades butterflies out from dusk and fireflies in,
+ *     and hides each mesh when its alpha is ~0.
+ *
+ * Usage
+ *   Created by src/main.ts: createCritters(scene, count, sampler, seed, fireflies), where the
+ *   sampler implements GroundSampler (groundAt, optional butterflyPref / fireflyPref).
+ *   Per frame: critters.update(dt, playerPos, night, pixelRatio); dispose() on teardown.
+ *   count <= 0 returns a no-op.
+ *
+ * See also: birds.ts, src/core/palette.ts (PETAL_COLORS); DESIGN.md "13. FX".
  */
 import * as THREE from 'three';
 import { PETAL_COLORS } from '../core/palette';

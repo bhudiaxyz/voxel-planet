@@ -1,17 +1,38 @@
 /**
- * Rocks: boulders, scree, slabs, tors, standing stones and pebbles, drawn into
- * the vegetation patch meshes (see vegetation.ts) but authored here.
+ * Rocks — boulders, scree, slabs, tors, standing stones and pebbles.
  *
- * Altitude drives everything: how many rocks (rockAt), which shapes (SHAPES,
- * per zone) and how they weather (WEATHER, per zone):
- *   coast     sea-worn cobbles and low rounded stones, little moss
- *   lowland   half-buried mossy boulders
- *   midland   stacked boulders, slabs, the first scree
- *   highland  big erratics, tors, scree fields
- *   treeline  frost-shattered shards, standing stones, scree, bare and pale
+ * Purpose
+ *   Authors the stone clutter that vegetation.ts draws into each surface-detail patch mesh.
+ *   Rocks are not voxels: they are yawed boxes in the shared QuadBuffer, so they cost no grid
+ *   space and need no block registration.
+ *
+ * Operations
+ *   Altitude drives everything: how many rocks (rockAt, a multiplier by rise above sea that
+ *   climbs steeply above the highland line), which shapes (SHAPES, weighted per zone from
+ *   trees.ts zoneOf) and how they weather (WEATHER: size scale, moss chance, bleaching):
+ *     coast     sea-worn cobbles and low rounded stones, little moss
+ *     lowland   half-buried mossy boulders
+ *     midland   stacked boulders, slabs, the first scree
+ *     highland  big erratics, tors, scree fields
+ *     treeline  frost-shattered shards, standing stones, scree, bare and pale
+ *   - scatterBoulder makes one roll per column (BOULDER_P x detail x rockAt, x3 on bare stone),
+ *     then builds a group of sunk, yawed boxes. Colours come from the theme's three stones,
+ *     varied light/dark, mossy low down, bleached high up.
+ *   - scatterPebble does the small stones (PEBBLE_P x rockAt), on the grass RNG stream so the
+ *     grass layout is unchanged.
+ *   - STONE_IDS lists bare ground that takes rocks but no grass: stone blocks and SNOW.
+ *   Boulders draw from vegetation.ts's separate ground-detail stream, so tier settings never
+ *   shift where the grass lands.
+ *
+ * Usage
+ *   Called per column from vegetation.ts (scatterGroundDetail / scatterColumn). Drawing needs the
+ *   caller to have set veg-geom's tangent frame (_up, _ta, _tb) for the column first.
+ *
+ * See also: vegetation.ts, veg-geom.ts, trees.ts (Zone, zoneOf, weightedPick); DESIGN.md
+ * "7. Vegetation" (Rocks).
  */
 import * as THREE from 'three';
-import { BLOCKS } from '../core/palette';
+import { BLOCKS } from '../core/blocks';
 import { makeRng } from '../core/rng';
 import { QuadBuffer, _up, box, boxYawed, root } from './veg-geom';
 import { SNOW, weightedPick, zoneOf } from './trees';

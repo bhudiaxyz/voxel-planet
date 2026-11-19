@@ -1,24 +1,43 @@
 /**
- * Fresh water: rivers, streams, lakes and ponds, carved INTO the land.
+ * Fresh water — rivers, streams, lakes and ponds carved INTO the land.
  *
- * Ported from voxel-world's terrain.ts river carve, adapted to the sphere:
- * columns are (face, u, v) and "up" is the layer axis, so a river is traced
- * downhill across cube faces with crossFaceUV, and every bank lookup goes
- * through the grid's global accessors so a channel crossing a face seam carves
- * on both sides of it.
+ * Purpose
+ *   Adds inland water to the finished terrain. Ported from voxel-world's terrain.ts river
+ *   carve, adapted to the sphere: columns are (face, u, v) and "up" is the layer axis, so a
+ *   river is traced downhill across cube faces with crossFaceUV, and every bank lookup goes
+ *   through the grid's global accessors so a channel crossing a face seam carves on both sides.
  *
- * The one rule that keeps water inside the terrain (as in voxel-world):
- * a column's water surface is at least one layer below the LOWEST dry bank
- * around it, then relaxed so neighbouring surfaces step by at most one layer.
- * The bed is carved below that surface and the gap filled with RIVER_WATER.
- * So water can never stand above ground level — it only ever sits in a cut.
+ * Operations
+ *   The one rule that keeps water inside the terrain: a column's water surface is at least one
+ *   layer below the LOWEST dry bank around it, then relaxed so neighbouring surfaces step by at
+ *   most one layer. The bed is carved below that surface and the gap filled with RIVER_WATER, so
+ *   water can never stand above ground level, only in a cut. carveFreshWater phases:
+ *   1. channels: `half` map (key -> depth weight), max-merged so the wider channel wins.
+ *   2. rivers/streams: RIVERS (180) sources on grass or snow in the uplands (5+ layers up),
+ *      steepest descent with heading inertia and a per-river meander, width growing downstream;
+ *      ends at the sea, or seeds a lake when boxed in or stuck on a long flat.
+ *   3. lakes/ponds: LAKES (650) seeds on gentle grass, spaced MIN_GAP apart, as lumpy discs.
+ *   4. surface per column: min(top, lowest non-channel bank within BANK_R - 1); then relax to a
+ *      fixed point (the sea caps neighbours at sea level).
+ *   5. carve below the surface, set the bed to SAND, fill RIVER_WATER above sea level (at or
+ *      below it the sea sphere is the water), clear plants.
+ *   6. drain connected bodies smaller than MIN_BODY (stray puddles).
+ *   Performance: async. It yields to the browser about every 40 ms (maybeYield) during the bank
+ *   search and relaxation; this is scheduling only and never changes the RNG stream or result.
+ *   ground() (bank height ignoring trees) is memoised in groundMemo: the grid is read ~50x per
+ *   channel column but not written until phase 5.
  *
- * Runs after the surface pass and before vegetation, so plants grow on the
- * carved banks, not in the channels.
+ * Usage
+ *   await carveFreshWater(grid, seaLayer, seed) -> { columns, lakes }; called by terrain.ts after
+ *   the column fill and before spawn, wet map and scatter, so plants grow on the carved banks,
+ *   not in channels. Exports RIVER_WATER (registerBlock at module load, isWater: non-solid, so
+ *   the player wades). Registration is top level so block ids stay deterministic.
+ *
+ * See also: terrain.ts, wet-map.ts, trees.ts (SNOW); DESIGN.md "4a. Fresh water".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, crossFaceUV } from '../core/voxel';
-import { BLOCKS, registerBlock } from '../core/palette';
+import { BLOCKS, registerBlock } from '../core/blocks';
 import { makeRng } from '../core/rng';
 import { SNOW } from './trees';
 

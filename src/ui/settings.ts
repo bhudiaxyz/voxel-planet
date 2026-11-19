@@ -1,8 +1,36 @@
 /**
- * Settings panel — gear button or tilde / backquote.
+ * Settings — the live settings panel, opened from the HUD gear button.
  *
- * Live controls for outline scale, zoom limits, atmosphere, and world
- * streaming. Values persist in localStorage and apply immediately.
+ * Purpose
+ *   Live controls for the world seed, outline width, fog, camera zoom limits, load radius,
+ *   shadow quality, planet radius, day speed, wind and palette. Values persist in localStorage
+ *   and apply immediately.
+ *
+ * Operations
+ *   - DEFAULTS and RANGES define each value; load() merges the stored JSON over DEFAULTS
+ *     (key STORE_KEY, versioned by SETTINGS_VERSION) and migrates old authored defaults
+ *     (outline width, load radius 5/12/16, shadow 4096) to the current ones; clampAll() clamps
+ *     and snaps every value to its step.
+ *   - apply() pushes values to the engine: edge-material linewidth (inkWidth / INK_BASE px),
+ *     rig.setZoomRange, atmo.setAerialD / setFogEnabled / setShadowResolution,
+ *     streaming.setLoadRadius, uPlanetRadius on every planet material, dayNight.dayLengthSeconds
+ *     (1200 / daySpeed) and the wind base uniform. commit() = apply + save + syncUi.
+ *   - Tier caps: the world LOD radius slider is capped by the tier's ceiling (the streamer
+ *     clamps to it), and the shadow slider can only lower the tier's shadow resolution
+ *     (Atmosphere.shadowCap): it can never raise it above what the device tier allows; 0 is Off.
+ *   - Opening sets input.paused (input-only pause: the world keeps updating) and restores the
+ *     previous value on close; Esc closes it. update() refreshes the streaming status
+ *     (chunks loaded / queued) and the fps readout while open.
+ *   - World seed: Enter or "New world" pushes the seed word and reloads the page. The palette
+ *     select calls the onPaletteChange callback; reset restores DEFAULTS.
+ *
+ * Usage
+ *   Created by src/main.ts: createSettings({ rig, atmo, input, world, dayNight, seed }). Returns
+ *   { open, toggle, onPaletteChange, values, update }; main reads `values` (e.g. wind) and
+ *   imports DEFAULTS. The HUD gear button opens it via hud.onSettingsClick.
+ *
+ * See also: hud.ts, pause.ts, src/render/lighting.ts (shadowCap, setShadowResolution);
+ * DESIGN.md "16. Controls, UI and map".
  */
 
 import { DEFAULT_SHADOW_RESOLUTION } from '../render/lighting';

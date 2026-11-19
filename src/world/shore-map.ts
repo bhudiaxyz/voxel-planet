@@ -1,14 +1,32 @@
 /**
- * Distance-to-land map for the sphere sea, baked once at startup.
+ * Shore map — distance-to-land atlas for the sphere sea, baked once at startup.
  *
- * For every column on every cube face: 0 on land, else how many columns away
- * the nearest land column is (8-way chamfer distance), capped at MAX. Packed
- * into one R8 texture as a 3×2 atlas of the six faces, so the water shader can
- * draw foam where the shore is near without reading scene depth (which would
- * be a feedback loop — the depth pass renders the water too).
+ * Purpose
+ *   Gives the water shader a per-direction "how far from land" value so it can show real depth
+ *   (clear shoals to deep blue), shallow-water caustics and the foam line without reading
+ *   scene depth (which would be a feedback loop: the depth pass renders the water too).
  *
- * Distances don't cross cube seams; a foam band can stop short at a seam,
- * which is invisible under the haze at that range.
+ * Operations
+ *   - bakeShoreMap: for every column on every cube face, 0 on land, else the distance in columns
+ *     to the nearest land column (two-pass 8-way chamfer, D1 = 1, D2 = sqrt 2), capped at MAX
+ *     (8) and stored as 0..255. Land is columnTop > seaLayer.
+ *   - Specks first: each 4-connected land body smaller than MIN_ISLAND columns is sunk back to
+ *     sea, because lone sea-floor columns poking one layer up each grew a foam ring that read
+ *     as random cream circles. The whole body is always flood-filled before the size test.
+ *   - Packed into one R8 DataTexture as a 3x2 atlas of the six faces, linear-filtered so column
+ *     steps become a soft gradient.
+ *   - SHORE_GLSL is the matching GLSL: shoreDist(dir) picks the face from the direction,
+ *     projects to face UV (mirroring geoutil.dirToFaceUV and the face bases) and samples the
+ *     atlas, returning 0 (land) .. 1 (far out).
+ *   - Distances don't cross cube seams; a foam band can stop short at a seam, which is
+ *     invisible under the haze at that range.
+ *
+ * Usage
+ *   world.ts calls bakeShoreMap(grid, SEA_LAYER) after the terrain is final (skipped on tier
+ *   'very-low') and hands the texture to createSphereWater; water.ts splices SHORE_GLSL into
+ *   its fragment shader. Bake after generation: the grid must not change afterwards.
+ *
+ * See also: water.ts, world.ts, core/geoutil.ts; DESIGN.md "8. Water" (shore-distance atlas).
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';

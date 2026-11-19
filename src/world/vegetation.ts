@@ -1,16 +1,49 @@
 /**
- * Grass tufts and small foliage clumps on the sphere surface.
+ * Vegetation — grass, flowers, ground-cover plants, waterside growth and ground clutter drawn as
+ * thin quads on the sphere surface.
  *
- * Built lazily, one 32×32-column patch at a time, as the terrain streamer
- * loads the chunks underneath — never for the whole planet up front. Every
- * patch shares one material (one shader program, one wind clock), and each
- * patch is its own seeded RNG stream so a patch looks identical every time it
- * is rebuilt.
+ * Purpose
+ *   Everything too fine to be a voxel: grass tufts, flower drifts, ferns/moss/reeds/yucca
+ *   sprites, lily pads, reed clumps, leaf litter, hanging vines, fallen logs, mushrooms, pebbles
+ *   and boulders. Rendered as per-patch meshes next to the voxel terrain.
+ *
+ * Operations
+ *   - Built lazily, one VEG_PATCH x VEG_PATCH (32x32) column patch at a time, when the terrain
+ *     streamer loads a chunk under it (chunkLoaded / chunkUnloaded ref-count chunks per patch;
+ *     built at the first, released at zero). Never for the whole planet up front. Each patch
+ *     has its own seeded RNG streams (grass stream `rng`, ground-detail stream `drng`), so a
+ *     patch looks identical every rebuild, and toggling ground detail never shifts the grass.
+ *   - build() walks the patch's columns: fresh water gets lily pads on still surfaces; canopy
+ *     columns get leaf litter, understorey plants and hanging vines (warm, low zones only; vines
+ *     capped by VINE_MAX_DROP / VINE_MAX_LEN); plant columns (grid.plantAt, recorded by
+ *     terrain.ts, PLANT block ids) draw via drawPlant instead of grass; bank columns next to
+ *     water (wet map distance 1) get reed clumps in noise stands; other grass/stone columns get
+ *     boulders, logs, mushrooms (scatterGroundDetail, rocks.ts) and grass/flowers
+ *     (scatterColumn: flower drifts from a noise field, tall blades, pebbles, foliage clumps,
+ *     tufts scaled by meadow lushness). Bare stone gets boulders only.
+ *   - Geometry goes through veg-geom's QuadBuffer into one BufferGeometry per patch (null if
+ *     empty). tuft() is the basic crossed-blade primitive; vertex colour darkens the root
+ *     (ROOT_SHADE) for contact shadow.
+ *   - One shared MeshLambertMaterial (one program, one clock) with a vertex-shader wind sway
+ *     along the surface; aDetail = (sway, phase). Phase >= HANGING marks vines, which first
+ *     follow the voxel canopy's sway through the shared canopyWind uniforms (setCanopyWind).
+ *     No depth write (avoids scratchy outlines); drawn at renderOrder 2.
+ *
+ * Usage
+ *   const veg = createSphereVegetation(grid, seed, scene, density, windAmp, groundDetail, wet);
+ *   world.ts creates it and attaches it with streaming.setListener(veg) BEFORE the first chunk
+ *   fill; it is also in world.animated (update(dt) advances the wind clock). main.ts calls
+ *   setCanopyWind(voxel uniforms) and uses bloomAt / lushAt (butterfly and firefly habitat).
+ *   Imports PLANT from terrain.ts (re-exported from plants.ts).
+ *
+ * See also: veg-geom.ts, rocks.ts, plants.ts, wet-map.ts, terrain.ts, world.ts; DESIGN.md
+ * "7. Vegetation".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { columnDir } from '../core/geoutil';
-import { BLOCK_BY_ID, BLOCKS, PATTERN, PETAL_COLORS } from '../core/palette';
+import { PETAL_COLORS } from '../core/palette';
+import { BLOCK_BY_ID, BLOCKS, PATTERN } from '../core/blocks';
 import { makeRng, makeNoise3D } from '../core/rng';
 import { PLANT } from './terrain';
 import { QuadBuffer, _up, _ta, _tb, _base, _base2, box, boxYawed, root } from './veg-geom';

@@ -1,6 +1,67 @@
+/**
+ * Main — application entry point: boots the renderer and world, wires input and UI, runs the loop.
+ *
+ * Purpose
+ *   Composition root for the first-person explorer. It owns no gameplay rules itself; it builds
+ *   every subsystem (world, atmosphere, post-processing, fx, player modes, UI), connects them,
+ *   and drives them once per animation frame. Everything runs inside start() after the
+ *   module-level seed and boot-screen setup.
+ *
+ * Operations
+ *   Startup (start(), async; any throw ends in fail() with a hint to add ?tier=low):
+ *   - Seed: ?seed=<word> else 'LusaliBenoruLezagi'; hashSeedWord -> SEED; pushSeedUrl() writes it
+ *     back to the address bar. Boot progress is shown as "Step i of n" from BOOT_STEPS.
+ *   - WebGL2 probe on a throwaway canvas (reports the browser's failure reason), then
+ *     detectGpuTier() and createRenderer(). A webglcontextlost handler reloads the page once per
+ *     session (sessionStorage flag, re-armed after 60 s of stable running), else shows an error.
+ *   - buildSphereWorld(SEED, scene, setProgress, tier options from TIER_SETTINGS) generates and
+ *     streams the planet. Then: FPCamera, Atmosphere, DayNight (themed from the active palette),
+ *     optional far field (ts.farField) and FOLIAGE_DETAIL define (ts.foliageDetail), stored wind
+ *     strength from localStorage, particles/birds/clouds/critters (seeded from SEED), map, the
+ *     three movement modes (SphereController walking, drone, fly) and the dog.
+ *   - Modes: cycleMode (F / touch) goes walk -> drone -> fly -> walk; the drone hands its in-air
+ *     position to fly, fly exits by snapping the walker to its direction; land (L) lands from
+ *     either air mode. teleportTo() (Locations panel) steps a few columns off the landmark,
+ *     faces it, keeps the current mode and calls streaming.fillNear().
+ *   - Other keys: M map, G panels, X dog sit, B block outlines, [ ] step time of day (these
+ *     last three need pointer lock or touch). Touch buttons call the same actions.
+ *   - Palette live-switch: settings.onPaletteChange calls setVoxelPalette, then copies SKY/LIGHT/
+ *     GRADE into sky uniforms, fog, hemisphere light, post grade and bloom, re-bakes the map and
+ *     rebuilds terrain (streaming.rebuildAll) and the far field, since colours are baked.
+ *   - Shaders are pre-compiled (renderer.compileAsync) before the first frame().
+ *   Frame loop, frame(), in order:
+ *   1. rAF re-arm; mobile tiers skip frames closer than 15.5 ms (~60 fps cap, so 120 Hz phones
+ *      do not do double work). Timer delta; dt clamped to 1/20 s; __fps updated every 0.75 s.
+ *   2. Walking: controller.update and fpCam.updateSphere (skipped in drone/fly).
+ *   3. streaming.update/tick around the active mode's direction; far-field band follows.
+ *   4. atmo.followTarget, dayNight.update, sea water update plus night/sun uniforms.
+ *   5. Wind uniforms (gust and slowly turning direction; skipped on 'very-low').
+ *   6. Sun screen position for the post chain, atmo.update, particles, dog, birds, clouds
+ *      (colours dimmed/cooled at night), cloud shadow pass (only with the sun up), critters.
+ *   7. Sphere map redraw, only while visible.
+ *   8. Roll and drone/fly update (drone landing hands control back to the walker).
+ *   9. Animated world objects, touch, hud, settings; post.render(dt).
+ *   10. govern(rawDt, cpuMs) once the boot screen is dismissed; first frame reveals the boot
+ *       "enter" prompt.
+ *   Dynamic resolution: govern() averages over 2 s windows. If fps < 48 while CPU time is under
+ *   60% of the frame (so the GPU is the limit), render scale drops 10% per window to a floor of
+ *   70%. It creeps back up 5% after govNeed consecutive windows at >= 57 fps; each failed step
+ *   up doubles govNeed (max 48) to avoid oscillation. Hitches (rawDt > 0.25 s) are ignored and
+ *   ?capture=1 disables it. setScale() reallocates the render targets, hence the damping.
+ *   Pause is input-only (ui/pause.ts): the loop and world keep updating by design.
+ *
+ * Usage
+ *   Loaded as the module script by index.html; no other module imports it. Exports
+ *   currentSeedWord and pushSeedUrl(word) (both also passed to the settings seed control). URL flags: ?seed=,
+ *   ?palette=<theme>, ?tier=<tier>, ?capture=1. Debug hooks: window.__fps and window.__game.
+ *
+ * See also: world/world.ts, render/postfx.ts, render/gpu-tier.ts, player/*.ts, ui/*.ts;
+ * DESIGN.md "3. World assembly", "11. Palette system", "12. GPU tiering", "14. Player".
+ */
 import * as THREE from 'three';
 import { createRenderer } from './render/renderer';
-import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName, BLOCKS } from './core/palette';
+import { setVoxelPalette, SKY, LIGHT, GRADE, VOXEL_PALETTES, activePaletteName } from './core/palette';
+import { BLOCKS } from './core/blocks';
 import { Atmosphere } from './render/lighting';
 import { FPCamera, tangentBasis } from './render/fp-camera';
 import { createLocations } from './ui/locations';

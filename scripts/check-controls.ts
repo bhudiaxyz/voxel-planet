@@ -1,7 +1,20 @@
 /**
- * Invariant behind WASD + joystick: the movement basis must match what the
- * camera actually shows — fwd = view direction, rgt = screen-right.
- * Run: npm run check
+ * check-controls — the movement basis matches what the camera shows.
+ *
+ * Purpose
+ *   Guards the invariant behind WASD and the touch joystick: tangentBasis(up, yaw) must give
+ *   fwd = the camera view direction and rgt = screen-right.
+ *
+ * Operations
+ *   For 500 random up vectors and yaws, sets a camera up exactly as FPCamera.updateSphere does
+ *   (pitch 0), looks along fwd, and asserts fwd equals the camera world direction and rgt equals
+ *   the screen-right axis (both within 1e-6).
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node scripts/check-controls.ts`. A failure means movement
+ *   keys or the stick no longer match the view (D moves left, W moves sideways, ...).
+ *
+ * See also: src/render/fp-camera.ts (tangentBasis); DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import * as THREE from 'three';

@@ -1,6 +1,22 @@
 /**
- * Device → tier table. Renderer strings are what Chrome/Safari actually report
- * (ANGLE format on Windows/Android). Run: npm run check
+ * check-tiers — device to quality-tier table for classifyGpu.
+ *
+ * Purpose
+ *   Pins how GPU/device probes map to tiers (very-low, low, mid, high, mobile-high), so tuning
+ *   the classifier cannot silently demote a desktop GPU or promote a weak phone.
+ *
+ * Operations
+ *   A table of ~35 cases. Renderer strings are what Chrome/Safari actually report (ANGLE format
+ *   on Windows/Android); desk() and mob() build the GpuProbe with core count, memory and mobile
+ *   flag. Covers discrete desktops, iGPUs, Apple silicon, flagship and budget Adreno/Mali,
+ *   masked renderers (Safari core counts are not physical), no-WebGL2 and low-memory phones.
+ *   Each case asserts classifyGpu(probe) equals the expected tier.
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node scripts/check-tiers.ts`. A failure names the device
+ *   whose tier changed: the classifier regressed, or the table needs a deliberate update.
+ *
+ * See also: src/render/gpu-tier.ts; DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { classifyGpu, type GpuProbe, type GpuTier } from '../src/render/gpu-tier.ts';

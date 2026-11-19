@@ -1,10 +1,48 @@
 /**
- * Day/night cycle — animates the sun through a 24-hour loop with key-framed
- * palette blending. All palette colours are linear (no sRGB conversion).
+ * Day/night cycle — animates the sun through a looping day with key-framed palette blending.
+ *
+ * Purpose
+ *   Owns the clock (timeOfDay 0..1, 0 = midnight, 0.5 = noon) and turns it into the sun/moon
+ *   direction, light intensities and colours, sky-dome uniforms, fog colour and the voxel
+ *   material's time-of-day tints. All palette colours here are linear (no sRGB conversion).
+ *
+ * Operations
+ *   - PALETTE holds seven keyframes at TIMES = [0, .2, .27, .5, .73, .8, 1] (midnight, predawn,
+ *     sunrise, noon, sunset, dusk, midnight) for zenith/horizon/haze/sun colour and the
+ *     sun/hemi/fill intensities. keyframe(t) finds the segment once per update; lerpColor and
+ *     lerpScalar share it.
+ *   - applyNoonSky() re-themes the cycle per planet: noon (index 3) takes the palette sky
+ *     outright, sunrise/sunset (indices 2 and 4) lean toward it from the untouched TWILIGHT
+ *     copies (so repeated re-theming never drifts); night is left alone.
+ *   - update(dt) advances the clock (dayLengthSeconds, default 1200 s, starts at noon), derives
+ *     _sunDir (slight downward bias so the sun stays below the horizon at night) and _moonDir
+ *     (its opposite), then writes lights, sky uniforms (uSky*, uSunGlow, uSunColor, uNight,
+ *     uAurora, uMoonDir, uStarAngle), the fog colour and the renderer clear colour.
+ *   - Shadow stability: the shadow-casting light direction (_shadowDir) is only re-synced to the
+ *     sun after it has moved SHADOW_DIR_STEP rad (~0.11 deg). A direction that changes every
+ *     frame shifts the whole shadow map by sub-texel amounts and makes every edge crawl; the
+ *     sky, sun disc and shading still use the smooth _sunDir.
+ *   - Low tiers (low, very-low) run with renderer.shadowMap.autoUpdate off, so update() sets
+ *     shadowMap.needsUpdate only when the sun height has moved more than 0.009 OR the shadow
+ *     frustum centre (sun.target, driven by Atmosphere.followTarget) has moved more than
+ *     SHADOW_MOVE (4) units since the last redraw; otherwise walking at noon left a stale map.
+ *   - If voxelUniforms is wired, it also pushes uSunDir, uSunAmbient, uFillAmbient, uSunTint
+ *     (warm near the horizon) and uAmbientTint (cool at night) to the voxel material.
+ *
+ * Usage
+ *   Constructed in main.ts as new DayNight(atmo, renderer); main.ts sets
+ *   dayNight.voxelUniforms = world material userData.uniforms, calls applyNoonSky(sky, sunHex)
+ *   on boot and on every palette change, then dayNight.update(dt) each frame. Atmosphere must
+ *   exist first (it supplies sun/hemi/fill/sky/scene.fog; see AtmoLike). getNightFactor()
+ *   (0 day .. 1 midnight), sunDir (no-alloc, read-only) and getSunDir()/getMoonDir() (clones)
+ *   are used by main.ts and ui/hud.ts / ui/settings.ts (time-of-day control).
+ *
+ * See also: render/lighting.ts (Atmosphere, followTarget), render/sky.ts (the uniforms written
+ * here), render/renderer.ts (shadowMap.autoUpdate per tier); DESIGN.md "9. Sky and lighting".
  */
 import * as THREE from 'three';
 
-// Minimal interface for what we need from Atmosphere (lighting.js).
+// Minimal interface for what we need from Atmosphere (lighting.ts).
 interface AtmoLike {
     sun: THREE.DirectionalLight;
     hemi: THREE.HemisphereLight;

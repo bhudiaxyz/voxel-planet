@@ -1,15 +1,37 @@
 /**
- * The sky model — one function, shared by the sky dome (lighting.js) and the
- * aerial-perspective pass (postfx.ts).
+ * The sky model — one GLSL function shared by the sky dome and the aerial-perspective pass.
  *
- * Why share it: the single most important trick in the reference images is that
- * the horizon *does not exist*. Distant land doesn't sit against the sky, it
- * turns into the sky. That only works if the colour geometry fades toward is
- * bit-for-bit the colour the sky would have been in that same direction. Two
- * separately-tuned gradients always leave a faint seam; one function cannot.
+ * Purpose
+ *   Provides the sky colour for any view direction as shared GLSL snippets plus the matching
+ *   uniform values. Why share it: the single most important trick in the reference images is
+ *   that the horizon does not exist. Distant land doesn't sit against the sky, it turns into
+ *   the sky. That only works if the colour geometry fades toward is bit-for-bit the colour the
+ *   sky would have been in that same direction. Two separately-tuned gradients always leave a
+ *   faint seam; one function cannot.
  *
- * Everything here is LINEAR. Both consumers render into the HDR composer target
- * and let OutputPass do tone mapping + the sRGB transfer exactly once.
+ * Operations
+ *   - Everything is LINEAR. Both consumers render into the HDR composer target and the Grade
+ *     pass (see postfx.ts) does tone mapping and the sRGB transfer exactly once.
+ *   - skyRadiance(dirW): rotates the world direction into the viewer's sky frame (_toSky, a
+ *     shortest-arc rotation taking uSkyUp onto +Y, so the sky is correct anywhere on the
+ *     sphere), blends horizon to zenith (shallow, milky banding), a deeper bluer nadir below
+ *     the skyline, two-lobe sun glow, limb glow, sun halo and disc, then at night darkens the
+ *     day sky and adds nightSkyAddons (moon, Milky Way, nebulae, aurora). Above the atmosphere
+ *     (uSpace > 0) the sky drains to deep space with a thin blue limb glow and stars at any
+ *     hour.
+ *   - The uNightSkyFull uniform (tier nightSkyFull) switches off the Milky Way/nebula FBM on
+ *     weak tiers, leaving moon and aurora only.
+ *   - skyUniformValues(SKY, sunDir, THREE) builds the initial uniform objects from the palette
+ *     (slightly lifted toward the haze colour); DayNight rewrites them each frame.
+ *
+ * Usage
+ *   Interpolate SKY_UNIFORMS_GLSL (uniform declarations) then SKY_FN_GLSL (functions) into a
+ *   fragment shader, and spread skyUniformValues(...) into its uniforms. Users: the dome in
+ *   render/lighting.ts (makeSkyDome) and the atmosphere pass in render/postfx.ts. A shader that
+ *   includes SKY_FN_GLSL must also declare SKY_UNIFORMS_GLSL.
+ *
+ * See also: render/lighting.ts, render/postfx.ts, render/day-night.ts (writes the uniforms);
+ * DESIGN.md "9. Sky and lighting".
  */
 import * as THREE from 'three';
 

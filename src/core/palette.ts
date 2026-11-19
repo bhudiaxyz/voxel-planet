@@ -1,22 +1,44 @@
 /**
- * ART BIBLE — the single source of truth for the look of VoxelWorld.
+ * Palette — the art bible: swappable colour themes and the live atmosphere/water/grade state.
  *
- * Every module reads colour from here. Do not hardcode a hex anywhere else;
- * if you need a new colour, add it here so the whole world stays cohesive.
+ * Purpose
+ *   Single source of truth for environmental colour. Other modules read SKY, LIGHT, FOG, WATER,
+ *   PETAL_COLORS, MOTE_COLORS and GRADE from here rather than hardcoding hexes, so the world
+ *   stays cohesive and a theme switch recolours everything at once. Non-palette block colours
+ *   (wood, accent blocks) are constants in blocks.ts.
  *
- * All environmental colours (sky, atmosphere, grass, foliage, stone, water,
- * petals, grade) live in VOXEL_PALETTES. setVoxelPalette() is called at
- * module initialisation to apply the default palette, and again whenever the
- * player switches palettes at runtime.
+ * Operations
+ *   - VOXEL_PALETTES holds the themes (Autumn, Spring, Alpine, Desert, Alien, Mercury, Venus,
+ *     Mars, Jupiter, Saturn, Uranus, Neptune), each a VoxelPalette: block hexes (grass, soil,
+ *     sand, stones), six foliage slots, water, sky, light, petals and grade. Foliage slots keep
+ *     the same role in every theme (slot 4 is the only green; flowers and butterflies borrow
+ *     0,1,2,3,5), and the consistency rules above VOXEL_PALETTES keep switches from jarring.
+ *   - The exported SKY/LIGHT/FOG/WATER/PETAL_COLORS/GRADE objects start zeroed and are mutated
+ *     IN PLACE by setVoxelPalette(), so every holder of a reference sees the new values.
+ *     FOG.color is the same object as SKY.haze. MOTE_COLORS and the WATER constants (warm,
+ *     sheen, edge, level, opacity, ...) do not vary by palette.
+ *   - setVoxelPalette(name) recolours the palette-driven blocks in blocks.ts (grass, soil,
+ *     sand, stone, leaf slots) from their top hex: side/bottom (and tint, topTint, fringeColor)
+ *     are darkened copies. Every block hex passes through the NATURAL filter (10% desaturation,
+ *     slight warm lean), the hemisphere sky colour is pulled 35% toward a warm neutral, and
+ *     grade saturation/contrast are clamped (NATURAL.maxGradeSat 1.04, contrast 1.08..1.12).
+ *   - Module initialisation applies the starting theme: ?palette=<key> if valid, else Spring.
+ *     activePaletteName is a live-binding export updated on every switch.
  *
- * Non-palette colours (wood, accent blocks, UI chrome) may remain hardcoded
- * here — they are intentional constants, not palette choices.
+ * Usage
+ *   Importers: render/lighting.ts, postfx.ts, renderer.ts, map.ts, world/water.ts,
+ *   world/vegetation.ts, fx/particles.ts, fx/critters.ts, ui/settings.ts (theme list).
+ *   main.ts calls setVoxelPalette() from settings.onPaletteChange, then pushes the new values
+ *   into the sky, fog, hemisphere light, grade/bloom uniforms and day-night keyframes, and
+ *   rebuilds terrain meshes and the far field, since block colours are baked into vertices.
+ *   Changing a palette without that refresh only affects things that read the objects per frame.
  *
- * Every block is drawn with a thin ink outline (see core/voxel.ts): a
- * darker stroke of its own face colour along every voxel edge.
+ * See also: core/blocks.ts (block library), main.ts; DESIGN.md "11. Palette system".
  */
 
 import * as THREE from 'three';
+// Block definitions live in blocks.ts; this module only recolours them (setVoxelPalette).
+import { BLOCKS, BLOCK_BY_ID } from './blocks';
 
 // Hex input is sRGB; current Three.js converts it to the linear working space.
 const c = (hex: any) => new THREE.Color(hex);
@@ -53,305 +75,6 @@ export const FOG = {
     heightFalloff: 0.055,
     density: 0.92,
 };
-
-/* ------------------------------------------------------------------ *
- * Surface patterns — consumed by the voxel shader in core/voxel.ts
- * ------------------------------------------------------------------ */
-export const PATTERN = {
-    NONE: 0,
-    BRICK: 1,
-    STONE: 2,
-    PLANK: 3,
-    BARK: 4,
-    GRASS: 5,
-    TILE: 6,
-    CACTUS: 7,
-};
-
-/* ------------------------------------------------------------------ *
- * Block library
- * ------------------------------------------------------------------ */
-const B = (id: any, def: any) => ({ id, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, sway: false, ...def });
-
-export const BLOCKS = {
-    AIR: { id: 0 },
-
-    /* --- ground (palette-driven — colours zeroed, set by setVoxelPalette) --- */
-    GRASS: B(1, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        lightEdge: true,
-        rough: 0.5,
-    }),
-    GRASS_LIGHT: B(2, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        lightEdge: true,
-        rough: 0.5,
-    }),
-    GRASS_DEEP: B(3, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        lightEdge: true,
-        rough: 0.5,
-    }),
-    GRASS_STONE: B(6, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        stoneSubstrate: true,
-        lightEdge: true,
-        rough: 0.52,
-    }),
-    GRASS_LIGHT_STONE: B(7, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        stoneSubstrate: true,
-        lightEdge: true,
-        rough: 0.52,
-    }),
-    GRASS_DEEP_STONE: B(8, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        topTint: z(),
-        fringeColor: z(),
-        pattern: PATTERN.NONE,
-        topPattern: PATTERN.NONE,
-        fringe: 0,
-        grassCap: true,
-        stoneSubstrate: true,
-        lightEdge: true,
-        rough: 0.52,
-    }),
-    SOIL: B(4, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        pattern: PATTERN.NONE,
-        rough: 0.55,
-    }),
-    SAND: B(5, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        pattern: PATTERN.NONE,
-        rough: 0.4,
-    }),
-
-    /* --- rock (palette-driven) ----------------------------------------- */
-    STONE: B(10, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        pattern: PATTERN.NONE,
-        rough: 0.6,
-    }),
-    STONE_PALE: B(11, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        pattern: PATTERN.NONE,
-        rough: 0.5,
-    }),
-    STONE_WARM: B(12, {
-        top: z(),
-        side: z(),
-        bottom: z(),
-        tint: z(),
-        pattern: PATTERN.NONE,
-        rough: 0.55,
-    }),
-
-    /* --- path (neutral constant — not palette-driven) ------------------- */
-    PATH: B(13, {
-        top: c(0x8a8070),
-        side: c(0x7e7464),
-        bottom: c(0x6e6454),
-        tint: c(0x847a68),
-        pattern: PATTERN.NONE,
-        rough: 0.45,
-    }),
-
-    /* --- wood (structural constants — not palette-driven) --------------- */
-    PLANK: B(20, {
-        top: c(0xb8824a),
-        side: c(0xa87840),
-        bottom: c(0x946830),
-        tint: c(0xa07038),
-        pattern: PATTERN.PLANK,
-        rough: 0.5,
-    }),
-    PLANK_PALE: B(21, {
-        top: c(0xc89060),
-        side: c(0xb88450),
-        bottom: c(0xa07040),
-        tint: c(0xb07c48),
-        pattern: PATTERN.PLANK,
-        rough: 0.45,
-    }),
-    BEAM: B(22, {
-        top: c(0x8a5a28),
-        side: c(0x7a5020),
-        bottom: c(0x6a4018),
-        tint: c(0x724a18),
-        pattern: PATTERN.BARK,
-        rough: 0.5,
-    }),
-    TRUNK: B(23, {
-        isTrunk: true,
-        top: c(0x4a3020),
-        side: c(0x3e2818),
-        bottom: c(0x342010),
-        tint: c(0x362212),
-        pattern: PATTERN.BARK,
-        rough: 0.65,
-    }),
-    TRUNK_PALE: B(24, {
-        isTrunk: true,
-        top: c(0x5a3828),
-        side: c(0x4e3020),
-        bottom: c(0x3e2818),
-        tint: c(0x482a18),
-        pattern: PATTERN.BARK,
-        rough: 0.6,
-    }),
-
-    /* --- foliage (palette-driven) --------------------------------------- */
-    LEAF_PINK: B(30, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.22, sway: true }),
-    LEAF_BLUSH: B(31, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.2, sway: true }),
-    LEAF_LILAC: B(32, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.22, sway: true }),
-    LEAF_CREAM: B(33, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.2, sway: true }),
-    LEAF_MINT: B(34, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.22, sway: true }),
-    LEAF_ROSE: B(35, { top: z(), side: z(), bottom: z(), tint: z(), pattern: PATTERN.NONE, rough: 0.22, sway: true }),
-
-    /* --- accents (intentional constants — not palette-driven) ----------- */
-    LANTERN: B(40, {
-        top: c(0xffb050),
-        side: c(0xffa040),
-        bottom: c(0xf09030),
-        tint: c(0xffc060),
-        pattern: PATTERN.NONE,
-        rough: 0.1,
-        emissive: 0.75,
-    }),
-    CRYSTAL: B(41, {
-        top: c(0xdfd0f7),
-        side: c(0xd2c0f1),
-        bottom: c(0xc2aee5),
-        tint: c(0xeee5fd),
-        pattern: PATTERN.NONE,
-        rough: 0.1,
-        emissive: 0.42,
-    }),
-    CLOTH_PINK: B(42, {
-        top: c(0xc87858),
-        side: c(0xb86c4e),
-        bottom: c(0xa05c40),
-        tint: c(0xd08060),
-        pattern: PATTERN.NONE,
-        rough: 0.3,
-    }),
-    CLOTH_CREAM: B(43, {
-        top: c(0xe8d8b0),
-        side: c(0xdecaa0),
-        bottom: c(0xcaba88),
-        tint: c(0xf0e0b8),
-        pattern: PATTERN.NONE,
-        rough: 0.3,
-    }),
-    ROOF_ROSE: B(44, {
-        top: c(0xb85a38),
-        side: c(0xa84e30),
-        bottom: c(0x944228),
-        tint: c(0xa04828),
-        pattern: PATTERN.PLANK,
-        rough: 0.4,
-    }),
-    ROOF_LILAC: B(45, {
-        top: c(0x887868),
-        side: c(0x7a6c5c),
-        bottom: c(0x6a5c4e),
-        tint: c(0x806e5c),
-        pattern: PATTERN.PLANK,
-        rough: 0.4,
-    }),
-};
-
-/** id -> block record, built once. */
-export const BLOCK_BY_ID = (() => {
-    const t: any[] = [];
-    for (const k of Object.keys(BLOCKS)) {
-        const b = (BLOCKS as any)[k];
-        b.name = k;
-        t[b.id] = b;
-    }
-    return t;
-})();
-
-/**
- * Add a block at runtime.
- * Ids are Uint8 — 60..250 is the free range.
- */
-/**
- * Natural-stone styles for the voxel shader's shared `patRock` (see voxel.ts).
- * A block opts in with `rockStyle: ROCK.X`; any system can reuse them.
- */
-export const ROCK = {
-    MARBLE: 0,
-    DARK_MARBLE: 1,
-    SLATE: 2,
-    SANDSTONE: 3,
-    GRANITE: 4,
-    BASALT: 5,
-    QUARTZITE: 6,
-} as const;
-
-let _nextBlockId = 60;
 
 /* ------------------------------------------------------------------ *
  * Water  (colours initialised to zero; filled by setVoxelPalette)
@@ -939,15 +662,6 @@ function naturalise(c: THREE.Color): THREE.Color {
 /** Darken a Three.js Color by a factor (0..1 = darker) in linear space. */
 function darken(src: THREE.Color, factor: number): THREE.Color {
     return new THREE.Color(src.r * factor, src.g * factor, src.b * factor);
-}
-
-export function registerBlock(name: any, def: any) {
-    if ((BLOCKS as any)[name]) return (BLOCKS as any)[name];
-    if (_nextBlockId > 250) throw new Error('block id space exhausted');
-    const b = { id: _nextBlockId++, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, ...def, name };
-    (BLOCKS as any)[name] = b;
-    BLOCK_BY_ID[b.id] = b;
-    return b;
 }
 
 /** Apply a VoxelPalette — mutates all palette-driven exports in place. */

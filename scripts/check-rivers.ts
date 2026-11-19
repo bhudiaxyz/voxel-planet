@@ -1,6 +1,21 @@
 /**
- * Fresh water must be carved INTO the land: no river/lake water surface may sit
- * above the dry ground beside it. Run: npm run check
+ * check-rivers — fresh water is carved into the land, never perched above it.
+ *
+ * Purpose
+ *   Guards the river/lake carving in src/world/rivers.ts: a water surface standing higher than
+ *   the dry bank beside it would read as a wall of water.
+ *
+ * Operations
+ *   Generates the seed-1337 planet, scans every column on all six faces whose top block is
+ *   RIVER_WATER, and for each dry 4-neighbour counts a violation when the water top is above the
+ *   neighbour's ground. Asserts more than 2000 water columns exist and zero violations.
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node --import ./scripts/ts-resolve.mjs scripts/check-rivers.ts`.
+ *   A failure means water stands above its bank (carving or fill level regressed), or rivers
+ *   and lakes nearly vanished.
+ *
+ * See also: src/world/rivers.ts; DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { generateSphereTerrain } from '../src/world/terrain.ts';

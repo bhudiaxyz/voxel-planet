@@ -1,6 +1,30 @@
-// src/player/fly.ts
-// Free-flight mode on the sphere: player controls movement and direction.
-// Terrain floor prevents clipping; auto-climb pushes over obstacles ahead.
+/**
+ * SphereFlyMode — free flight over the sphere: the player controls movement and direction.
+ *
+ * Purpose
+ *   A manual flying mode (the third stop in the F cycle) where the camera goes wherever the
+ *   player looks, while the terrain floor stops it clipping into the ground.
+ *
+ * Operations
+ *   - State: `dir` (unit direction from centre), `altitude` above PLANET_RADIUS, `smoothFloor`.
+ *   - Horizontal: wishDir is projected into the tangent plane and `dir` arcs by
+ *     speed*dt/(PLANET_RADIUS+altitude); FLY_SPEED, FLY_SPRINT with shift.
+ *   - Vertical: altitude += vertDelta*dt (m/s, from the Space/C/scroll drain).
+ *   - Floor: terrain top + FLOOR_CLEARANCE, but it may only fall at FLOOR_DROP_RATE so cliffs
+ *     do not snap the camera down.
+ *   - Auto-climb: probes LOOK_AHEAD metres along wishDir; if the terrain there is higher, pushes
+ *     the altitude up at up to AUTO_CLIMB_RATE so it rises over obstacles before reaching them.
+ *   - update() sets camera.up and camera.position only; orientation (look, roll) is left to
+ *     FPCamera.
+ *
+ * Usage
+ *   Created by src/main.ts (createSphereFlyMode). main calls enter(dir, radius) / exit() and
+ *   update(dt, wishDir, vertDelta, sprint, grid, camera) each frame while active; `dir` and
+ *   `groundRadius` (PLANET_RADIUS + altitude) are read back for the dog and landing. Pause is
+ *   input-only: wish and vertical input go to zero, the mode still updates.
+ *
+ * See also: drone.ts, controller.ts, src/render/fp-camera.ts; DESIGN.md "14. Player".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';

@@ -1,11 +1,44 @@
-// src/world/trees.ts
-// Trees: bark and species-leaf blocks, altitude zones and species mixes, and every
-// tree builder (plantZoneTree / plantSphereTree and their forms). Split out of
-// terrain.ts; terrain.ts drives placement.
+/**
+ * Trees — tree blocks, altitude zones with species mixes, and every tree builder.
+ *
+ * Purpose
+ *   Owns everything about a tree except where it goes (terrain.ts decides placement): the bark
+ *   and species-leaf blocks, the five altitude zones and what grows in each, and the voxel
+ *   builders for each species and form. Also owns SNOW and DEADWOOD, terrain blocks that live
+ *   here to avoid import cycles.
+ *
+ * Operations
+ *   - Blocks are registered at module load with registerBlock (core/blocks.ts); ids are assigned
+ *     in load order (60..250), so registration stays at top level and deterministic. DEADWOOD
+ *     (groundMat GROUND_MAT.DEADWOOD, shader patDeadwood), SNOW (drifted top, frost fringe,
+ *     fixed colours), BIRCH, BARK_SCALY / RINGED / SMOOTH / REDWOOD (barkStyle picks the bark
+ *     texture), and leaf blocks (leafBlock: maple, cherry, jacaranda, aspen), all sway-flagged.
+ *   - Zones: zoneOf(rise above sea) -> coast / lowland / midland / highland / treeline. ZONE
+ *     gives per zone the tree chance per grass column (treeP), species weights (mix) and size
+ *     range. Band edges follow the terrain's relief (terrain.ts RELIEF_GAIN).
+ *   - plantZoneTree picks a species: the stand field makes one species of the mix lead (x4);
+ *     wetland species (willow, mangrove, cypress) are boosted near water and drylands ones
+ *     (acacia, baobab) far from it (wet map distance). Size is the zone range with +-25% jitter
+ *     and an age mix (about 10% saplings, 7% giants). Broadleaf and the FORM_SPECIES go through
+ *     plantSphereTree (forms in TreeForm; pickTreeForm by scale); the rest have their own
+ *     builders (palm, birch, fir, spruce, krummholz, maple, ...). Some crowns lean downwind.
+ *   - Builders write blocks with grid.set only into free air, inside the face and below
+ *     SHELL_DEPTH, so trees clip safely at seams and the shell top.
+ *   - weightedPick: weighted choice, also used by rocks.ts.
+ *
+ * Usage
+ *   terrain.ts: plantZoneTree(grid, face, u, v, surfaceLayer, rng, zone, LEAF_ROLE, stand,
+ *   wetD, sizeIn?), zoneOf, ZONE, SNOW. rocks.ts: SNOW, weightedPick, zoneOf. plants.ts: DEADWOOD
+ *   and type Zone. rivers.ts: SNOW (snowmelt sources). Import this module before anything that
+ *   needs these blocks' ids.
+ *
+ * See also: terrain.ts, plants.ts, core/blocks.ts, rocks.ts; DESIGN.md "4. Terrain generation"
+ * (Altitude-zoned trees, Leaf roles).
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { makeRng } from '../core/rng';
-import { BLOCKS, PATTERN, registerBlock } from '../core/palette';
+import { BLOCKS, GROUND_MAT, PATTERN, registerBlock } from '../core/blocks';
 
 const c = (hex: number) => new THREE.Color(hex);
 
@@ -21,6 +54,7 @@ export const DEADWOOD = registerBlock('DEADWOOD', {
     pattern: PATTERN.BARK,
     rough: 0.7,
     isTrunk: true,
+    groundMat: GROUND_MAT.DEADWOOD, // bleached split grain (patDeadwood), not living bark
 });
 /**
  * Snow: the snowcap above the snowline (terrain.ts SNOWLINE). Not one flat white:

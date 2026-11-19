@@ -1,4 +1,33 @@
-// src/player/drone.ts
+/**
+ * SphereDroneMode — cinematic, always-forward drone flight with terrain-following altitude.
+ *
+ * Purpose
+ *   An aerial camera mode: the drone cruises on its own, the player steers and sets hover height.
+ *   It drives the camera directly while active.
+ *
+ * Operations
+ *   - State: `dir` (radial up), `heading` (tangent forward, re-orthogonalised after every arc),
+ *     `altitude` above PLANET_RADIUS, `hoverHeight`, `active`, `landing`.
+ *   - enter(): starts ENTER_LIFT above the player's ground with a heading perpendicular to dir.
+ *   - Steering: yaw from mouse/touch plus A/D (yawKey); pitch and roll only affect the view
+ *     (flight stays level). Forward is automatic: speed DRONE_SPEED, DRONE_SPRINT_SPEED with
+ *     shift, x2 on W, stopped on S.
+ *   - Altitude: a P-controller (TERRAIN_FOLLOW_GAIN, capped at DRONE_VSPEED/2) pulls toward the
+ *     terrain top + hoverHeight; input.vertical (Space/C/scroll, m/s) raises or lowers
+ *     hoverHeight (floor MIN_CLEARANCE). Altitude is clamped above terrain + MIN_CLEARANCE and
+ *     below the shell ceiling.
+ *   - Landing (L or beginLanding): altitude lerps to the surface; at touchdown the drone
+ *     deactivates itself and main.ts hands control back to the walker.
+ *   - update() positions camera.up/position/lookAt (heading tilted by pitch, then roll).
+ *
+ * Usage
+ *   Created by src/main.ts (createSphereDroneMode); F cycles walk -> drone -> fly. main calls
+ *   enter/exit/beginLanding and update(dt, DroneInput, grid, camera) each frame; HUD shows
+ *   `altitude`. Pause is input-only by design: the paused FPCamera yields zero input, but the
+ *   drone keeps cruising and updating.
+ *
+ * See also: fly.ts, controller.ts, src/ui/hud.ts; DESIGN.md "14. Player".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';

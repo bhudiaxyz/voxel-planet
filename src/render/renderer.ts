@@ -1,3 +1,34 @@
+/**
+ * Renderer factory — creates the WebGLRenderer and sizes it for the GPU tier.
+ *
+ * Purpose
+ *   One place that configures the WebGLRenderer (context flags, tone mapping, shadow type) and
+ *   decides the drawing-buffer resolution, so every tier and the dynamic-resolution governor
+ *   agree on pixel ratio.
+ *
+ * Operations
+ *   - Context: antialias off (AA is a post pass at the end of the composer chain), high-
+ *     performance, no stencil, opaque, preserveDrawingBuffer only with `?capture=1`.
+ *   - Colour: sRGB output, ACES filmic tone mapping at GRADE.exposure (the Grade pass repeats
+ *     ACES itself; see postfx.ts). Clear colour starts near-black to avoid a haze-coloured flash.
+ *   - Shadows: enabled, VSMShadowMap. shadowMap.autoUpdate is true only on high/mobile-high/mid;
+ *     on low and very-low it is false and DayNight.update() sets needsUpdate when needed.
+ *   - Pixel ratio = min(devicePixelRatio, tier dprCap, sqrt(maxMegapixels * 1e6 / pixels)),
+ *     floored at 1, times renderScale (default 1). The pixel budget keeps HiDPI laptops and big
+ *     iPads from allocating ~8 MP of half-float post targets.
+ *   - Attached to the returned renderer: renderProfile (the tier), resizeTo(w, h) (re-picks the
+ *     pixel ratio and sets the size) and setRenderScale(s) (the dynamic-resolution factor).
+ *     setRenderScale only stores the factor; the caller must follow with resizeTo and resize the
+ *     post chain.
+ *
+ * Usage
+ *   main.ts: renderer = createRenderer(container, tier); on window resize call
+ *   renderer.resizeTo(w, h); the frame-time governor (govern()) calls setRenderScale(scale)
+ *   then resizeTo(w, h) and post.setSize(w, h). createPostFX reads renderer.getPixelRatio().
+ *
+ * See also: render/gpu-tier.ts (dprCap, maxMegapixels), render/postfx.ts, render/day-night.ts;
+ * DESIGN.md "12. GPU tiering".
+ */
 import * as THREE from 'three';
 import { GRADE } from '../core/palette';
 import type { GpuTier } from './gpu-tier';

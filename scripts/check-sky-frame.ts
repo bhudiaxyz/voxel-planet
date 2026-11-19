@@ -1,7 +1,22 @@
 /**
- * The sky model is authored with +Y up; on the sphere every lookup is rotated
- * by _toSky (sky.ts) so the viewer's local up maps to +Y. This mirrors that
- * GLSL in JS and checks the mapping. Run: npm run check
+ * check-sky-frame — the sky shader's local-up rotation maps up to +Y.
+ *
+ * Purpose
+ *   The sky is authored with +Y up; on the sphere every lookup is rotated by _toSky
+ *   (src/render/sky.ts) so the viewer's local up maps to +Y. This mirrors that GLSL in JS.
+ *
+ * Operations
+ *   - Guard: reads sky.ts and asserts it still contains the exact axis line
+ *     `vec3 axis = normalize(vec3(-up.z, 0.0, up.x));`, so this model cannot go stale silently.
+ *   - For 2000 random up vectors, asserts toSky(up, up) is +Y and that a direction perpendicular
+ *     to up stays on the horizon (y = 0).
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node scripts/check-sky-frame.ts`. If the guard fails, the
+ *   shader changed: update this mirror to match. Otherwise a failure means the sky would tilt
+ *   or the horizon drift as the player moves around the planet.
+ *
+ * See also: src/render/sky.ts; DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';

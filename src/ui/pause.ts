@@ -1,4 +1,26 @@
-/** Player pause menu — Escape. Shows adaptive key/touch bindings. */
+/**
+ * Pause — the Escape menu: Resume, Map, and the control bindings for the current device.
+ *
+ * Purpose
+ *   A pause overlay that also documents the controls, showing keyboard bindings or touch
+ *   buttons depending on isTouchDevice.
+ *
+ * Operations
+ *   - Pause is input-only by design: opening sets `input.paused = true` (FPCamera then ignores
+ *     movement, jump and look), but the world, drone, dog and day cycle keep updating.
+ *   - setOpen() remembers the previous `paused` value and restores it on close, so it composes
+ *     with other overlays (the settings panel does the same).
+ *   - Esc toggles the menu; M while open closes it and toggles the map; clicking the backdrop or
+ *     Resume closes it. KEYBOARD_BINDINGS / TOUCH_BINDINGS are the displayed lists: keep them in
+ *     step with the real key handling in src/main.ts and touch-controls.ts.
+ *
+ * Usage
+ *   Created by src/main.ts: createPause({ input: fpCam, map: sphereMapToggle }). Returns
+ *   { el, open, toggle }; the touch pause button calls toggle().
+ *
+ * See also: settings.ts, touch-controls.ts, src/render/fp-camera.ts;
+ * DESIGN.md "16. Controls, UI and map".
+ */
 
 import { isTouchDevice } from './touch-controls';
 

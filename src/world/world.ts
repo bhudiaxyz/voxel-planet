@@ -1,6 +1,32 @@
 /**
- * World assembly — runs the generators in order and turns the finished voxel
- * grid into renderable meshes.
+ * World assembly — runs the generators in order and turns the finished voxel grid into
+ * renderable meshes.
+ *
+ * Purpose
+ *   Single entry point that builds a playable planet for a seed: terrain, landmarks, the
+ *   distance-to-water map, chunk streamer, vegetation, and the sea. Keeps the ordering rules
+ *   in one place and reports loading progress.
+ *
+ * Operations
+ *   buildSphereWorld, in order (yielding a frame between steps so the loading bar paints):
+ *   1. generateSphereTerrain (terrain.ts; includes rivers, trees, plants) -> grid + spawn.
+ *   2. buildSphereLandmarks (landmarks.ts), after terrain so structures overwrite trees.
+ *   3. bakeWetMap (wet-map.ts) over the final grid; handed to vegetation and returned.
+ *   4. createSphereChunkStreamer (core/voxel.ts) with loadRadius, edges and the tier's
+ *      buildBudgetMs (per-frame meshing budget).
+ *   5. createSphereVegetation, attached with streaming.setListener BEFORE the first fill, so
+ *      grass patches build as chunks load. Only the near view (NEAR_FILL) is meshed here, in
+ *      slices of 24 chunks with a paint between; the rest streams in after entry.
+ *   6. bakeShoreMap (skipped on tier 'very-low') and createSphereWater (water.ts); the sea mesh
+ *      and the chunk mesh group are added to the scene.
+ *   Returns grid, streaming, group, spawnDir, animated (vegetation, for per-frame update),
+ *   sphereWater, landmarks and wet.
+ *
+ * Usage
+ *   const world = await buildSphereWorld(seed, scene, onProgress, { streamRadius, grassDensity,
+ *   groundDetail, shoreFoam, edges, buildBudgetMs, tier }); called once from main.ts.
+ *
+ * See also: terrain.ts, landmarks.ts, vegetation.ts, water.ts; DESIGN.md "3. World assembly".
  */
 
 import * as THREE from 'three';

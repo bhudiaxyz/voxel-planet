@@ -1,16 +1,28 @@
 /**
- * The dog's router on a hand-built patch of face 0. Run: npm run check
+ * check-dog-path — the dog's pathfinder on a hand-built patch of face 0.
  *
- *   ground layer 20 everywhere, then:
- *   - a wall (layer 30) across v=60 from u=40..80 — must route around its end
- *   - water (layer 5) at u=50..54, v=40..44 — must not cross
- *   - a trunk at (45, 50)
- *   - a 2-layer terrace step at u >= 90 — climbable
- *   - a 6-layer cliff at u >= 120 — not climbable from below
+ * Purpose
+ *   Verifies src/player/path.ts routes around obstacles, respects climb limits and stays
+ *   incremental, without generating a planet.
+ *
+ * Operations
+ *   Builds a patch with ground layer 20 everywhere, then:
+ *   - a wall (layer 30) across v=60 from u=40..80: the route must go round an end;
+ *   - water (layer 5) at u=50..54, v=40..44 and a trunk at (45, 50): must be avoided;
+ *   - a 2-layer terrace at u >= 90: climbable; a 6-layer cliff at u >= 120: unreachable from
+ *     below, and the drop back down exceeds maxDown 4 too (state must be 'failed');
+ *   - a long route is searched with step(400) and must still be found.
+ *   Every path step is also checked to be legal (passable, rise <= 2, drop <= 4).
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts`.
+ *   A failure means the dog would walk through obstacles or fail to find a reachable route.
+ *
+ * See also: src/player/path.ts, src/player/dog.ts; DESIGN.md "15. Dog", "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { SphereVoxelGrid } from '../src/core/voxel.ts';
-import { BLOCKS } from '../src/core/palette.ts';
+import { BLOCKS } from '../src/core/blocks.ts';
 import { createSpherePathfinder, type Col } from '../src/player/path.ts';
 
 const grid = new SphereVoxelGrid();

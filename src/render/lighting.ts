@@ -1,29 +1,53 @@
 /**
- * Lighting & atmosphere.
+ * Lighting & atmosphere — the light rig, shadow map, sky dome and aerial-perspective fog.
  *
- * The atmosphere model, top to bottom:
+ * Purpose
+ *   Atmosphere builds and owns everything that lights and fades the scene: sun (the only shadow
+ *   caster), hemisphere, fill and ambient lights, the sky dome, and scene-level FogExp2. It
+ *   exists so lights, fog and shadow settings live in one object that DayNight, postfx and the
+ *   settings panel can drive.
  *
- *   1. A shared sky function (render/sky.js) drives both the dome and the
- *      colour that distance fades into, so the horizon line does not exist.
- *   2. Scene-level FogExp2 carries the *aerial perspective* — the bulk of the
- *      distance falloff. It lives in the material pass so it is respected by
- *      everything, including transparent water and particles, which a
- *      depth-buffer post pass cannot touch.
- *   3. postfx.js adds the parts that need the depth buffer: valley mist,
- *      large-scale AO, desaturation-with-distance, sun in-scatter, and a
- *      whisper of defocus.
+ * Operations
+ *   The atmosphere model, top to bottom:
+ *   1. A shared sky function (render/sky.ts) drives both the dome and the colour that distance
+ *      fades into, so the horizon line does not exist.
+ *   2. Scene-level FogExp2 carries the aerial perspective, the bulk of the distance falloff.
+ *      It lives in the material pass so everything respects it, including transparent water
+ *      and particles, which a depth-buffer post pass cannot touch. three's shared
+ *      fog_fragment chunk is patched once at import to subtract FOG_NEAR (180) before the
+ *      curve, so the near field keeps full chroma and every material agrees where the air
+ *      begins. AERIAL_D (90) is the distance at which the medium reaches ~63%.
+ *   3. render/postfx.ts adds what needs the depth buffer: valley mist, large-scale AO,
+ *      desaturation with distance, sun in-scatter and a whisper of defocus. It reads
+ *      scene.fog.aerialD back every frame, so the two stay in agreement.
+ *   - The rig is a warm key over restrained lilac fill (RIG intensities). The reference is
+ *     high-key but light and shadow planes stay distinct; the pastel character comes from the
+ *     surface colours, not from flooding every face with the same ambient value.
+ *   - Colour: palette colours are already LINEAR, and three's lights, fog and clear colour are
+ *     consumed in linear space, so they are passed as-is (an earlier revision ran them through
+ *     convertLinearToSRGB, which brightened and desaturated the whole rig by ~30%).
+ *   - Shadows: VSM, tier shadowRes capped by the renderer's MAX_TEXTURE_SIZE and stored as
+ *     shadowCap. The frustum half-extent is min(worldSize * 0.42, tier shadowExtent). followTarget
+ *     centres the frustum on the viewer in 3D (sphere world) and snaps it to whole shadow
+ *     texels in the light's view plane so edges do not crawl. Bias is small (normalBias 0.1,
+ *     about a tenth of a block) to avoid peter-panning.
+ *   - update(dt, camera) per frame: moves the sky dome to the camera, sets uSkyUp (viewer's
+ *     radial up) and uSpace (sky drains to space with altitude), thins the fog with altitude
+ *     (ALT_FOG_* constants) so the far-field globe shows from high up, and points the
+ *     hemisphere light along the viewer's local up (otherwise flanks read cold).
  *
- * The light rig uses a warm key over restrained lilac fill. The reference is
- * high-key, but its light and shadow planes are still plainly different; the
- * pastel character comes from the surface colours, not from flooding every
- * face with the same ambient value.
+ * Usage
+ *   main.ts: atmo = new Atmosphere(scene, worldSize, tier, renderer.capabilities.maxTextureSize);
+ *   each frame atmo.update(dt, camera) and atmo.followTarget(camPos); DayNight then animates
+ *   atmo.sun/hemi/fill/sky and scene.fog. Settings UI calls setAerialD, setFogEnabled and
+ *   setShadowResolution; the last can only go below shadowCap (never above the tier/hardware
+ *   limit) and 0 turns shadows off. Exports AERIAL_D, FOG_NEAR (used by postfx.ts), FOG and
+ *   DEFAULT_SHADOW_RESOLUTION (ui/settings.ts). `?shadow=` is a diagnostic override of the
+ *   fallback resolution only. Import this module before any material is compiled so the fog
+ *   chunk patch is in place.
  *
- * NOTE ON COLOUR: palette colours are already LINEAR. three's lights, fog and
- * clear colour are all consumed in the working (linear) space, so they are
- * handed over as-is. The previous revision ran every one of them through
- * convertLinearToSRGB() first, which silently brightened and de-saturated the
- * entire rig by ~30% and was a large part of why nothing could be graded down
- * without going grey.
+ * See also: render/sky.ts, render/day-night.ts, render/postfx.ts, render/gpu-tier.ts;
+ * DESIGN.md "9. Sky and lighting".
  */
 
 import * as THREE from 'three';

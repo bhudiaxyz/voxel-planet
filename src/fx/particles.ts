@@ -1,13 +1,27 @@
 /**
- * Atmospheric particles.
+ * Particles — atmospheric petals, motes and pollen that fall and drift around the camera.
  *
- * Three layers, each doing a different job:
- *   petals  — big readable tumbling quads, the hero motif
- *   motes   — tiny soft bokeh dots that give the air volume
- *   pollen  — near-camera drift, sells depth by moving fast in parallax
+ * Purpose
+ *   Gives the air volume and motion. Counts are deliberately low: petals are punctuation, not
+ *   weather (an early pass with ~3700 particles read as confetti in a snowstorm).
  *
- * All GPU-animated from a single instanced draw per layer; the CPU only
- * seeds them once.
+ * Operations
+ *   - Four instanced layers sharing one shader, scaled by maxCount / 1110 (so the tier can thin
+ *     them): hero petals (90, large, slow), mid-field petals (140), glowing motes (300, additive)
+ *     and near-camera pollen (130, additive, fast parallax). Petals use PETAL_COLORS, motes and
+ *     pollen MOTE_COLORS.
+ *   - The CPU only seeds offset, seed, colour and size per instance (makeQuadGeometry). The
+ *     vertex shader tumbles, falls (mod'ed over the box height), sways, wraps in x/z around the
+ *     camera so the field never runs out, and fades at the loop ends to avoid popping.
+ *   - update(): advances uTime and copies the camera position into uOrigin on every layer.
+ *   - recolorPetals(): re-randomises the petal colour buffers from the current PETAL_COLORS.
+ *
+ * Usage
+ *   Created by src/main.ts: createParticles(worldSize, rng, maxCount); add `group` to the scene.
+ *   Per frame: particles.update(dt, camera); `planetUnisList` exposes every layer's uniforms for
+ *   the planet-radius update; call recolorPetals() after a palette change (setVoxelPalette).
+ *
+ * See also: critters.ts, src/core/palette.ts; DESIGN.md "13. FX".
  */
 
 import * as THREE from 'three';

@@ -1,21 +1,67 @@
 /**
- * The voxel core: a dense grid, a face-culling mesher with baked per-vertex
- * ambient occlusion, and the shader that gives every block its surface.
+ * The voxel core. Everything between "a grid of block ids" and "triangles on
+ * the GPU with a surface shader" lives here. Map of the file, top to bottom:
  *
- * Why baked AO matters: it is the single biggest reason the reference images
- * read as a handcrafted diorama rather than a pile of cubes. Contact shadows
- * in every crevice give the geometry weight and let us keep the key light
- * soft and the whole palette high-key without the forms going flat.
+ *   SphereVoxelGrid          the world: 6 cube faces × 400² columns × 96 layers,
+ *                            one Uint8 block id per voxel (92 MB), plus a per-
+ *                            column top-layer cache and a ground-cover plant id.
+ *   MeshBuffer               reusable typed-array staging for one mesh, written
+ *                            in GPU formats (see its comment for the layout).
+ *   streamer constants       radii, budgets, fade bands (CHUNK_ANGLE … DETAIL_RADIUS).
+ *   GLSL: COMMON / VERT / FRAG_DECL
+ *                            the shader library: noise, then one function per
+ *                            surface (patTerrain, patGround, patRock, patBark*,
+ *                            patFoliage, patCactus…).
+ *   GLSL: FRAG_BODY          picks a surface function from the vertex flags,
+ *                            then layers grass lip, macro variation, face shade,
+ *                            AO and the waterline on top.
+ *   createMeshRoots          the shared scene groups + materials every chunk joins.
+ *   buildSphereMeshChunk     mesh one chunk into the shared staging buffers.
+ *   edge-outline helpers     collect / merge / build the ink outline lines.
+ *   createSphereChunkStreamer  which chunks exist, when they build and unload.
+ *   meshSphereFaceRegion     the mesher proper: culled faces, AO, attributes.
+ *   createFarField           the low-res whole-planet shell beyond the stream.
+ *   makeVoxelMaterial / makeGlowMaterial   material + shader injection.
  *
- * Most materials are deliberately untextured. Only authored wood receives
- * parallel board seams or lengthwise grain from world-space UVs; terrain and
- * blossom planes remain uninterrupted flat colour.
+ * How a block's look is decided (the one thing worth remembering):
+ *   block def (core/blocks.ts) → mesher bakes per-vertex flags (aData, colours)
+ *   → FRAG_BODY decodes the flags → one pat*() function → shared lighting.
+ * The flag encoding is documented once, at the mesher's `target.quad(...)` call
+ * and in DESIGN.md ("Shading flags").
+ *
+ * Why baked AO matters: it is the single biggest reason the world reads as a
+ * handcrafted diorama rather than a pile of cubes. Contact shadows in every
+ * crevice give the geometry weight and let the key light stay soft and the
+ * palette high-key without the forms going flat.
+ *
+ * All surface detail is procedural (value noise, a few cell passes), never
+ * image textures: no texture memory to budget per tier, no mip/atlas seams on
+ * the sphere, and the detail fades with distance (fwidth) so it never shimmers.
+ * Tiers without FOLIAGE_DETAIL (very-low) skip it and draw flat colour.
+ *
+ * Usage
+ *   const grid = new SphereVoxelGrid();             // world/terrain.ts fills it
+ *   const s = createSphereChunkStreamer(grid, { loadRadius, edges, buildBudgetMs });
+ *   s.setListener(vegetation);                      // optional: told of every load/unload
+ *   scene.add(s.meshes.solid, s.meshes.glow, s.meshes.edges);
+ *   // every frame:
+ *   s.update(viewerDir); s.tick(dt);
+ *   // teleport / palette change:
+ *   s.fillNear(dir);  /  s.rebuildAll(dir);
+ *   const far = createFarField(grid, s.meshes.material, SEA_LAYER);  // optional shell
+ *
+ *   World assembly (world/world.ts) does the above; main.ts drives the frame calls.
+ *   Shader edits: bump the customProgramCacheKey version in makeVoxelMaterial.
+ *
+ * See also: core/blocks.ts (block definitions), core/geoutil.ts (face bases),
+ * world/vegetation.ts (the ChunkListener), DESIGN.md sections 2, 5 and 6.
  */
 
 import * as THREE from 'three';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import { BLOCK_BY_ID, WATER, LIGHT } from './palette';
+import { WATER, LIGHT } from './palette';
+import { BLOCK_BY_ID } from './blocks';
 import { basisFromCode } from './geoutil';
 
 /* ================================================================== *
@@ -289,21 +335,85 @@ const AXIS_VEC = [
  * Mesher
  * ================================================================== */
 
+/**
+ * Vertex/index staging for one mesh, written directly in its GPU formats.
+ *
+ * Memory layout (per vertex, 31 bytes — 84 when everything was float):
+ *
+ *   attribute  type             why it is enough
+ *   position   Float32 ×3       sphere-projected corners are not integral
+ *   normal     Int8 norm ×3     unit vectors; a 1/127 step is invisible
+ *   color      Uint8 norm ×3    flat pastels — a 1/255 step is invisible
+ *   aTint      Uint8 norm ×3    "
+ *   aFringe    Uint8 norm ×3    "  (on leaves, r carries the sway stiffness)
+ *   aUv        Int16 ×2         world-space block coords, integral at every vertex
+ *   aData      Float32 ×4       AO (fractional), pattern bits, fringe/flags, local height
+ *
+ * Normalized integer attributes are expanded back to 0..1 (or -1..1) by the GPU
+ * for free, so the shader sees the same values as before packing.
+ *
+ * Allocation strategy — the reason this class looks the way it does:
+ *   - The arrays grow by doubling and never shrink, and the chunk mesher reuses
+ *     ONE set of buffers for every chunk (CHUNK_BUFFERS + reset()). A chunk used
+ *     to build eight plain JS arrays with ~100k push() calls and then copy them
+ *     into typed arrays: about a megabyte of short-lived garbage per chunk, which
+ *     showed up as GC pauses (stutter) on phones while terrain streamed in.
+ *   - toGeometry() copies out exactly `count` vertices with slice(), so each
+ *     geometry owns its data and the staging arrays are free for the next chunk.
+ */
 class MeshBuffer {
-    pos: number[] = [];
-    nrm: number[] = [];
-    col: number[] = [];
-    tint: number[] = [];
-    fringeCol: number[] = [];
-    uv: number[] = [];
-    dat: number[] = [];
-    idx: number[] = [];
+    pos = new Float32Array(0);
+    nrm = new Int8Array(0);
+    col = new Uint8Array(0);
+    tint = new Uint8Array(0);
+    fringeCol = new Uint8Array(0);
+    uv = new Int16Array(0);
+    dat = new Float32Array(0);
+    idx = new Uint32Array(0);
+    /** Vertices written so far. */
     count = 0;
+    /** Indices written so far. */
+    nIdx = 0;
     /** Index offset where appended leaf faces start (-1 = none); see append(). */
     leafStart = -1;
 
     get empty() {
         return this.count === 0;
+    }
+
+    /** Forget the contents but keep the capacity (buffer reuse between chunks). */
+    reset() {
+        this.count = 0;
+        this.nIdx = 0;
+        this.leafStart = -1;
+        return this;
+    }
+
+    /** Make room for `verts` more vertices and `inds` more indices (doubling growth). */
+    private reserve(verts: number, inds: number) {
+        const needV = this.count + verts;
+        if (needV * 3 > this.pos.length) {
+            const cap = Math.max(1024, needV * 2);
+            const keep = this.count;
+            const grow = <T extends Float32Array | Int8Array | Uint8Array | Int16Array>(a: T, k: number): T => {
+                const b = new (a.constructor as new (n: number) => T)(cap * k);
+                b.set(a.subarray(0, keep * k) as unknown as ArrayLike<number>);
+                return b;
+            };
+            this.pos = grow(this.pos, 3);
+            this.nrm = grow(this.nrm, 3);
+            this.col = grow(this.col, 3);
+            this.tint = grow(this.tint, 3);
+            this.fringeCol = grow(this.fringeCol, 3);
+            this.uv = grow(this.uv, 2);
+            this.dat = grow(this.dat, 4);
+        }
+        const needI = this.nIdx + inds;
+        if (needI > this.idx.length) {
+            const b = new Uint32Array(Math.max(1536, needI * 2));
+            b.set(this.idx.subarray(0, this.nIdx));
+            this.idx = b;
+        }
     }
 
     /**
@@ -312,109 +422,132 @@ class MeshBuffer {
      */
     append(o: MeshBuffer) {
         if (o.empty) return;
-        this.leafStart = this.idx.length;
-        const b = this.count;
-        for (const k of ['pos', 'nrm', 'col', 'tint', 'fringeCol', 'uv', 'dat'] as const)
-            for (const x of o[k]) this[k].push(x);
-        for (const i of o.idx) this.idx.push(i + b);
-        this.count += o.count;
-    }
-
-    quad(
-        verts: any,
-        n: any,
-        base: any,
-        tint: any,
-        fringeCol: any,
-        uvs: any,
-        ao: any,
-        pattern: any,
-        fringe: any,
-        localV: any,
-    ) {
-        const b = this.count;
-        for (let i = 0; i < 4; i++) {
-            this.pos.push(verts[i][0], verts[i][1], verts[i][2]);
-            this.nrm.push(n[0], n[1], n[2]);
-            this.col.push(base.r, base.g, base.b);
-            this.tint.push(tint.r, tint.g, tint.b);
-            this.fringeCol.push(fringeCol.r, fringeCol.g, fringeCol.b);
-            this.uv.push(uvs[i][0], uvs[i][1]);
-            this.dat.push(ao[i], pattern, fringe, localV[i]);
-        }
-        // Flip the split so the AO gradient never creases along the wrong diagonal.
-        if (ao[0] + ao[2] > ao[1] + ao[3]) {
-            this.idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
-        } else {
-            this.idx.push(b + 1, b + 2, b + 3, b + 1, b + 3, b);
-        }
-        this.count += 4;
+        this.reserve(o.count, o.nIdx);
+        this.leafStart = this.nIdx;
+        const b = this.count,
+            n = o.count;
+        this.pos.set(o.pos.subarray(0, n * 3), b * 3);
+        this.nrm.set(o.nrm.subarray(0, n * 3), b * 3);
+        this.col.set(o.col.subarray(0, n * 3), b * 3);
+        this.tint.set(o.tint.subarray(0, n * 3), b * 3);
+        this.fringeCol.set(o.fringeCol.subarray(0, n * 3), b * 3);
+        this.uv.set(o.uv.subarray(0, n * 2), b * 2);
+        this.dat.set(o.dat.subarray(0, n * 4), b * 4);
+        for (let i = 0; i < o.nIdx; i++) this.idx[this.nIdx + i] = o.idx[i] + b;
+        this.nIdx += o.nIdx;
+        this.count += n;
     }
 
     /**
-     * Pack the vertex streams down before handing them to the GPU.
-     *
-     * Every one of these attributes was a float3/float4 — 84 bytes per vertex,
-     * which on a world this size is ~40 MB of buffers and a lot of wasted
-     * bandwidth on a stream the vertex shader touches once. Almost none of it
-     * needs float precision:
-     *
-     *   position  voxel corners are integers -> Int16
-     *   normal    axis-aligned, always 0 or ±1 -> Int8 normalized
-     *   colours   already in 0..1, and these are flat pastels where a 1/255
-     *             step is invisible -> Uint8 normalized
-     *   aUv       world-space and integral at every vertex -> Int16
-     *   aData     carries fractional AO, pattern, fringe and local height, so
-     *             this one genuinely stays float
-     *
-     * Normalized integer attributes are expanded back to 0..1 (or -1..1) by the
-     * GPU for free, so no shader change is needed.
+     * Add one quad (4 vertices, 2 triangles).
+     * @param verts   the 4 corner positions
+     * @param n       face normal (unit)
+     * @param base    vertex colour; `tint` = the pattern's second colour;
+     *                `fringeCol` = grass-lip colour (or sway stiffness in .r on leaves)
+     * @param uvs     the 4 world-space block coordinates (aUv)
+     * @param ao      the 4 baked occlusion values, 0 (dark) .. 1 (open)
+     * @param pattern aData.y — PATTERN id | 8 (sway) | 16 (fresh water)
+     * @param fringe  aData.z — lip fraction (>= 0) or a negative style flag (FRINGE_* below)
+     * @param localV  the 4 local heights (0 bottom .. 1 top), for the grass lip
      */
+    quad(
+        verts: ArrayLike<number>[],
+        n: ArrayLike<number>,
+        base: THREE.Color,
+        tint: THREE.Color,
+        fringeCol: THREE.Color,
+        uvs: ArrayLike<number>[],
+        ao: ArrayLike<number>,
+        pattern: number,
+        fringe: number,
+        localV: ArrayLike<number>,
+    ) {
+        this.reserve(4, 6);
+        const b = this.count;
+        const n0 = Math.round(n[0] * 127),
+            n1 = Math.round(n[1] * 127),
+            n2 = Math.round(n[2] * 127);
+        const cr = u8(base.r),
+            cg = u8(base.g),
+            cb = u8(base.b);
+        const tr = u8(tint.r),
+            tg = u8(tint.g),
+            tb = u8(tint.b);
+        const fr = u8(fringeCol.r),
+            fg = u8(fringeCol.g),
+            fb = u8(fringeCol.b);
+        for (let i = 0; i < 4; i++) {
+            const v3 = (b + i) * 3;
+            this.pos[v3] = verts[i][0];
+            this.pos[v3 + 1] = verts[i][1];
+            this.pos[v3 + 2] = verts[i][2];
+            this.nrm[v3] = n0;
+            this.nrm[v3 + 1] = n1;
+            this.nrm[v3 + 2] = n2;
+            this.col[v3] = cr;
+            this.col[v3 + 1] = cg;
+            this.col[v3 + 2] = cb;
+            this.tint[v3] = tr;
+            this.tint[v3 + 1] = tg;
+            this.tint[v3 + 2] = tb;
+            this.fringeCol[v3] = fr;
+            this.fringeCol[v3 + 1] = fg;
+            this.fringeCol[v3 + 2] = fb;
+            this.uv[(b + i) * 2] = uvs[i][0];
+            this.uv[(b + i) * 2 + 1] = uvs[i][1];
+            const d = (b + i) * 4;
+            this.dat[d] = ao[i];
+            this.dat[d + 1] = pattern;
+            this.dat[d + 2] = fringe;
+            this.dat[d + 3] = localV[i];
+        }
+        // Flip the split so the AO gradient never creases along the wrong diagonal.
+        const I = this.idx,
+            k = this.nIdx;
+        const [a0, a1, a2, a3] = ao[0] + ao[2] > ao[1] + ao[3] ? [0, 1, 2, 3] : [1, 2, 3, 0];
+        I[k] = b + a0;
+        I[k + 1] = b + a1;
+        I[k + 2] = b + a2;
+        I[k + 3] = b + a0;
+        I[k + 4] = b + a2;
+        I[k + 5] = b + a3;
+        this.nIdx += 6;
+        this.count += 4;
+    }
+
+    /** Copy the contents into a new BufferGeometry (the staging arrays stay reusable). */
     toGeometry() {
         const g = new THREE.BufferGeometry();
         const n = this.count;
-
-        const pos = new Float32Array(n * 3);
-        for (let i = 0; i < n * 3; i++) pos[i] = this.pos[i];
-
-        const nrm = new Int8Array(n * 3);
-        for (let i = 0; i < n * 3; i++) nrm[i] = Math.round(this.nrm[i] * 127);
-
-        const packColor = (src: number[]) => {
-            const a = new Uint8Array(n * 3);
-            for (let i = 0; i < n * 3; i++) {
-                const v = src[i];
-                a[i] = v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255);
-            }
-            return a;
-        };
-
-        const uv = new Int16Array(n * 2);
-        for (let i = 0; i < n * 2; i++) uv[i] = this.uv[i];
-
-        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3, true));
-        g.setAttribute('color', new THREE.BufferAttribute(packColor(this.col), 3, true));
-        g.setAttribute('aTint', new THREE.BufferAttribute(packColor(this.tint), 3, true));
-        g.setAttribute('aFringe', new THREE.BufferAttribute(packColor(this.fringeCol), 3, true));
-        g.setAttribute('aUv', new THREE.BufferAttribute(uv, 2));
-        g.setAttribute('aData', new THREE.Float32BufferAttribute(this.dat, 4));
+        g.setAttribute('position', new THREE.BufferAttribute(this.pos.slice(0, n * 3), 3));
+        g.setAttribute('normal', new THREE.BufferAttribute(this.nrm.slice(0, n * 3), 3, true));
+        g.setAttribute('color', new THREE.BufferAttribute(this.col.slice(0, n * 3), 3, true));
+        g.setAttribute('aTint', new THREE.BufferAttribute(this.tint.slice(0, n * 3), 3, true));
+        g.setAttribute('aFringe', new THREE.BufferAttribute(this.fringeCol.slice(0, n * 3), 3, true));
+        g.setAttribute('aUv', new THREE.BufferAttribute(this.uv.slice(0, n * 2), 2));
+        g.setAttribute('aData', new THREE.BufferAttribute(this.dat.slice(0, n * 4), 4));
         // 16-bit indices wherever a chunk fits, which is the common case.
-        g.setIndex(
-            n <= 65535
-                ? new THREE.BufferAttribute(new Uint16Array(this.idx), 1)
-                : new THREE.BufferAttribute(new Uint32Array(this.idx), 1),
-        );
+        const ix = this.idx.subarray(0, this.nIdx);
+        g.setIndex(new THREE.BufferAttribute(n <= 65535 ? Uint16Array.from(ix) : ix.slice(), 1));
         // Two draw groups when leaves were appended: material 0 (front-sided solid),
         // material 1 (double-sided leaves). The mesh takes [solidMat, leafMat].
         if (this.leafStart >= 0) {
             g.addGroup(0, this.leafStart, 0);
-            g.addGroup(this.leafStart, this.idx.length - this.leafStart, 1);
-        } else g.addGroup(0, this.idx.length, 0);
+            g.addGroup(this.leafStart, this.nIdx - this.leafStart, 1);
+        } else g.addGroup(0, this.nIdx, 0);
         g.computeBoundingSphere();
         return g;
     }
 }
+
+/** 0..1 colour channel → Uint8, clamped and rounded (what a normalized attribute expects). */
+const u8 = (v: number) => (v <= 0 ? 0 : v >= 1 ? 255 : Math.round(v * 255));
+
+/**
+ * The chunk mesher's staging buffers, shared by every chunk build (see MeshBuffer).
+ * Safe because chunk builds are synchronous and never nest.
+ */
+const CHUNK_BUFFERS = { solid: new MeshBuffer(), glow: new MeshBuffer(), leaves: new MeshBuffer() };
 
 const CHUNKS_PER_FACE_EDGE = Math.ceil(FACE_RES / CHUNK);
 /** Angle one chunk spans at a cube-face centre (columns shrink slightly toward the corners). */
@@ -958,6 +1091,145 @@ const FRAG_DECL = /* glsl */ `
   }
 
   /**
+   * Per-material character on top of patTerrain, plus altitude weathering, so a
+   * granite cliff, a dune and a snowfield differ in texture, not only colour.
+   * col = patTerrain result, base = authored face colour, m = ground material:
+   *   0 grass  turf: blade flecks, worn bare patches, a sun-bleached cast up high
+   *   1 soil   earth: pebbles and root threads on cliffs, clods on tops
+   *   2 sand   ripples across tops (wind-aligned, continuous), cross-bedding on sides
+   *   3 stone  fractured rock: joint cracks, lichen, frost toward the snowline
+   *   4 pale   weathered upland stone: platy cleavage, pale lichen rosettes
+   *   5 snow   wind-sculpted sastrugi and glints on tops, ice-glazed rock on sides
+   *   6 path   compacted gravel with wheel-worn ruts
+   * Altitude h is layers above the sea: damp near water, frost/bleach high up.
+   * All smooth noise and one cell pass (rock cracks) — cheap enough for mid tiers.
+   * Reads vPosW, so only valid inside main().
+   */
+  vec3 patGround(vec2 uv, vec3 col, vec3 base, vec3 tint, bool top, bool side, float m) {
+    float h = length(vPosW) - uSeaLevelRadius;
+    float px = length(fwidth(uv));
+    float near = 1.0 - smoothstep(0.08, 0.35, px);
+    // Damp band just above the water: darker, a touch cooler (all but snow).
+    float damp = (1.0 - smoothstep(0.0, 2.5, h)) * step(m, 4.5);
+    col *= mix(vec3(1.0), vec3(0.8, 0.84, 0.88), damp * 0.6);
+
+    if (m < 0.5) {                                        // grass
+      if (top) {
+        // Blade flecks: tiny elongated light/dark strokes, faded with distance.
+        vec2 bp = mat2(0.94, -0.34, 0.34, 0.94) * uv * vec2(22.0, 9.0);
+        float blade = vxNoise(bp) - 0.5;
+        col *= 1.0 + blade * 0.14 * near;
+        // Worn bare patches where the turf thins (a step toward soil brown).
+        float bare = smoothstep(0.72, 0.86, vxNoise(uv * 0.45 + 31.0));
+        col = mix(col, col * vec3(1.08, 0.92, 0.7), bare * 0.4);
+        // Clover / flower dots in the lowland turf.
+        float dot1 = smoothstep(0.9, 0.96, vxNoise(uv * 11.0 + 3.0)) * (1.0 - smoothstep(6.0, 16.0, h));
+        col = mix(col, tint * 1.25 + vec3(0.06), dot1 * 0.35 * near);
+      }
+      // Upland turf: drier and sun-bleached toward the stone zone.
+      float upland = smoothstep(10.0, 26.0, h);
+      float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+      col = mix(col, mix(vec3(lum), col, 0.7) * vec3(1.06, 1.02, 0.9), upland * 0.5);
+    } else if (m < 1.5) {                                 // soil
+      if (side) {
+        // Embedded pebbles: small pale rounded stones with a dark underside.
+        vec3 c = _cells(uv * vec2(3.2, 3.6));
+        float peb = (1.0 - smoothstep(0.16, 0.24, c.x)) * step(0.72, c.z);
+        col = mix(col, base * 1.45 + vec3(0.04), peb * 0.6);
+        // Root threads hanging down the upper face.
+        float root = (1.0 - smoothstep(0.0, 0.035, abs(vxNoise(vec2(uv.x * 6.0, uv.y * 0.8)) - 0.5)))
+                   * smoothstep(0.3, 0.9, fract(uv.y));
+        col = mix(col, col * 0.62, root * 0.5 * near);
+      } else {
+        float clod = vxNoise(uv * 6.0) * 0.6 + vxNoise(uv * 13.0) * 0.4;
+        col *= 0.9 + 0.2 * smoothstep(0.3, 0.8, clod);
+      }
+    } else if (m < 2.5) {                                 // sand
+      if (top) {
+        // Ripples: a world-space direction so they run unbroken across blocks,
+        // with a warped phase so they wander like real wind ripples.
+        vec2 rd = normalize(vec2(0.8, 0.6));
+        float ph = dot(uv, rd) * 5.5 + vxNoise(uv * 0.7) * 3.0;
+        float rip = sin(ph * 6.2832);
+        col *= 1.0 + 0.09 * rip * near;                   // lit windward / shaded lee
+        col *= 1.0 + 0.06 * (vxNoise(uv * 28.0) - 0.5) * near;   // grain
+        // Darker heavy-mineral streaks in the troughs.
+        col = mix(col, col * 0.82, smoothstep(0.75, 1.0, -rip) * smoothstep(0.55, 0.8, vxNoise(uv * 1.2 + 5.0)) * 0.5);
+      } else if (side) {
+        // Cross-bedding: thin tilted laminae, set by set.
+        float set = floor(uv.y * 1.5);
+        float tilt = (vxHash(vec2(set, 3.0)) - 0.5) * 0.9;
+        float lam = sin((uv.y * 9.0 + uv.x * tilt * 3.0 + vxNoise(uv * 1.5) * 0.6) * 6.2832);
+        col *= 1.0 - 0.06 * (0.5 + 0.5 * lam);
+      }
+    } else if (m < 4.5) {                                 // stone / pale stone
+      bool pale = m > 3.5;
+      // Joint cracks: cell borders, warped so they are fractures, not tiles.
+      vec2 cp = uv * (pale ? vec2(1.4, 2.6) : vec2(1.6, 1.3));
+      cp += vec2(vxNoise(uv * 0.9), vxNoise(uv * 0.9 + 7.0)) * 0.7;
+      vec3 c = _cells(cp);
+      float crack = 1.0 - smoothstep(0.015, 0.07, c.y - c.x);
+      col *= 0.92 + 0.14 * c.z;                            // each fracture block its own tone
+      col = mix(col, col * 0.5, crack * 0.7 * near);
+      if (pale && side) {
+        // Platy cleavage: fine parallel lines along the layers.
+        col *= 1.0 - 0.07 * smoothstep(0.6, 1.0, sin(uv.y * 30.0 + vxNoise(uv * 2.0) * 2.0));
+      }
+      // Lichen: pale rosettes on pale rock, ochre-green crust on dark, fading out
+      // high up where it is too cold.
+      float lich = smoothstep(0.72, 0.82, vxNoise(uv * 2.4 + 17.0)) * (1.0 - smoothstep(26.0, 40.0, h));
+      vec3 lc = pale ? vec3(0.78, 0.8, 0.7) : vec3(0.52, 0.55, 0.3);
+      col = mix(col, lc * (0.8 + 0.4 * vxNoise(uv * 9.0)), lich * (top ? 0.45 : 0.3));
+      // Frost toward the snowline: rime in the cracks and on tops.
+      float frost = smoothstep(18.0, 30.0, h);
+      col = mix(col, vec3(0.86, 0.9, 0.95), frost * (top ? 0.35 : 0.12) * (0.4 + 0.6 * crack + 0.3 * vxNoise(uv * 5.0)));
+    } else if (m < 5.5) {                                 // snow
+      if (top) {
+        // Sastrugi: wind-carved ridges, elongated along one direction.
+        vec2 sp = mat2(0.6, -0.8, 0.8, 0.6) * uv;
+        float sas = vxNoise(sp * vec2(0.9, 3.2)) * 0.6 + vxNoise(sp * vec2(1.8, 7.0)) * 0.4;
+        col *= 0.93 + 0.12 * smoothstep(0.3, 0.8, sas);
+        // Sparkle: a few crystals catch the sun (screen-stable, faded with distance).
+        float glint = step(0.985, vxHash(floor(uv * 14.0) + floor(sas * 3.0)));
+        col += vec3(0.35) * glint * near * max(dot(uSunDir, normalize(vPosW)), 0.0);
+      } else if (side) {
+        // Ice glaze on the rock below the lip: cool sheen streaks running down.
+        float run = vxNoise(vec2(uv.x * 4.0, uv.y * 0.6));
+        col = mix(col, vec3(0.7, 0.78, 0.86), smoothstep(0.6, 0.85, run) * 0.3);
+      }
+    } else if (m < 6.5) {                                 // path
+      vec3 c = _cells(uv * 5.0);
+      float gravel = 1.0 - smoothstep(0.25, 0.45, c.x);
+      col *= 0.9 + 0.2 * c.z * gravel;
+      col = mix(col, col * 0.75, (1.0 - smoothstep(0.02, 0.1, c.y - c.x)) * 0.4 * near);
+    }
+    return col;
+  }
+
+  /** Deadwood: sun-bleached silver-grey wood, long splits, no bark left. */
+  vec3 patDeadwood(vec2 uv, vec3 base, bool side) {
+    vec3 wood = max(base, vec3(0.42, 0.38, 0.33));
+    vec3 col;
+    // Single exit (no early return): D3D's HLSL compiler flagged the early-return
+    // form as "potentially uninitialized" on ANGLE/Windows.
+    if (!side) {
+      // Cut end: faint growth rings and a darker weathered rim.
+      vec2 c = fract(uv) - 0.5;
+      float r = length(c) * 8.0 + vxNoise(uv * 3.0) * 0.6;
+      col = wood * (0.85 + 0.12 * sin(r * 3.14159)) * (1.0 - 0.4 * step(0.43, max(abs(c.x), abs(c.y))));
+    } else {
+      float grain = vxNoise(vec2(uv.x * 18.0, uv.y * 1.2)) * 0.6 + vxNoise(vec2(uv.x * 40.0, uv.y * 2.0)) * 0.4;
+      col = wood * (0.86 + 0.22 * grain);
+      // Long splits running up the wood.
+      float split = 1.0 - smoothstep(0.0, 0.03, abs(vxNoise(vec2(uv.x * 3.0, uv.y * 0.25)) - 0.5));
+      col = mix(col, wood * 0.3, split * 0.8);
+      // Grey weathering patches.
+      col = mix(col, vec3(dot(col, vec3(0.333))) * 1.05, smoothstep(0.5, 0.8, vxNoise(uv * 1.5 + 9.0)) * 0.5);
+    }
+    return col;
+  }
+
+  /**
    * Cactus: vertical ribs (light crests, dark grooves) running up the stem,
    * with tiny pale spine dots along the crests. uv.y runs up side faces.
    */
@@ -1038,6 +1310,23 @@ const BAYER_DITHER_GLSL = /* glsl */ `
   }
 `;
 
+/*
+ * Per-fragment surface for every voxel block. Decodes the mesher's flags:
+ *
+ *   vDataV.x  baked AO, 0 (dark) .. 1 (open)
+ *   vDataV.y  pattern | 8 (sway: leaves, bushes) ; 16 = fresh water
+ *             → pat = PATTERN id (0..7), isFresh, sway = (8 <= y < 15.5)
+ *   vDataV.z  "fringe": >= 0  grass/snow lip fraction down the side face
+ *                       -2..-6    bark style (patBark*)      -(2 + barkStyle)
+ *                       -10..-16  natural stone (patRock)    -(10 + rockStyle)
+ *                       -30..-37  ground material (patGround / patDeadwood)
+ *                                                            -(30 + groundMat)
+ *   vDataV.w  local height within the block (0 bottom .. 1 top), for the lip
+ *
+ * Order: surface function → grass lip → macro variation → face shade →
+ * height tint → AO → waterline. Lighting (Lambert + shadows) runs after this,
+ * in three's own chunks.
+ */
 const FRAG_BODY = /* glsl */ `
   {
     vec3 col = diffuseColor.rgb;
@@ -1056,7 +1345,7 @@ const FRAG_BODY = /* glsl */ `
     bool isSide = abs(_radial) < 0.5;
     bool isTopFace = _radial > 0.5;
 
-    if (fringe < -9.5)               col = patRock(vUvW, col, vTintV, isTopFace, -fringe - 10.0);
+    if (fringe < -9.5 && fringe > -29.5) col = patRock(vUvW, col, vTintV, isTopFace, -fringe - 10.0);
     else if (pat > 0.5 && pat < 1.5) col = patBrick(vUvW, col, vTintV);
     else if (pat > 1.5 && pat < 2.5) col = patStone(vUvW, col, vTintV);
     else if (pat > 2.5 && pat < 3.5) col = patPlank(vUvW, col, vTintV);
@@ -1066,7 +1355,16 @@ const FRAG_BODY = /* glsl */ `
     else if (pat > 6.5 && pat < 7.5) col = patCactus(isSide ? _trunkUV(_geoN) : vUvW, col, vTintV, isSide);
     #if defined(FOLIAGE_DETAIL) && !defined(FAR_FIELD)
     // Plain terrain blocks (no pattern, not foliage): surface detail.
-    if (pat < 0.5 && vDataV.y < 7.5 && !isFresh) col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
+    if (pat < 0.5 && vDataV.y < 7.5 && !isFresh) {
+      col = patTerrain(vUvW, col, vTintV, isTopFace, !isTopFace && !isSide);
+      // Material character + altitude weathering on the generic terrain base.
+      // Snow keeps its positive fringe (the lip), so it is told apart by colour.
+      float gm = fringe < -29.5 ? -fringe - 30.0
+               : (fringe > 0.001 && dot(diffuseColor.rgb, vec3(0.333)) > 0.6 && diffuseColor.b >= diffuseColor.r) ? 5.0 : -1.0;
+      // A grass block's sides are the earth under the turf: soil character there.
+      if (gm > -0.5 && gm < 0.5 && !isTopFace) gm = 1.0;
+      if (gm > -0.5) col = patGround(vUvW, col, diffuseColor.rgb, vTintV, isTopFace, isSide, gm);
+    }
     // Trunks (the only bark-pattern blocks): furrowed bark on the sides, rings on the ends.
     if (pat > 3.5 && pat < 4.5) {
       if (isSide) {
@@ -1083,6 +1381,8 @@ const FRAG_BODY = /* glsl */ `
       } else {
         col = patBarkEnd(vUvW, diffuseColor.rgb, vTintV);
       }
+      // Deadwood (ground material 7): bleached, split grain instead of living bark.
+      if (fringe < -36.5 && fringe > -37.5) col = patDeadwood(isSide ? _trunkUV(_geoN) : vUvW, diffuseColor.rgb, isSide);
     }
     // Leaf blocks (sway flag, bit 3) get canopy shading instead of a flat face.
     if (vDataV.y >= 7.5 && !isFresh) {
@@ -1279,51 +1579,55 @@ function buildSphereMeshChunk(
         v0 = ck * CHUNK;
     const u1 = Math.min(u0 + CHUNK, FACE_RES);
     const v1 = Math.min(v0 + CHUNK, FACE_RES);
-    const solid = new MeshBuffer(),
-        glow = new MeshBuffer(),
-        leaves = new MeshBuffer(),
+    const solid = CHUNK_BUFFERS.solid.reset(),
+        glow = CHUNK_BUFFERS.glow.reset(),
+        leaves = CHUNK_BUFFERS.leaves.reset(),
         edgeMap = wantEdges ? new Map() : null;
     meshSphereFaceRegion(grid, face, u0, v0, u1, v1, solid, glow, edgeMap, 1, leaves);
     // Leaf faces ride in the solid mesh as a second, double-sided draw group: from
     // inside a bush or canopy the outward-facing faces are back faces, and front-
     // sided culling made the plant see-through. Only leaves pay the double side.
     solid.append(leaves);
-    const record: any = { solid: null, glow: null, edges: null };
+    const record: Pick<ChunkRecord, 'solid' | 'glow' | 'edges'> = { solid: null, glow: null, edges: null };
     if (!solid.empty) {
-        record.solid = new THREE.Mesh(solid.toGeometry(), meshes.materials);
-        record.solid.name = `terrain-${face}-${ci}-${ck}`;
-        record.solid.castShadow = true;
-        record.solid.receiveShadow = true;
-        record.solid.matrixAutoUpdate = false;
-        meshes.solid.add(record.solid);
+        const m = new THREE.Mesh(solid.toGeometry(), meshes.materials);
+        m.name = `terrain-${face}-${ci}-${ck}`;
+        m.castShadow = true;
+        m.receiveShadow = true;
+        m.matrixAutoUpdate = false;
+        meshes.solid.add(m);
+        record.solid = m;
     }
     if (!glow.empty) {
-        record.glow = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
-        record.glow.name = `glow-${face}-${ci}-${ck}`;
-        record.glow.matrixAutoUpdate = false;
+        const m = new THREE.Mesh(glow.toGeometry(), meshes.glowMaterial);
+        m.name = `glow-${face}-${ci}-${ck}`;
+        m.matrixAutoUpdate = false;
         // Gems cast too: spire/obelisk caps, and the crystal grove (almost all gem),
         // which otherwise threw no shadow at all. They are lit by their own glow, so
         // they don't receive.
-        record.glow.castShadow = true;
-        meshes.glow.add(record.glow);
+        m.castShadow = true;
+        meshes.glow.add(m);
+        record.glow = m;
     }
     if (edgeMap && edgeMap.size > 0) {
-        record.edges = buildEdgeLines(edgeMap, meshes.edgeMaterial);
-        record.edges.name = `voxel-edges-${face}-${ci}-${ck}`;
-        meshes.edges.add(record.edges);
+        const e = buildEdgeLines(edgeMap, meshes.edgeMaterial);
+        e.name = `voxel-edges-${face}-${ci}-${ck}`;
+        meshes.edges.add(e);
+        record.edges = e;
     }
     return record;
 }
 
-function removeMeshChunk(meshes: any, record: any) {
+/** Detach a chunk's meshes from the shared roots and free their GPU buffers. */
+function removeMeshChunk(meshes: ReturnType<typeof createMeshRoots>, record: Pick<ChunkRecord, 'solid' | 'glow' | 'edges'>) {
     for (const [root, object] of [
         [meshes.solid, record.solid],
         [meshes.glow, record.glow],
         [meshes.edges, record.edges],
-    ]) {
+    ] as const) {
         if (!object) continue;
         root.remove(object);
-        object.geometry.dispose();
+        (object as THREE.Mesh).geometry.dispose();
     }
 }
 
@@ -1874,28 +2178,94 @@ export function crossFaceUV(face: number, u: number, v: number): [number, number
     return [f2, u2, v2];
 }
 
+/**
+ * One loaded terrain chunk: a CHUNK×CHUNK block of columns on one cube face.
+ * Up to three meshes, any of which may be absent (an all-air or no-gem chunk).
+ */
+interface ChunkRecord {
+    face: number;
+    /** Chunk indices within the face (column u0 = ci * CHUNK, v0 = ck * CHUNK). */
+    ci: number;
+    ck: number;
+    /** Solid terrain + leaves (two draw groups); glowing gem blocks; outline lines. */
+    solid: THREE.Mesh | null;
+    glow: THREE.Mesh | null;
+    edges: THREE.Object3D | null;
+    /** Built with outline edges (only near chunks on tiers that draw outlines). */
+    hasEdges: boolean;
+    /** Current detail state: outlines visible and casting shadows (see setDetail). */
+    detailed: boolean;
+}
+
+/** A chunk waiting to be built; `dot` = cos(angle to the viewer), higher = closer. */
+interface QueuedChunk {
+    face: number;
+    ci: number;
+    ck: number;
+    dot: number;
+}
+
+/** Chunks on the whole planet (6 faces × 25 × 25 = 3,750). */
+const CHUNK_COUNT = 6 * CHUNKS_PER_FACE_EDGE * CHUNKS_PER_FACE_EDGE;
+/** Integer chunk id — also the chunk's index into the streamer's chunkDirs table. */
+const chunkId = (face: number, ci: number, ck: number) => (face * CHUNKS_PER_FACE_EDGE + ci) * CHUNKS_PER_FACE_EDGE + ck;
+
+/**
+ * The terrain streamer: keeps the chunks within `loadRadius` of the viewer built,
+ * and drops the rest. Called every frame by main.ts.
+ *
+ * Life of a chunk:
+ *   scan()        every RESCAN_ANGLE of movement: one dot product per planet
+ *                 chunk against the precomputed centre directions. Chunks inside
+ *                 the load radius that aren't loaded are queued (closest last, so
+ *                 pop() is the nearest); loaded chunks past the unload radius
+ *                 (load + UNLOAD_MARGIN, hysteresis) are dropped.
+ *   update()      per frame: builds queued chunks within a time budget (tier
+ *                 buildBudgetMs, predictive — see below). Each new chunk fades in
+ *                 with a dither (uLodAlpha) over ~1/3 s.
+ *   loadChunk()   meshes the chunk (buildSphereMeshChunk), adds its meshes to the
+ *                 shared roots and tells the listener (vegetation builds its patch).
+ *   unloadChunk() disposes the geometry and tells the listener.
+ *
+ * Detail: chunks within DETAIL_RADIUS cast shadows and show outlines; farther ones
+ * don't (setDetail). A chunk built far without outlines is re-meshed with them if
+ * the viewer comes close (outline collection is ~40% of the build cost, so far
+ * chunks skip it).
+ *
+ * Bookkeeping is by integer chunk id (chunkId), so the per-scan loop does no
+ * string building and no allocation besides the queue.
+ */
 export function createSphereChunkStreamer(
     grid: SphereVoxelGrid,
-    opts: { loadRadius?: number; edges?: boolean; buildBudgetMs?: number } = {},
+    opts: {
+        /** Tier ceiling for the stream radius, in chunks; the settings slider can only lower it. */
+        loadRadius?: number;
+        /** Build outline edges at all (tier edgeMask). */
+        edges?: boolean;
+        /** Per-frame meshing budget, ms (tier buildBudgetMs). */
+        buildBudgetMs?: number;
+    } = {},
 ) {
     const tierEdges = opts.edges ?? true;
     const frameBudget = opts.buildBudgetMs ?? BUILD_BUDGET_MS;
     /** Running mean of one chunk's build cost (mesh + listener), for the predictive budget. */
     let avgChunkMs = 2;
+    /** Frames in a row that skipped a chunk because it alone exceeds the budget. */
     let starved = 0;
     /** While the queue's closest chunk is inside this dot, update() uses the burst budget. 2 = off. */
     let burstMinDot = 2;
     const meshes = createMeshRoots();
-    const loaded = new Map<string, any>();
-    const fadingMeshes = new Set<any>();
-    let loadQueue: Array<{ face: number; ci: number; ck: number; dot: number }> = [];
+    const loaded = new Map<number, ChunkRecord>();
+    const fadingMeshes = new Set<THREE.Mesh>();
+    let loadQueue: QueuedChunk[] = [];
     let disposed = false;
     const maxRadius = opts.loadRadius ?? 10;
     let radius = maxRadius;
+    // Radii as cosines, so "inside" is one dot product: dot >= cos(angle).
     let loadCos = 1,
-        unloadCos = 1;
+        unloadCos = 1,
+        detailCos = 1;
     const fadeUniforms = meshes.material.userData.uniforms;
-    let detailCos = 1;
     const setCos = () => {
         loadCos = Math.cos(radius * CHUNK_ANGLE);
         unloadCos = Math.cos((radius + UNLOAD_MARGIN) * CHUNK_ANGLE);
@@ -1907,20 +2277,20 @@ export function createSphereChunkStreamer(
         fadeUniforms.uFadeNear.value = radius * (1 - FADE_BAND) * CHUNK_ANGLE * surf;
     };
     let listener: ChunkListener | null = null;
-    /** Chunks whose detail state (outlines/shadow) last applied; flipped as the player moves. */
-    const detailed = new Map<string, boolean>();
     setCos();
     const lastScan = new THREE.Vector3();
     let forceScan = true;
+    /** scan() stamps every chunk it keeps with the scan's generation (no per-scan Set). */
+    const keptGen = new Uint32Array(CHUNK_COUNT);
+    let scanGen = 0;
 
-    // Chunk centre directions never change — compute all 3,750 once.
-    const chunkDirs = new Float32Array(6 * CHUNKS_PER_FACE_EDGE * CHUNKS_PER_FACE_EDGE * 3);
+    // Chunk centre directions never change — compute all 3,750 once, indexed by chunkId.
+    const chunkDirs = new Float32Array(CHUNK_COUNT * 3);
     {
         const n = new THREE.Vector3(),
             tu = new THREE.Vector3(),
             tv = new THREE.Vector3(),
             d = new THREE.Vector3();
-        let o = 0;
         for (let face = 0; face < 6; face++) {
             basisFromCode(face, n, tu, tv);
             for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
@@ -1931,17 +2301,14 @@ export function createSphereChunkStreamer(
                         .addScaledVector(tu, (2 * u) / FACE_RES - 1)
                         .addScaledVector(tv, (2 * v) / FACE_RES - 1)
                         .normalize();
-                    chunkDirs[o++] = d.x;
-                    chunkDirs[o++] = d.y;
-                    chunkDirs[o++] = d.z;
+                    d.toArray(chunkDirs, chunkId(face, ci, ck) * 3);
                 }
             }
         }
     }
 
-    const keyOf = (face: number, ci: number, ck: number) => `${face},${ci},${ck}`;
-
-    const initFade = (record: any) => {
+    /** Start a chunk's dither fade-in: its meshes set uLodAlpha just for their own draw. */
+    const initFade = (record: ChunkRecord) => {
         const uniforms = meshes.material.userData.uniforms;
         for (const mesh of [record.solid, record.glow]) {
             if (!mesh) continue;
@@ -1957,78 +2324,81 @@ export function createSphereChunkStreamer(
         }
     };
 
-    const setDetail = (record: any, on: boolean) => {
+    /** Near-detail switch: outlines visible and shadow casting on (near) or off (far). */
+    const setDetail = (record: ChunkRecord, on: boolean) => {
+        record.detailed = on;
         if (record.edges) record.edges.visible = on;
         if (record.solid) record.solid.castShadow = on;
         if (record.glow) record.glow.castShadow = on;
     };
 
-    const loadChunk = (face: number, ci: number, ck: number, dot: number, fade: boolean) => {
-        const key = keyOf(face, ci, ck);
-        if (loaded.has(key) || disposed) return;
-        const near = dot >= detailCos;
-        const record = buildSphereMeshChunk(grid, face, ci, ck, meshes, tierEdges && near);
-        record.hasEdges = tierEdges && near;
+    const loadChunk = (q: QueuedChunk, fade: boolean) => {
+        const id = chunkId(q.face, q.ci, q.ck);
+        if (loaded.has(id) || disposed) return;
+        const near = q.dot >= detailCos;
+        const built = buildSphereMeshChunk(grid, q.face, q.ci, q.ck, meshes, tierEdges && near);
+        const record: ChunkRecord = {
+            face: q.face,
+            ci: q.ci,
+            ck: q.ck,
+            ...built,
+            hasEdges: tierEdges && near,
+            detailed: near,
+        };
         if (fade) initFade(record);
         setDetail(record, near);
-        detailed.set(key, near);
-        loaded.set(key, record);
-        listener?.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
+        loaded.set(id, record);
+        listener?.chunkLoaded(q.face, q.ci * CHUNK, q.ck * CHUNK);
     };
 
-    const unloadChunk = (key: string) => {
-        const record = loaded.get(key);
+    const unloadChunk = (id: number) => {
+        const record = loaded.get(id);
         if (!record) return;
-        for (const mesh of [record.solid, record.glow, record.edges]) {
-            if (!mesh) continue;
-            fadingMeshes.delete(mesh);
-        }
+        if (record.solid) fadingMeshes.delete(record.solid);
+        if (record.glow) fadingMeshes.delete(record.glow);
         removeMeshChunk(meshes, record);
-        loaded.delete(key);
-        detailed.delete(key);
-        const [face, ci, ck] = key.split(',').map(Number);
-        listener?.chunkUnloaded(face, ci * CHUNK, ck * CHUNK);
+        loaded.delete(id);
+        listener?.chunkUnloaded(record.face, record.ci * CHUNK, record.ck * CHUNK);
     };
 
     const scan = (playerDir: THREE.Vector3) => {
         lastScan.copy(playerDir);
         forceScan = false;
         loadQueue = [];
-        const keep = new Set<string>();
-        let o = 0;
+        const gen = ++scanGen;
         for (let face = 0; face < 6; face++) {
             for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
-                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++, o += 3) {
+                for (let ck = 0; ck < CHUNKS_PER_FACE_EDGE; ck++) {
+                    const id = chunkId(face, ci, ck),
+                        o = id * 3;
                     const dot =
                         chunkDirs[o] * playerDir.x + chunkDirs[o + 1] * playerDir.y + chunkDirs[o + 2] * playerDir.z;
                     if (dot < unloadCos) continue;
-                    const key = keyOf(face, ci, ck);
-                    keep.add(key);
-                    const record = loaded.get(key);
+                    keptGen[id] = gen;
+                    const record = loaded.get(id);
                     if (record) {
                         const near = dot >= detailCos;
                         if (near && tierEdges && !record.hasEdges) {
                             // Built far (no outlines) and now near: re-mesh it with
                             // edges through the normal budgeted queue.
-                            unloadChunk(key);
+                            unloadChunk(id);
                             loadQueue.push({ face, ci, ck, dot });
                             continue;
                         }
-                        if (detailed.get(key) !== near) {
-                            setDetail(record, near);
-                            detailed.set(key, near);
-                        }
+                        if (record.detailed !== near) setDetail(record, near);
                     } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
                 }
             }
         }
         // Closest first; popped from the end.
         loadQueue.sort((a, b) => a.dot - b.dot);
-        for (const key of loaded.keys()) if (!keep.has(key)) unloadChunk(key);
+        for (const id of [...loaded.keys()]) if (keptGen[id] !== gen) unloadChunk(id);
     };
 
     return {
+        /** Shared scene groups (solid/glow/edges) and the materials every chunk uses. */
         meshes,
+        /** Current stream radius in chunks (<= the tier ceiling). */
         get loadRadius() {
             return radius;
         },
@@ -2036,20 +2406,23 @@ export function createSphereChunkStreamer(
         get fadeBand(): [number, number] {
             return [fadeUniforms.uFadeNear.value, fadeUniforms.uFadeFar.value];
         },
+        /** Chunks currently built (settings panel readout). */
         get loadedCount() {
             return loaded.size;
         },
+        /** Chunks queued to build. */
         get pendingCount() {
             return loadQueue.length;
         },
-        /** Something that tracks chunk load/unload — the vegetation layer. */
+        /**
+         * Something that tracks chunk load/unload — the vegetation layer. Replays
+         * chunkLoaded for chunks already built, so registration order doesn't matter.
+         */
         setListener(l: ChunkListener) {
             listener = l;
-            for (const key of loaded.keys()) {
-                const [face, ci, ck] = key.split(',').map(Number);
-                l.chunkLoaded(face, ci * CHUNK, ck * CHUNK);
-            }
+            for (const r of loaded.values()) l.chunkLoaded(r.face, r.ci * CHUNK, r.ck * CHUNK);
         },
+        /** Settings slider: clamp to [3, tier ceiling]; takes effect on the next update (rescan). */
         setLoadRadius(r: number) {
             const next = Math.max(3, Math.min(maxRadius, Math.round(r)));
             if (next === radius) return;
@@ -2059,8 +2432,16 @@ export function createSphereChunkStreamer(
         },
 
         /**
-         * @param budgetMs main-thread meshing budget this call. Pass Infinity at
-         *        startup to fill the view before the first frame (no fade-in then).
+         * Per frame: rescan if the viewer moved RESCAN_ANGLE, then build queued
+         * chunks (closest first) within the budget. Builds fade in; an Infinity
+         * budget (tests, tools) builds everything at once with no fade.
+         *
+         * The budget is predictive: avgChunkMs is a running mean of one build,
+         * and the loop stops when the next build would likely overrun. A chunk
+         * that alone exceeds the budget still builds, after STARVE_FRAMES waits,
+         * so streaming can never stall. After fillNear() the budget is raised to
+         * BURST_BUDGET_MS until the near disc is back (burstMinDot).
+         * @param budgetMs main-thread meshing ms this call (default: the tier's).
          */
         update(playerDir: THREE.Vector3, budgetMs = frameBudget) {
             if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
@@ -2081,7 +2462,7 @@ export function createSphereChunkStreamer(
                 if (built === 0 && avgChunkMs > budgetMs && ++starved < STARVE_FRAMES) break;
                 const next = loadQueue.pop()!;
                 const a = performance.now();
-                loadChunk(next.face, next.ci, next.ck, next.dot, fade);
+                loadChunk(next, fade);
                 avgChunkMs += (performance.now() - a - avgChunkMs) * 0.15;
                 built++;
                 starved = 0;
@@ -2101,7 +2482,7 @@ export function createSphereChunkStreamer(
             const minDot = Math.cos(Math.min(NEAR_SYNC, radiusChunks) * CHUNK_ANGLE);
             while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
                 const next = loadQueue.pop()!;
-                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+                loadChunk(next, false);
             }
             burstMinDot = Math.cos(radiusChunks * CHUNK_ANGLE);
         },
@@ -2117,11 +2498,12 @@ export function createSphereChunkStreamer(
             const t0 = performance.now();
             while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
                 const next = loadQueue.pop()!;
-                loadChunk(next.face, next.ci, next.ck, next.dot, false);
+                loadChunk(next, false);
                 if (performance.now() - t0 >= budgetMs) break;
             }
         },
 
+        /** Per frame: advance the fade-in of recently built chunks (~1/3 s each). */
         tick(dt: number) {
             for (const mesh of fadingMeshes) {
                 mesh.userData.lodAlpha = Math.min(1, mesh.userData.lodAlpha + dt * 3);
@@ -2134,17 +2516,19 @@ export function createSphereChunkStreamer(
 
         /**
          * Drop every chunk and reload around `playerDir`. Block colours are baked into
-         * the meshes, so a palette switch must rebuild them. Fills the view at once.
+         * the meshes, so a palette switch must rebuild them. Only the ground underfoot
+         * builds at once (fillNear); the rest streams back in over a few frames.
          */
         rebuildAll(playerDir: THREE.Vector3) {
-            for (const key of [...loaded.keys()]) unloadChunk(key);
+            for (const id of [...loaded.keys()]) unloadChunk(id);
             forceScan = true;
             this.fillNear(playerDir);
         },
 
+        /** Free every chunk; later loads are ignored. */
         dispose() {
             disposed = true;
-            for (const key of loaded.keys()) unloadChunk(key);
+            for (const id of [...loaded.keys()]) unloadChunk(id);
         },
     };
 }
@@ -2432,11 +2816,14 @@ export function meshSphereFaceRegion(
                         // Negative fringe values are flags (fringe is otherwise >= 0):
                         //   -(2 + s)    bark style s for patBarkDetail (0 furrowed .. 4 smooth)
                         //   -(10 + s)   natural stone style s for patRock (0 marble .. 6 quartzite)
+                        //   -(30 + m)   ground material m for patGround (GROUND_MAT in palette.ts)
                         (block as any).rockStyle !== undefined
                             ? -(10 + (block as any).rockStyle)
                             : (block as any).barkStyle !== undefined
                               ? -(2 + (block as any).barkStyle)
-                              : (block as any).fringe || 0,
+                              : (block as any).groundMat !== undefined && !(block as any).fringe
+                                ? -(30 + (block as any).groundMat)
+                                : (block as any).fringe || 0,
                         [localV[3], localV[2], localV[1], localV[0]],
                     );
                 }
@@ -2695,7 +3082,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v26' +
+        'VoxelWorld-voxel-v27' +
         (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') +
         (mat.defines?.FAR_FIELD ? '-far' : '') +
         (mat.side === THREE.DoubleSide ? '-ds' : '');

@@ -1,7 +1,21 @@
 /**
- * Landmark names: every kind has a pool in core/names.ts, no name appears in
- * two pools, and every landmark on a planet gets a distinct name.
- * Run: npm run check
+ * check-names — landmark naming pools are complete, disjoint and used without repeats.
+ *
+ * Purpose
+ *   Keeps the Locations panel readable: every kind has names, and no two places share one.
+ *
+ * Operations
+ *   1. Every landmark kind (the LANDMARK_COLOR keys) plus 'island' has a non-empty pool in
+ *      LANDMARK_NAMES_BY_KIND (core/names.ts).
+ *   2. No name appears twice across (or within) pools.
+ *   3. For seeds 1337 and 42, generates the planet and landmarks and asserts all names are
+ *      distinct and each comes from its own kind's pool (sky islands use 'island').
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node --import ./scripts/ts-resolve.mjs scripts/check-names.ts`.
+ *   A failure means a new landmark kind lacks a pool, or a pool has duplicates or too few names.
+ *
+ * See also: src/core/names.ts, src/world/landmarks.ts; DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { generateSphereTerrain } from '../src/world/terrain.ts';

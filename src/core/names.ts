@@ -1,11 +1,25 @@
-// Procedural landmark names, ported from planet-explorer/src/core/names.ts.
-// Each landmark kind has its own themed pool; buildSphereLandmarks deals names
-// from a seeded shuffle of the pool, so names are unique per planet and stable
-// for a seed. Pools for kinds planet-explorer doesn't have (obelisk, biosphere,
-// well, ziggurat, tower, grove, aqueduct) are new, in the same spirit.
-//
-// planet-explorer's river, spot, ship, pillar and crater pools are not ported:
-// this world has no named rivers or spots, and no matching landmark kinds.
+/**
+ * Names — themed name pools for the procedural landmarks.
+ *
+ * Purpose
+ *   Gives every landmark kind a pool of 18 sci-fi / mythic names so the Locations panel and map
+ *   labels read as places rather than ids. Ported from planet-explorer/src/core/names.ts.
+ *
+ * Operations
+ *   - LANDMARK_NAMES_BY_KIND maps a landmark kind to its pool. ring, spire, tombs, island and
+ *     arch come from planet-explorer; obelisk, biosphere, well, ziggurat, tower, grove and
+ *     aqueduct are new here, in the same spirit. Each pool has a theme comment.
+ *   - Pure data, no logic. The caller deals names from a seeded shuffle of the pool, so names
+ *     are unique per planet and stable for a seed.
+ *   - planet-explorer's river, spot, ship, pillar and crater pools are not ported: this world
+ *     has no named rivers or spots and no matching landmark kinds.
+ *
+ * Usage
+ *   Imported only by world/landmarks.ts (buildSphereLandmarks). A kind with no entry here gets
+ *   an empty deck and falls back to the pool key as its name, so add a pool when adding a kind.
+ *
+ * See also: world/landmarks.ts, ui/locations.ts; DESIGN.md "Landmarks (`world/landmarks.ts`)".
+ */
 
 export const LANDMARK_NAMES_BY_KIND: Readonly<Record<string, readonly string[]>> = {
     // Theme: 2001: A Space Odyssey — monoliths, crew, ships, and discovery sites

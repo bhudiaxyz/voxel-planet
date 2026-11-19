@@ -1,3 +1,30 @@
+/**
+ * TouchControls — on-screen joystick, swipe-look and action buttons for phones and tablets.
+ *
+ * Purpose
+ *   Gives touch devices the same controls as keyboard and mouse. On non-touch devices it does
+ *   nothing: createTouchControls returns inert stubs.
+ *
+ * Operations
+ *   - isTouchDevice requires touch support AND `(pointer: coarse)`: maxTouchPoints alone is true
+ *     on many Windows laptops, but a coarse pointer reliably means a finger-driven device.
+ *   - Left half: a dynamic nipplejs joystick feeding FPCamera.setTouchMove (WASD). Right half:
+ *     swipe-to-look via applyTouchLook (LOOK_SENSITIVITY rad per pixel), tracked by touch id.
+ *   - Buttons: held ones (jump/ascend, descend, sprint, roll) set FPCamera.touch* state while
+ *     pressed; tap ones are wired by main through the on* setters. Land, roll and the cycle
+ *     button's icon (it shows the mode it switches TO) are updated each frame by update().
+ *   - Keyboard mapping: Space jump/ascend, C descend, Shift sprint, F cycle walk/drone/fly,
+ *     L land, Q/E roll, M map, G panels, B outlines, [ ] time, X dog, Esc pause (see the
+ *     createTouchControls doc below).
+ *
+ * Usage
+ *   src/main.ts calls createTouchControls(fpCam, renderer.domElement), registers handlers
+ *   (onCycle, onPanels, onLand, onEdgeToggle, onTimeBack, onTimeForward, onMap, onDog, onPause),
+ *   and calls update(droneActive, landing, flyActive) every frame. ui/pause.ts imports
+ *   isTouchDevice to choose which bindings to list; destroy() removes all DOM and listeners.
+ *
+ * See also: pause.ts, src/render/fp-camera.ts; DESIGN.md "16. Controls, UI and map".
+ */
 import nipplejs from 'nipplejs';
 import type { FPCamera } from '../render/fp-camera';
 

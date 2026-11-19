@@ -1,3 +1,37 @@
+/**
+ * FPCamera — first-person camera and raw input state for walking, flying and the drone.
+ *
+ * Purpose
+ *   Owns the PerspectiveCamera plus yaw/pitch/roll and the keyboard/mouse/touch input that
+ *   drives it, so the player, drone and UI code read one consistent input source. It does no
+ *   physics; callers feed it the player's position and consume its wish direction and edges.
+ *
+ * Operations
+ *   - Input: pointer-lock mouse look (SENSITIVITY, pitch clamped to PITCH_LIMIT), a _keys set of
+ *     KeyboardEvent.code values, wheel for drone altitude, and touch hooks (setTouchMove,
+ *     applyTouchLook, triggerTouchJump, touchSprint, touchAltAxis, touchRollAxis).
+ *   - paused (set by menus) clears held keys and makes movement, jump and look inert; it is
+ *     input-only, the world keeps updating.
+ *   - tangentBasis(up, yaw) is the single source of the forward/right vectors on the sphere's
+ *     tangent plane (reference tangent is world-up, or +X near the poles), shared by
+ *     getWishSphere (WASD/joystick wish direction) and updateSphere (the view), so W is always
+ *     visually forward. It returns shared scratch vectors; copy before reuse.
+ *   - updateSphere(dt, playerDir, groundRadius, speedFraction, grounded) places the camera at
+ *     playerDir * (groundRadius + head bob), up = radial, looks along yaw/pitch, then applies
+ *     roll. It is a no-op while droneActive (the drone owns the camera then).
+ *   - Drone/fly: look input is accumulated (drainDroneMX for steering yaw, drainDroneAltDelta in
+ *     m/s from Space/C, touch and wheel); updateRoll integrates Q/E roll.
+ *   - getJumpEdge() returns true once per Space press.
+ *
+ * Usage
+ *   new FPCamera(aspect, canvas, cameraFar) in main.ts (cameraFar comes from the tier); call
+ *   updateSphere each frame while on foot, resize(aspect) on window resize. ui/touch-controls.ts
+ *   drives the touch methods; player and drone code read getWishSphere, getJumpEdge,
+ *   isKeyDown and the drain* methods.
+ *
+ * See also: player/ (controller, drone), ui/touch-controls.ts; DESIGN.md "14. Player" and
+ * "16. Controls, UI and map".
+ */
 import * as THREE from 'three';
 
 const SENSITIVITY = 0.0021;

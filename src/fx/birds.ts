@@ -1,14 +1,27 @@
 /**
- * Flocks of low-poly birds crossing the local sky.
+ * Birds — flocks of low-poly birds crossing the local sky.
  *
- * Every 20–60 s a flock of up to `maxBirds` crosses the player's sky along a
- * straight line, left-to-right or right-to-left relative to where the camera
- * faces, 30–48 units up. One instanced draw; wings flap and the flock bobs in
- * the vertex shader, so the CPU only schedules flights and sets a few uniforms.
+ * Purpose
+ *   Occasional life overhead: a flock flies across the player's sky, then disappears until the
+ *   next one is scheduled. Cheap enough to run on every tier (tiers set `maxBirds`; 0 disables).
  *
- * A bird is three triangles: a narrow body and two wings hinged at the body.
- * Unlit, a dark silhouette tinted toward the sky haze with distance — birds
- * against the sky read as shapes, not lit surfaces.
+ * Operations
+ *   - One instanced draw (`mesh`, hidden between flights). A bird is three triangles: a body and
+ *     two wings hinged at it (birdGeometry); wing flap and a lazy formation bob happen in the
+ *     vertex shader, so the CPU only schedules flights and sets uniforms.
+ *   - launch(): picks a straight flight line across the sky, left-to-right or right-to-left of
+ *     the camera forward, 30-48 units up, 28-55 ahead, span 160-220 at 9-14 units/s, then fills
+ *     per-instance offsets (a V formation 55% of the time, otherwise a loose scatter) and flap
+ *     seeds. The flock size is 45-100% of `maxBirds`, at least 3.
+ *   - update(): first flock after 4-12 s, then one every 20-60 s. Launches are deferred while
+ *     night >= 0.6 (birds roost). Alpha fades in and out at the ends of the pass.
+ *   - Unlit dark silhouette, fogged toward the sky haze; deterministic LCG seeded by `seed`.
+ *
+ * Usage
+ *   Created by src/main.ts: createBirds(scene, tier.birdFlock, seed). Per frame:
+ *   birds.update(dt, playerPos, viewFwd, night); dispose() on teardown.
+ *
+ * See also: clouds.ts, critters.ts; DESIGN.md "13. FX".
  */
 import * as THREE from 'three';
 

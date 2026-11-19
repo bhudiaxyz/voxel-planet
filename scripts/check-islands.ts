@@ -1,6 +1,21 @@
 /**
- * Floating islands must not count as ground: under every sky island the
- * walkable ground is the real terrain, far below the island. Run: npm run check
+ * check-islands — floating sky islands must not count as ground.
+ *
+ * Purpose
+ *   Under every sky island the walkable ground (grid.groundColumnTop) must be the real terrain,
+ *   far below the island, so the player, dog and critters never treat an island as the surface.
+ *
+ * Operations
+ *   Generates the seed-1337 planet, builds its landmarks, and asserts there are at least 8 sky
+ *   islands; for each, the column top is high (>= layer 40) and the ground under it is below
+ *   layer 40.
+ *
+ * Usage
+ *   Part of `npm run check`; alone: `node --import ./scripts/ts-resolve.mjs scripts/check-islands.ts`.
+ *   A failure means islands leak into ground queries (or too few islands were generated).
+ *
+ * See also: src/world/landmarks.ts, src/core/voxel.ts (groundColumnTop);
+ * DESIGN.md "17. Checks and tooling".
  */
 import assert from 'node:assert/strict';
 import { generateSphereTerrain } from '../src/world/terrain.ts';

@@ -1,26 +1,51 @@
 /**
- * Water.
+ * Water — the translucent sea sphere with a per-pixel wave normal shader.
  *
- * A translucent sphere at sea level. Three things make it read as water rather
- * than as a blue sheet:
+ * Purpose
+ *   Draws the ocean as one sphere at sea level (SPHERE_WATER_RADIUS, just under the layer-11
+ *   voxel tops to avoid z-fighting with shoreline faces). Fresh water (rivers, lakes) is voxels
+ *   (rivers.ts), not this. Three things make it read as water rather than a blue sheet:
  *
- *   1. A real surface normal, per pixel, from the analytic gradient of a 3D
- *      plane-wave field. Everything angular hangs off it — the sun glint and
- *      the fresnel — so they agree with each other. The field lives in 3D and
- *      is sampled on the sphere, so it has no seams or stretching anywhere
- *      (the old XZ projection streaked into vertical lines along the equator).
- *      Waves are not displaced in the vertex shader: sphere vertices sit ~17
- *      units apart, longer than the waves, so displacement only aliased.
- *   2. Depth blending by Beer-Lambert absorption along the ACTUAL view ray,
- *      not by a lookup keyed on position. Path length is what the eye reads as
- *      depth, and it grows as the camera lowers, so the far water darkens and
- *      the near shallows stay clear from the same surface.
- *   3. Per-channel extinction, so depth is a hue shift rather than a fade to
- *      grey. Red goes first, which is why deep water turns blue-green in life
- *      and why a single-colour lerp never quite convinces.
+ *   1. A real surface normal, per pixel, from the analytic gradient of a 3D plane-wave field
+ *      (waveGrad: four waves, directions spread over 3D so none is seen edge-on). Everything
+ *      angular hangs off it, the sun glint and the fresnel, so they agree. The field lives in
+ *      3D and is sampled on the sphere, so it has no seams or stretching (the old XZ projection
+ *      streaked into vertical lines along the equator). Waves are NOT displaced in the vertex
+ *      shader: sphere vertices sit ~17 units apart, longer than the waves, so it only aliased.
+ *   2. Depth blending by Beer-Lambert absorption along the ACTUAL view ray, not a lookup keyed
+ *      on position. Path length is what the eye reads as depth and it grows toward the horizon,
+ *      so far water darkens and near shallows stay clear from the same surface.
+ *   3. Per-channel extinction (uExtinction), so depth is a hue shift, not a fade to grey. Red
+ *      goes first, which is why deep water turns blue-green and a one-colour lerp never
+ *      convinces.
  *
- * No reflections — they would fight the flat pastel look — just sky at grazing
- * angles and one specular highlight.
+ * Operations
+ *   - Fragment shader: wave gradient -> tilted normal N; depth from the shore map
+ *     (shoreDist: shallows near land, up to 1.6x deep out at sea; without a map, flat uSeaDepth);
+ *     colour shoal -> shallow -> deep by depth; caustics on a tangent plane, strongest in
+ *     shallows; sky reflection by fresnel (no real reflections, they would fight the flat
+ *     pastel look); sun specular from N; alpha clear in shallows, opaque offshore.
+ *   - WATER_DETAIL (tiers other than low / very-low): fine ripples (rippleGrad, faded with
+ *     distance), a broad sun path on the swell, and glitter cells near the mirror angle. A few
+ *     ALU ops per pixel.
+ *   - The sun glint is hidden once the sun is below the LOCAL horizon (sunUp from dot(up, sun)).
+ *     Far waves are calmed by distance so sub-pixel waves don't sparkle.
+ *   - USE_SHORE_FOAM (foam flag + shore map): two animated bands roll in toward the shore plus a
+ *     steady lip, broken by noise and faded with camera distance.
+ *   - Night: uNight dims the sea to blue-black with a faint sheen on crests (the shader is
+ *     unlit; its colours are the daytime palette).
+ *   - Geometry: SphereGeometry, 128 segments on 'high' else 64, FrontSide, depthWrite off,
+ *     renderOrder 1, polygon offset against the terrain.
+ *
+ * Usage
+ *   const w = createSphereWater(tier, shoreMap, foam); scene.add(w.mesh);  (world.ts, with the
+ *   bakeShoreMap texture or null on 'very-low'.) Per frame, main.ts calls
+ *   w.update(dt, nightFactor), which advances uTime, sets uNight and re-reads the WATER / SKY /
+ *   LIGHT palette colours, then main.ts writes uSunDir and uSunColor live from the day/night
+ *   cycle and atmosphere (w.material.uniforms). w.planetUnis exposes the uniforms.
+ *
+ * See also: shore-map.ts (SHORE_GLSL, bakeShoreMap), world.ts, core/palette.ts (WATER, SKY,
+ * LIGHT); DESIGN.md "8. Water".
  */
 
 import * as THREE from 'three';
@@ -92,8 +117,8 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
                 uSky: { value: SKY.zenith.clone() },
                 uSunDir: { value: LIGHT.sunDir.clone().normalize() },
                 uSunColor: { value: LIGHT.sunColor.clone() },
-                // Extinction tuned for sphere sea depth = 9 layers (not flat-world ~30).
-                // WATER.extinction [0.95, 0.72, 0.42] kills all colour at 9 units.
+                // Extinction tuned for sphere sea depth = 11 layers (SEA_LAYER_SPHERE) (not flat-world ~30).
+                // WATER.extinction [0.95, 0.72, 0.42] kills all colour at this depth.
                 uExtinction: { value: new THREE.Vector3(0.28, 0.06, 0.02) },
                 uOpacity: { value: WATER.opacity },
                 uDensity: { value: WATER.density },

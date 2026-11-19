@@ -1,6 +1,32 @@
 /**
- * Deterministic randomness. Everything in the world is generated from a seed
- * so the diorama is identical on every reload — you can art-direct it.
+ * Rng — deterministic randomness: seeded PRNG, lattice hashes, value noise, seed words.
+ *
+ * Purpose
+ *   Everything in the world is generated from a seed, so the planet is identical on every
+ *   reload and can be art-directed. This is the one place seeds, hashes and cheap noise live.
+ *   (Perlin noise for terrain is separate: noise3.ts.)
+ *
+ * Operations
+ *   - makeRng(seed) is mulberry32 returning a function with helpers: range(lo, hi),
+ *     int(lo, hi) inclusive, pick(arr), chance(p), bell() (sum of three, about [-1, 1]).
+ *   - hash2/hash3(x.., seed) are integer-lattice hashes (Math.imul mixing) returning [0, 1);
+ *     CPU-side only (no shader copies of these constants exist).
+ *   - makeNoise2D/makeNoise3D(seed) are value noise in [-1, 1] on those hashes with a quintic
+ *     fade. fbm2 and ridge2 layer any 2D noise function (ridge2 squares 1 - |n|, giving
+ *     rocky spines). clamp, smoothstep and mix (= lerp) are small shared maths helpers.
+ *   - Seed words: genSeedWord() builds a pronounceable word (1-3 capitalised chunks) from
+ *     Math.random, so it is NOT deterministic; hashSeedWord(word) turns a word into the
+ *     numeric seed (31-multiplier string hash, folded to 0..99999).
+ *   - The private _pick/_word helpers use Math.random and only serve genSeedWord.
+ *
+ * Usage
+ *   makeRng: nearly every world/ and fx/ module (e.g. makeRng(SEED ^ 0xb1d5)). makeNoise3D:
+ *   world/vegetation.ts. genSeedWord/hashSeedWord: main.ts (the former is handed to the
+ *   settings seed control). makeNoise2D, fbm2, ridge2, clamp, smoothstep, mix, hash2/hash3 are
+ *   currently unused outside this file. Keep world generation on makeRng, never Math.random,
+ *   or a seed stops reproducing its world.
+ *
+ * See also: core/noise3.ts; DESIGN.md "1. Source layout" and "3. World assembly".
  */
 
 const _ON = 'bdgklmnrstvz',

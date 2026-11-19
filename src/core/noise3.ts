@@ -1,3 +1,30 @@
+/**
+ * Noise3 — seeded 3D Perlin gradient noise with fBm, used for terrain elevation.
+ *
+ * Purpose
+ *   Smooth, continuous noise sampled at 3D points on the planet surface (so there is no seam
+ *   between cube faces). Copied from planet-explorer/src/core/noise.ts.
+ *
+ * Operations
+ *   - The constructor builds a 512-entry permutation table: a Fisher-Yates shuffle of 0..255
+ *     driven by rng(seed), duplicated to avoid index wrapping. Same seed, same field.
+ *   - get(x, y, z) is classic improved Perlin: floor to the lattice cell, quintic fade
+ *     (6t^5 - 15t^4 + 10t^3), hash the 8 corners through the table, grad() picks one of 12
+ *     edge directions, then trilinear lerp. Output is roughly in [-1, 1], 0 at lattice points.
+ *     The lattice repeats every 256 cells.
+ *   - fbm(x, y, z, octaves, lacunarity, persistence) sums octaves, scaling frequency by
+ *     lacunarity and amplitude by persistence, and divides by the amplitude sum so the result
+ *     stays in the same range as get().
+ *   - rng(seed) at the bottom is a bare mulberry32 (same algorithm as makeRng in rng.ts,
+ *     without the helpers); it is exported but only the constructor uses it.
+ *
+ * Usage
+ *   Used by world/terrain.ts, which holds two instances (base elevation and ridge noise):
+ *     const noise = new Noise3(seed);  noise.fbm(wx * f, wy * f, wz * f, octaves, 2.0, 0.5);
+ *   For cheap value noise (vegetation, shaders) see makeNoise2D/makeNoise3D in rng.ts.
+ *
+ * See also: core/rng.ts, world/terrain.ts; DESIGN.md "Elevation" under "4. Terrain generation".
+ */
 const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
@@ -68,8 +95,6 @@ function grad(h: number, x: number, y: number, z: number) {
     return (h & 1 ? -u : u) + (h & 2 ? -v : v);
 }
 
-// src/core/noise3.ts
-// Copied from planet-explorer/src/core/noise.ts — Perlin noise with FBM
 export function rng(seed: number) {
     return () => {
         seed |= 0;

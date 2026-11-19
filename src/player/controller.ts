@@ -1,4 +1,34 @@
-// src/player/controller.ts
+/**
+ * SphereController — on-foot walking, gravity and jumping on the spherical voxel planet.
+ *
+ * Purpose
+ *   Moves the player's eye over the planet surface. Position is stored as a unit direction from
+ *   the planet centre plus a radius, so "up" is always radial and there are no world axes.
+ *
+ * Operations
+ *   - State: `dir` (unit vector from centre), `groundRadius` (eye distance from centre),
+ *     `verticalVelocity`, `isGrounded`, `speed` (0..1 fraction of sprint speed, for camera bob).
+ *   - update(): looks up the column under `dir` (dirToFaceUV + grid.surfaceRadius), grounded when
+ *     the feet are within 0.05 of it; jump sets JUMP_VEL, otherwise GRAVITY pulls down. The eye
+ *     is clamped to surface + EYE_HEIGHT.
+ *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
+ *     speed*dt/groundRadius (WALK_SPEED, or SPRINT_SPEED when sprinting).
+ *   - Collision: the destination column and one extra step ahead (a standoff probe, so the near
+ *     plane never clips a wall face) must not be higher than the feet + MAX_STEP; otherwise the
+ *     move is reverted (`dir` restored, speed 0). Higher terrain is therefore only climbed in
+ *     MAX_STEP-sized terraces.
+ *   - Scratch vectors are module-level, so `pos` returns a shared vector: copy it if you keep it.
+ *
+ * Usage
+ *   Created by src/main.ts with the spawn direction and the grid. Each frame main passes
+ *   FPCamera's wish direction (getWish), the jump edge and sprint flag; `pos` feeds the camera,
+ *   `speed` the head bob. `snapToDir(dir, grid)` teleports (landmarks, leaving fly/drone).
+ *   Fly and drone modes (fly.ts, drone.ts) replace this controller while active.
+ *
+ *     controller.update(dt, fpCam.getWish(...), jumpEdge, world.grid, sprint);
+ *
+ * See also: fly.ts, drone.ts, src/render/fp-camera.ts; DESIGN.md "14. Player".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV } from '../core/geoutil';

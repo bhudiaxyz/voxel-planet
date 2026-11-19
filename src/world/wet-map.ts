@@ -1,16 +1,28 @@
 /**
- * Distance to the nearest water (sea or fresh), per column, in columns, capped
- * at WET_MAX. Baked once after generation, CPU-side.
+ * Wet map — distance to the nearest water (sea or fresh), per column, capped at WET_MAX.
  *
- * Shared by everything that wants to know "is this near water": the mesher's
- * wet-ground darkening, reed clumps and lily pads in the vegetation layer, and
- * the fireflies' habitat score. One Uint8 per column (960 KB).
+ * Purpose
+ *   One shared answer to "is this near water?", baked CPU-side once, so the terrain scatter,
+ *   vegetation and ambient life don't each re-scan the grid.
  *
- * 4-way BFS per face; distances don't cross cube seams (a bank at a seam reads
- * as up to WET_MAX columns "drier" on the far side, which nobody can see).
+ * Operations
+ *   - bakeWetMap seeds every column whose top is at or below sea level, or whose top block is
+ *     isWater (river/lake), with 0, then runs a unit-weight 4-way BFS per face out to WET_MAX
+ *     columns (each cell is queued at most once). One Uint8 per column, 6*FACE_RES^2 (960 KB).
+ *   - Distances don't cross cube seams (a bank at a seam reads as up to WET_MAX columns
+ *     "drier" on the far side, which nobody can see).
+ *   - Index with wetIdx(face, u, v).
+ *
+ * Usage
+ *   terrain.ts bakes one to bias willows/mangroves to banks (wet-loving species); world.ts bakes
+ *   the final one after landmarks and passes it to createSphereVegetation (reed clumps at
+ *   distance 1) and returns it as world.wet; main.ts reads it for the fireflies' habitat score.
+ *   Bake after rivers are carved.
+ *
+ * See also: rivers.ts, terrain.ts, vegetation.ts, world.ts; DESIGN.md "7. Vegetation".
  */
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
-import { BLOCK_BY_ID } from '../core/palette';
+import { BLOCK_BY_ID } from '../core/blocks';
 
 export const WET_MAX = 4;
 

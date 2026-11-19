@@ -1,11 +1,26 @@
 /**
- * Locations panel: one-tap teleports to every landmark, grouped by kind in
- * collapsible sections, plus the sky islands. Ported from planet-explorer's
- * 📍 Locations panel (there built with lil-gui); here plain DOM in the HUD's
- * style, so no new dependency.
+ * Locations — panel of one-tap teleports to every landmark and sky island.
  *
- * The panel only lists places and calls `go(record)`; main.ts owns what a
- * teleport means (leave the air modes, snap the walker, or hover by an island).
+ * Purpose
+ *   Lets the player jump to any named landmark. Ported from planet-explorer's Locations panel
+ *   (there built with lil-gui); here plain DOM in the HUD's style, so no new dependency.
+ *
+ * Operations
+ *   - A <details id="locs"> pinned top-left: closed it is a 38px pin button, open it is a card
+ *     with one collapsible section per kind (LABEL maps kind to heading), sky islands as their
+ *     own "Sky Islands" section, sorted by heading with a colour swatch (LANDMARK_COLOR) and a
+ *     count. Each place is a button showing its name.
+ *   - The panel only lists places and calls `go(record)`; main.ts owns what a teleport means
+ *     (leave the air modes, snap the walker, or hover by an island).
+ *   - Pointer and click events are stopped at the panel so they never reach the canvas and grab
+ *     pointer lock; a clicked button is blurred so WASD does not re-trigger it.
+ *
+ * Usage
+ *   Created by src/main.ts: createLocations(world.landmarks, teleportTo). Returns { el, toggle,
+ *   hide, show }: G and the touch panels button call toggle(); on touch devices it starts hidden.
+ *
+ * See also: src/world/landmarks.ts (LandmarkRecord, LANDMARK_COLOR), hud.ts;
+ * DESIGN.md "16. Controls, UI and map".
  */
 import type { LandmarkRecord } from '../world/landmarks';
 import { LANDMARK_COLOR } from '../world/landmarks';

@@ -1,8 +1,27 @@
 /**
- * Minimal in-game HUD.
+ * HUD — minimal in-game overlay: place title, clock, drone altitude, shortcut hints, gear button.
  *
- * Gameplay owns the screen. The title appears once, while the only persistent
- * chrome is a small pair of shortcuts for the two non-obvious overlays.
+ * Purpose
+ *   Gameplay owns the screen. The only persistent chrome is a time-of-day chip, a small set of
+ *   key hints (X sit, M map, Esc menu) and the settings gear; everything else is transient.
+ *
+ * Operations
+ *   - Injects its own <style> and a fixed #hud root (pointer-events none except the gear button),
+ *     themed by the CSS variables (--panel, --line, --accent ...) defined in index.html.
+ *   - The title ("VoxelWorld") shows at start and hides after 3.2 s; announce(name) re-shows it
+ *     for 2.6 s (used for teleports to named places). Key hints fade in after 0.9 s and are
+ *     hidden on narrow or coarse-pointer screens (touch has its own buttons).
+ *   - update(), called every frame: formats dayNight.timeOfDay (0..1 of a day) as HH:MM with a
+ *     sun or moon icon (sun from 06:00 to 20:00), and shows "up N m" only while the drone is
+ *     active.
+ *   - toggle() hides or shows the whole HUD (G / the touch panels button).
+ *
+ * Usage
+ *   Created by src/main.ts: createHud({ dayNight, drone }). main calls hud.update() each frame,
+ *   hud.showSettingsBtn() once the world is ready, hud.onSettingsClick(cb) to open settings,
+ *   hud.announce(name) and hud.toggle().
+ *
+ * See also: settings.ts, pause.ts, locations.ts; DESIGN.md "16. Controls, UI and map".
  */
 
 import type { DayNight } from '../render/day-night';

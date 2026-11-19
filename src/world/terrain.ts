@@ -1,11 +1,51 @@
-// src/world/terrain.ts
+/**
+ * Terrain — procedural elevation, column fill and the placement pass for trees and ground cover.
+ *
+ * Purpose
+ *   Builds the whole voxel planet from a seed: shapes the land and sea floor, fills every column
+ *   with blocks, carves fresh water, then decides what grows where. It is the "driver"; the
+ *   things placed live in trees.ts, plants.ts and rivers.ts.
+ *
+ * Operations
+ *   generateSphereTerrain is async and yields (paint(), a setTimeout 0) between stages and every
+ *   40 rows during the fill, so the loading bar paints; it also yields once per face in the
+ *   scatter pass. Reports progress 0..1 with a stage label. Stages, in order:
+ *   1. Elevation (elevationAt): domain-warped fbm plus small hills, and ridged-noise mountains
+ *      scaled by a mask (large ranges plus a finer scattered mask that only raises existing
+ *      land). RIDGE_* constants shape the crests (sharpness, spurs, ravines). Negative
+ *      elevation is halved so the sea floor stays shallow.
+ *   2. Terracing: relief() steepens land above RELIEF_KNEE by RELIEF_GAIN, then the height is
+ *      rounded to TERRACE_STEP layers around SEA_LAYER (11), clamped to the shell.
+ *   3. Column fill: sand on the sea floor; on land the top is SAND (isDesert: hot, low band),
+ *      SNOW (isSnow: SNOWLINE, lowered toward the poles, ragged by noise) or grass/pale stone
+ *      by a latitude+height temperature proxy (selectSurface); soil two layers deep, rock below.
+ *   4. carveFreshWater (rivers.ts): rivers, lakes and ponds carved into the finished land.
+ *   5. findSpawn, then bakeWetMap so willows/mangroves can keep to the banks.
+ *   6. Scatter: one RNG roll per column (so the stream never shifts), by altitude zone (zoneOf of
+ *      rise above sea, jittered by noise) and top block. Grass gets trees (ZONE treeP x grove
+ *      field), dead trunks, bushes, ferns and tall plants from GROUND[zone]; a forest-edge band
+ *      boosts bushes. Cold stone gets a few conifers, snags, scrub, ferns, moss/lichen. Sand gets
+ *      cacti, dry scrub, yucca. The waterline gets reeds and ferns. A per-face claim grid
+ *      (TREE_GAP / BUSH_GAP) keeps trees and bushes apart.
+ *   7. Understorey: ferns and moss on the grass beneath tree canopies.
+ *   Landmarks are placed afterwards by world.ts, so they overwrite whatever grew here.
+ *
+ * Usage
+ *   const { grid, spawn } = await generateSphereTerrain(seed, (p, stage) => ...);
+ *   Called by world.ts (buildSphereWorld). Also re-exports PLANT (from plants.ts), which
+ *   vegetation.ts imports from here. Deterministic for a seed; all seeded Noise3/RNG streams
+ *   are derived from `seed`.
+ *
+ * See also: trees.ts, plants.ts, rivers.ts, wet-map.ts, world.ts; DESIGN.md "4. Terrain
+ * generation" and "4a. Fresh water".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { basisFromCode, columnDir } from '../core/geoutil';
 import { bakeWetMap, wetIdx, WET_MAX } from './wet-map';
 import { Noise3 } from '../core/noise3';
 import { makeRng } from '../core/rng';
-import { BLOCKS, BLOCK_BY_ID } from '../core/palette';
+import { BLOCKS, BLOCK_BY_ID } from '../core/blocks';
 import { carveFreshWater } from './rivers';
 import {
     FERN,

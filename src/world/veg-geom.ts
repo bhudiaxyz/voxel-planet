@@ -1,7 +1,27 @@
 /**
- * Shared geometry for the surface-detail meshes (vegetation.ts, rocks.ts):
- * the growable quad buffer, the per-column tangent frame (_up/_ta/_tb, set by
- * the caller before drawing) and the box / root primitives drawn into it.
+ * Veg geometry — shared quad buffer and drawing primitives for the surface-detail meshes.
+ *
+ * Purpose
+ *   Grass, flowers, plants, logs, mushrooms and rocks are all built as small quads appended to
+ *   one buffer per patch. This module holds that buffer and the primitives, so vegetation.ts and
+ *   rocks.ts draw the same way.
+ *
+ * Operations
+ *   - QuadBuffer: growable typed arrays (pos, nrm, col, det = [sway, phase]) with `n` vertices;
+ *     reset() rewinds it for reuse, vert() appends and grows. Avoids boxed-number arrays.
+ *   - Module-level scratch vectors _up, _ta, _tb (the per-column tangent frame), _base, _base2,
+ *     _boxC, _n. The CALLER sets _up (column direction) and the frame before drawing; the
+ *     primitives read it. Shared mutable state, so drawing is not re-entrant.
+ *   - box: small surface-aligned box, lit along the surface frame like voxel blocks (top 1.0,
+ *     sides 0.85, bottom 0.7). root: position on the surface at tangent offset (a, b).
+ *     boxYawed: a box rotated in the tangent plane (temporarily swaps the shared frame).
+ *   - Normals point along the surface up, so blades stay in the lit band instead of going dark.
+ *
+ * Usage
+ *   Imported by vegetation.ts (which owns the buffer per build) and rocks.ts. Set _up/_ta/_tb
+ *   (vegetation.ts's frame()) before calling box / boxYawed / root.
+ *
+ * See also: vegetation.ts, rocks.ts; DESIGN.md "7. Vegetation".
  */
 import * as THREE from 'three';
 

@@ -1,14 +1,42 @@
 /**
- * Lightweight GPU tier detection.
+ * GPU tiering — lightweight hardware detection and the per-tier quality table.
  *
- * Buckets:
- *   high         — desktop discrete GPU or Apple Silicon Mac
- *   mobile-high  — flagship phone / any recent iPad
- *   mid          — modern integrated laptop GPU, upper-mid phone
- *   low          — older integrated laptop GPU, software rendering
- *   very-low     — old/budget phone, or no WebGL2
+ * Purpose
+ *   Buckets the device into one of five tiers and exposes TIER_SETTINGS, the single table that
+ *   every renderer, shader and streaming budget reads, so quality scales with the hardware.
  *
- * See classifyGpu() for the reference-device table.
+ * Operations
+ *   Tiers:
+ *     high         — desktop discrete GPU or Apple Silicon Mac
+ *     mobile-high  — flagship phone / any recent iPad
+ *     mid          — modern integrated laptop GPU, upper-mid phone
+ *     low          — older integrated laptop GPU, software rendering
+ *     very-low     — old/budget phone, or no WebGL2
+ *   - probeGpu() creates a throwaway WebGL2 context (high-performance, like the real renderer),
+ *     reads the renderer string (UNMASKED via the debug extension when present), then releases
+ *     the context. It returns a GpuProbe (renderer, webgl2, mobile, cores, memGB).
+ *   - classifyGpu(probe) is pure: the GPU name is the primary signal (MAX_TEXTURE_SIZE no longer
+ *     separates integrated from discrete under ANGLE); cores and deviceMemory only ever push a
+ *     device down. Apple mobile is checked before the core-count cut because Safari under-reports
+ *     cores. The reference-device table is in its own comment. scripts/check-tiers.ts asserts it.
+ *   - detectGpuTier() = classifyGpu(probeGpu()), overridden by `?tier=<name>` in the URL.
+ *   - TierSettings fields cover: render resolution (dprCap, maxMegapixels), shadows (shadowRes,
+ *     shadowBlurSamples, shadowExtent), cameraFar, post chain (bloom, aoTaps, dof,
+ *     crepuscularTaps, edgeMask, aaQuality), sky/cloud shading (cloudShadow, nightSkyFull),
+ *     world scale (streamRadius, farField, waterSubdivision, particleCount, grassDensity,
+ *     groundDetail, clouds, birdFlock, critters), look (shoreFoam, foliageDetail) and
+ *     buildBudgetMs (main-thread ms per frame for chunk meshing; lower = steadier frames but
+ *     slower fill-in; 5 on high down to 2 on very-low).
+ *   - crepuscularTaps: 0 off, 4 half, 8 full, up to 16; high uses 12 (more than 8 subdivides the
+ *     same ray length into finer steps, removing banding on big screens).
+ *
+ * Usage
+ *   main.ts calls detectGpuTier() once at boot and passes the tier to createRenderer,
+ *   Atmosphere, createPostFX and the world (streamRadius, buildBudgetMs, ...). Read settings
+ *   with TIER_SETTINGS[tier]. Add a field to TierSettings and all five entries together.
+ *
+ * See also: render/renderer.ts, render/lighting.ts, render/postfx.ts, scripts/check-tiers.ts;
+ * DESIGN.md "12. GPU tiering".
  */
 
 export type GpuTier = 'high' | 'mobile-high' | 'mid' | 'low' | 'very-low';

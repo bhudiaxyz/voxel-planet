@@ -1,13 +1,32 @@
 /**
- * Drifting voxel clouds in the player's local sky.
+ * Clouds — drifting voxel clouds in the player's local sky, plus a cloud-shadow coverage map.
  *
- * Each cloud is a cluster of flat boxes (one merged geometry, instanced), laid
- * out on a disc in the tangent plane above the player and wrapped around it,
- * so the sky overhead is always populated wherever you stand on the planet.
- * They drift with the wind in the vertex shader. One draw call.
+ * Purpose
+ *   Keeps the sky overhead populated wherever the player stands on the planet, and supplies the
+ *   coverage texture the post pass uses to cast cloud shadows on ground and water.
  *
- * Shaded with a simple top-lit ramp so they read as volumes from below, and
- * fogged so the far ones melt into the haze.
+ * Operations
+ *   - Each cloud is a cluster of 3-7 flat boxes merged into one geometry (cloudShape); three
+ *     shapes are instanced, one draw each, at 70-110 units up on a disc of RADIUS 180 in the
+ *     tangent plane above the player. Count comes from the tier.
+ *   - Vertex shader: drift is added to each instance's disc position and torus-wrapped back
+ *     onto the disc, with an alpha fade near the rim. Fragment: top-lit face ramp, two-octave
+ *     noise "billows" and wispy rims, fogged toward the haze.
+ *   - update(): the disc follows the player; the tangent frame (uE1/uE2/uUp) comes from a fixed
+ *     reference vector so clouds do not spin when the player turns, only drift with the wind.
+ *   - renderShadow(renderer): draws the same instances with a coverage-only fragment, max-blended
+ *     into a SHADOW_RES (256) target from an orthographic camera 400 above the disc centre.
+ *     Call once per frame after update(). The returned `shadow` holds live references (map,
+ *     centre, e1, e2, up, radius, layerH = CLOUD_LAYER_H) that the post pass binds once.
+ *   - setColors(lit, shade, opacity) tints by time of day.
+ *   - With count <= 0 a no-op object is returned (shadow is null).
+ *
+ * Usage
+ *   Created by src/main.ts: createClouds(scene, tier.clouds, seed). Each frame:
+ *   clouds.update(dt, playerPos, windDir); clouds.setColors(...); clouds.renderShadow(renderer)
+ *   (before the post pass). `CLOUD_LAYER_H` is exported for the shadow projection.
+ *
+ * See also: birds.ts, src/render/postfx.ts (post pass); DESIGN.md "13. FX".
  */
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';

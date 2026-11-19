@@ -1,9 +1,41 @@
-// src/world/landmarks.ts
-// Sphere-native landmark structures — ported geometry from voxel-world/stamps.ts,
-// rewritten to use SphereVoxelGrid face-local (face, u, v, layer) coordinates.
+/**
+ * Landmarks — sphere-native landmark structures and floating sky islands.
+ *
+ * Purpose
+ *   Places the planet's points of interest: eleven kinds of ground landmark (spire, obelisk,
+ *   monolith ring, tombstone field, biosphere, well, arch, ziggurat, watchtower, crystal grove,
+ *   aqueduct) and floating sky islands. Geometry is ported from voxel-world/stamps.ts and
+ *   rewritten for SphereVoxelGrid face-local (face, u, v, layer) coordinates. Returns records
+ *   for the map and the locations UI.
+ *
+ * Operations
+ *   - Blocks: each kind has a natural stone (KIND_STONE -> ROCK style from core/blocks, using the
+ *     voxel shader's shared patRock library) in three variants registered at module load via
+ *     registerBlock: BODY (the stone), ACCENT (the same stone shot with the kind's
+ *     LANDMARK_COLOR, so map badge and world agree) and GEM (emissive, faceted). Registration is
+ *     top level, so ids stay deterministic (60..250, module-load order).
+ *   - buildSphereLandmarks: LANDMARK_TOTAL (27) sites dealt round-robin to the faces, kinds
+ *     dealt from shuffled decks so every kind appears before any repeats. Candidates are random
+ *     (u, v) at least 10 columns from the edge, on land (isLand), MIN_SEP apart per face; up to
+ *     1200 attempts per face. Each site is cleared (clearAround, CLEAR_R) first, so trees don't
+ *     hide it, then built with its own seeded sub-RNG. Names come from core/names.ts, dealt
+ *     from a seeded shuffled deck per pool so each is unique per planet and stable per seed.
+ *   - Sky islands: SKY_ISLANDS (10), on land or sea, 60 columns apart, skipped where the ground
+ *     below climbs above SKY_GROUND_MAX; an inverted rock cone under a grassy cap with glowing
+ *     drips and a tree or two, kept under SHELL_DEPTH. Recorded as kind 'biosphere' with sky:true.
+ *   - Builders write with put (air only) or overwrite (replaces whatever grew there).
+ *
+ * Usage
+ *   world.ts calls buildSphereLandmarks(grid, makeRng(seed ^ ...)) AFTER terrain generation (so
+ *   it overwrites trees and plants) and before meshing. LandmarkRecord / LANDMARK_COLOR are used
+ *   by render/map.ts and ui/locations.ts.
+ *
+ * See also: world.ts, core/blocks.ts, core/names.ts, render/map.ts; DESIGN.md "3. World
+ * assembly".
+ */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, PLANET_RADIUS } from '../core/voxel';
-import { BLOCKS, BLOCK_BY_ID, PATTERN, ROCK, registerBlock } from '../core/palette';
+import { BLOCKS, BLOCK_BY_ID, PATTERN, ROCK, registerBlock } from '../core/blocks';
 import { makeRng } from '../core/rng';
 import { columnDir } from '../core/geoutil';
 import { LANDMARK_NAMES_BY_KIND } from '../core/names';

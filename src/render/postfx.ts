@@ -1,36 +1,66 @@
 /**
  * Post-processing — where the diorama gets its air.
  *
- * Chain:
- *   SceneDepthPass -> EdgeMaskPass -> Atmosphere -> Bloom -> Crepuscular -> Grade/Output -> AA
+ * Purpose
+ *   Builds the EffectComposer chain: the depth-sampling atmosphere pass, bloom, sun shafts,
+ *   the display-space grade (ACES, sRGB, edge ink, vignette, grain) and anti-aliasing. The
+ *   reference images do almost all of their "this is a miniature" work with aerial
+ *   perspective, so this is where the render budget goes.
  *
- * Everything before Grade is linear HDR. Grade begins with the same ACES and
- * sRGB conversion that used to occupy a separate OutputPass, then performs its
- * display-space work. Combining those operations saves one full-resolution
- * copy of every pixel without changing their order.
+ * Operations
+ *   Chain:
+ *     SceneDepthPass -> EdgeMaskPass (high only) -> Atmosphere -> Bloom (tier) -> Crepuscular
+ *       -> Grade -> AA (SMAA / FXAA / none by tier)
+ *   - Everything before Grade is linear HDR (half-float targets, no MSAA). Grade does the same
+ *     ACES and sRGB conversion that used to occupy a separate OutputPass, then its display-
+ *     space work, saving one full-resolution copy.
+ *   - SceneDepthPass renders the scene into a dedicated FBO that owns the depth texture and
+ *     blits colour to the composer. That FBO is never in the composer's ping-pong chain, so no
+ *     pass samples depth while writing to it (WebGL feedback loop). Passes after it keep
+ *     needsSwap = false for the same reason.
+ *   - EdgeMaskPass re-renders the main scene with the camera restricted to EDGE_LAYER into a
+ *     two-channel coverage mask (R dark ink, G light ink; MAX blending makes junctions a clean
+ *     union). Edges live on a layer of the main scene, not a private scene, so a character
+ *     part's outline hangs off its animated node. Shadow-map updates and matrix updates are
+ *     suspended during it. Grade mixes the ink in display space; at night the ink dims.
+ *   - Bloom runs after the atmosphere on purpose (the haze is a light source); threshold 1.25
+ *     because the pass sees linear HDR.
+ *   - Crepuscular (sun shafts): radial blur toward uSunScreen. Taps up to 16; counts above 8
+ *     subdivide the same ray length and total decay, so they only smooth banding. The loop
+ *     breaks at uTaps so skipped taps no longer fetch. The pass is disabled when the sun is off
+ *     screen or at night.
+ *   - Atmosphere pass: one fullscreen pass doing six things off a single depth fetch:
+ *     1. Large-scale AO. The mesher bakes per-vertex AO into block crevices; what it cannot see
+ *        is a canopy over grass or the base of a cliff. Depth-only, rosette of up to 8 taps (2
+ *        depth fetches each), wide radius, lavender-tinted. The loop breaks at uAOTaps, so the
+ *        4-tap tiers pay half; 0 skips AO. Fades out with fog.
+ *     2. Drifting cloud shadow, reconstructed in world space and looked up in the real clouds'
+ *        coverage map (tCloudMap from fx/clouds), cast along the sun. Low amplitude: it keeps
+ *        big flat shelves alive, not to be seen. Tier cloudShadow.
+ *     3. Desaturation with distance. scene.fog already mixes toward the haze colour, which loses
+ *        chroma and value at the same rate; the references lose chroma much faster, so distance
+ *        also pulls the colour toward its own luminance. A gentle mid-distance dim adds depth.
+ *     4. A per-pixel nudge toward the true directional sky colour (skyRadiance), which is what
+ *        actually erases the horizon line. Only evaluated where the blend is visible.
+ *     5. Ground mist: a second, whiter medium with exponential height falloff, integrated
+ *        analytically along the view ray so it pools in valleys and at the island rim.
+ *     6. Sun in-scatter and a four-tap defocus (tier dof), both driven by the fog amount
+ *        already computed, so they cost almost nothing.
+ *   - The aerial term uses the same FOG_NEAR (render/lighting.ts) and scene.fog.aerialD as the
+ *     material fog. If they disagree, depth-buffer effects fade on a different schedule from
+ *     the surfaces they sit on and a ring is visible.
  *
- * THE ATMOSPHERE PASS
- * -------------------
- * The reference images do almost all of their "this is a miniature" work with
- * aerial perspective, so this pass is where the budget goes. It is one
- * fullscreen pass doing six things off a single depth fetch:
+ * Usage
+ *   const post = createPostFX(renderer, scene, camera, edgeMaterial, tier); each frame
+ *   post.render(dt) (updates matrices, camera and sky uniforms, then composer.render);
+ *   post.setSize(w, h) after any renderer resize or render-scale change;
+ *   post.setSunScreenPos(x, y, visible) for the shafts. Also returned: composer, bloom, grade,
+ *   haze, edgePass, target, edgeMask, depthTexture (cloud and UI code poke uniforms on grade/haze).
+ *   Call after the renderer exists and its pixel ratio is final. Tier options come from
+ *   TIER_SETTINGS (aoTaps, crepuscularTaps, bloom, dof, edgeMask, cloudShadow, aaQuality).
  *
- *   1. Large-scale ambient occlusion. The mesher bakes per-vertex AO into
- *      block crevices; what it cannot see is a canopy hanging over grass or
- *      the base of a cliff. Depth-only, 8 taps, wide radius, lavender-tinted.
- *   2. Drifting cloud shadow, reconstructed in world space. Very low
- *      amplitude — it is there to keep big flat shelves alive, not to be seen.
- *   3. Desaturation with distance. scene.fog (see lighting.js) already mixes
- *      toward the haze colour; that alone loses chroma and value at the same
- *      rate. The references lose *chroma* much faster than value, so distance
- *      pulls the residual colour toward its own luminance as well.
- *   4. A per-pixel nudge toward the true directional sky colour, which is what
- *      actually erases the horizon line.
- *   5. Ground mist: a second, whiter medium with an exponential height
- *      falloff, integrated analytically along the view ray so it genuinely
- *      pools in the river valley and around the island rim.
- *   6. Sun in-scatter and a four-tap defocus, both driven by the fog amount
- *      that has already been computed, so they cost almost nothing.
+ * See also: render/sky.ts, render/lighting.ts, render/gpu-tier.ts, core/voxel.ts (EDGE_LAYER),
+ * core/palette.ts (GRADE); DESIGN.md "10. Post-processing".
  */
 
 import * as THREE from 'three';
