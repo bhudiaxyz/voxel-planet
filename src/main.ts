@@ -45,9 +45,10 @@
  *       "enter" prompt.
  *   Dynamic resolution: govern() averages over 2 s windows. If fps < 48 while CPU time is under
  *   60% of the frame (so the GPU is the limit), render scale drops 10% per window to a floor of
- *   70%. It creeps back up 5% after govNeed consecutive windows at >= 57 fps; each failed step
- *   up doubles govNeed (max 48) to avoid oscillation. Hitches (rawDt > 0.25 s) are ignored and
- *   ?capture=1 disables it. setScale() reallocates the render targets, hence the damping.
+ *   70%. It creeps back up 5% after govNeed consecutive windows at >= 54 fps; each failed step
+ *   up doubles govNeed (max 48) to avoid oscillation. Hitches (rawDt > 0.25 s) and windows while
+ *   terrain is streaming (> STREAM_BUSY queued chunks: slow frames there are mesh uploads, not
+ *   fill-rate) are ignored; ?capture=1 disables it. setScale() reallocates the render targets, hence the damping.
  *   Pause is input-only (ui/pause.ts): the loop and world keep updating by design.
  *
  * Usage
@@ -579,6 +580,8 @@ async function start(): Promise<void> {
      * ponytail: single fps heuristic; GPU timer queries if it misjudges a device.
      */
     const governed = new URLSearchParams(location.search).get('capture') !== '1';
+    /** Queued chunks above which the governor ignores frame times (streaming, not GPU-bound). */
+    const STREAM_BUSY = 24;
     let govScale = 1,
         govT = 0,
         govFrames = 0,
@@ -596,6 +599,15 @@ async function start(): Promise<void> {
     };
     const govern = (rawDt: number, cpuMs: number) => {
         if (!governed || rawDt > 0.25) return; // tab switch / hitch: not a GPU signal
+        // While terrain is streaming in (a teleport, entering drone/fly, a palette
+        // rebuild) the slow frames are mesh uploads, not fill-rate: shrinking the
+        // resolution would not help and it stuck at the 70% floor afterwards. Discard
+        // the window and judge only settled frames.
+        if (world.streaming.pendingCount > STREAM_BUSY) {
+            govT = govFrames = govCpu = 0;
+            govGood = 0;
+            return;
+        }
         govT += rawDt;
         govFrames++;
         govCpu += cpuMs;
@@ -609,7 +621,9 @@ async function start(): Promise<void> {
             govLastUp = false;
             govGood = 0;
             setScale(Math.max(0.7, govScale - 0.1));
-        } else if (fps >= 57 && govScale < 1) {
+        } else if (fps >= 54 && govScale < 1) {
+            // 54, not 57: a vsync'd 60 Hz display rarely reports a clean 57+ average with
+            // a few streaming frames mixed in, and the scale never climbed back.
             if (++govGood >= govNeed) {
                 govGood = 0;
                 govLastUp = true;

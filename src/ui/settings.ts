@@ -39,16 +39,18 @@ import type { DayNight } from '../render/day-night';
 import { VOXEL_PALETTES, activePaletteName } from '../core/palette';
 
 const STORE_KEY = 'VoxelWorld.settings';
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
 
 const INK_BASE = 0.05;
 const PREVIOUS_INK_DEFAULT = INK_BASE * 1.12;
 const PREVIOUS_LOAD_RADIUS_DEFAULT = 5;
 /** v2 default. The streamer clamps to the tier ceiling, so the new default is simply 'max'. */
 const V2_LOAD_RADIUS_DEFAULT = 12;
-const MAX_LOAD_RADIUS = 22;
-/** Previous ceiling/default (16), migrated up to the new one. */
+/** Slider ceiling = the highest tier's streamRadius (gpu-tier.ts); the streamer clamps lower tiers. */
+const MAX_LOAD_RADIUS = 28;
+/** Previous ceilings/defaults (16, then 22), migrated up to the new one. */
 const V3_LOAD_RADIUS_DEFAULT = 16;
+const V4_LOAD_RADIUS_DEFAULT = 22;
 const PREVIOUS_SHADOW_RESOLUTION_DEFAULT = 4096;
 
 /**
@@ -239,7 +241,8 @@ function load(): SettingsValues {
             if (
                 out.loadRadius === PREVIOUS_LOAD_RADIUS_DEFAULT ||
                 out.loadRadius === V2_LOAD_RADIUS_DEFAULT ||
-                out.loadRadius === V3_LOAD_RADIUS_DEFAULT
+                out.loadRadius === V3_LOAD_RADIUS_DEFAULT ||
+                out.loadRadius === V4_LOAD_RADIUS_DEFAULT
             ) {
                 out.loadRadius = DEFAULTS.loadRadius;
             }

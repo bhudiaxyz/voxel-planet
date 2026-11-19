@@ -579,13 +579,20 @@ const BURST_BUDGET_MS = 10;
 const FADE_BAND = 0.28;
 /** Beyond this (chunks), outlines are hidden and chunks stop casting shadows. */
 const DETAIL_RADIUS = 7;
+/**
+ * The ChunkListener (vegetation: grass, plants, rocks) only hears about chunks within
+ * this radius (chunks, ~28 units each), however far the terrain streams. Past ~450
+ * units a blade or pebble is sub-pixel and deep in the haze, and vegetation was over
+ * a third of the streamed GPU memory at radius 22. LISTEN_MARGIN is hysteresis, as
+ * UNLOAD_MARGIN is for chunks, so walking along the edge doesn't rebuild patches.
+ */
+const LISTEN_RADIUS = 16;
+const LISTEN_MARGIN = 1.5;
 
 /**
- * Streams terrain chunks within `loadRadius` chunks (great-circle) of the player.
- *
- * The radius is the tier's ceiling; `setLoadRadius` (the settings slider) can
- * lower it but never raise it past what the device was classed for. Beyond
- * ~10 chunks (~280 units) the aerial haze is opaque, so more would be invisible.
+ * Told when a streamed chunk comes within LISTEN_RADIUS of the viewer (chunkLoaded)
+ * and when it leaves it or unloads (chunkUnloaded). u0/v0 are the chunk's first
+ * column (ci * CHUNK, ck * CHUNK). The vegetation layer is the only listener.
  */
 export interface ChunkListener {
     chunkLoaded(face: number, u0: number, v0: number): void;
@@ -2195,6 +2202,8 @@ interface ChunkRecord {
     hasEdges: boolean;
     /** Current detail state: outlines visible and casting shadows (see setDetail). */
     detailed: boolean;
+    /** The listener (vegetation) has been told about this chunk (it's within LISTEN_RADIUS). */
+    listened: boolean;
 }
 
 /** A chunk waiting to be built; `dot` = cos(angle to the viewer), higher = closer. */
@@ -2228,7 +2237,8 @@ const chunkId = (face: number, ci: number, ck: number) => (face * CHUNKS_PER_FAC
  *   unloadChunk() disposes the geometry and tells the listener.
  *
  * Detail: chunks within DETAIL_RADIUS cast shadows and show outlines; farther ones
- * don't (setDetail). A chunk built far without outlines is re-meshed with them if
+ * don't (setDetail). The listener (vegetation) hears only about chunks within
+ * LISTEN_RADIUS (setListened), so grass and rocks stop well inside a long stream. A chunk built far without outlines is re-meshed with them if
  * the viewer comes close (outline collection is ~40% of the build cost, so far
  * chunks skip it).
  *
@@ -2264,12 +2274,16 @@ export function createSphereChunkStreamer(
     // Radii as cosines, so "inside" is one dot product: dot >= cos(angle).
     let loadCos = 1,
         unloadCos = 1,
-        detailCos = 1;
+        detailCos = 1,
+        listenCos = 1,
+        unlistenCos = 1;
     const fadeUniforms = meshes.material.userData.uniforms;
     const setCos = () => {
         loadCos = Math.cos(radius * CHUNK_ANGLE);
         unloadCos = Math.cos((radius + UNLOAD_MARGIN) * CHUNK_ANGLE);
         detailCos = Math.cos(Math.min(DETAIL_RADIUS, radius) * CHUNK_ANGLE);
+        listenCos = Math.cos(Math.min(LISTEN_RADIUS, radius) * CHUNK_ANGLE);
+        unlistenCos = Math.cos((Math.min(LISTEN_RADIUS, radius) + LISTEN_MARGIN) * CHUNK_ANGLE);
         // Fade band in world units along the ground (chord ≈ arc at these angles).
         // Measured from the camera, so it fades against what's on screen.
         const surf = PLANET_RADIUS + 14;
@@ -2344,11 +2358,21 @@ export function createSphereChunkStreamer(
             ...built,
             hasEdges: tierEdges && near,
             detailed: near,
+            listened: false,
         };
         if (fade) initFade(record);
         setDetail(record, near);
         loaded.set(id, record);
-        listener?.chunkLoaded(q.face, q.ci * CHUNK, q.ck * CHUNK);
+        setListened(record, q.dot >= listenCos);
+    };
+
+    /** Tell the listener a chunk entered (on) or left (off) its radius, once per change. */
+    const setListened = (record: ChunkRecord, on: boolean) => {
+        if (record.listened === on) return;
+        record.listened = on;
+        if (!listener) return;
+        if (on) listener.chunkLoaded(record.face, record.ci * CHUNK, record.ck * CHUNK);
+        else listener.chunkUnloaded(record.face, record.ci * CHUNK, record.ck * CHUNK);
     };
 
     const unloadChunk = (id: number) => {
@@ -2358,7 +2382,7 @@ export function createSphereChunkStreamer(
         if (record.glow) fadingMeshes.delete(record.glow);
         removeMeshChunk(meshes, record);
         loaded.delete(id);
-        listener?.chunkUnloaded(record.face, record.ci * CHUNK, record.ck * CHUNK);
+        setListened(record, false);
     };
 
     const scan = (playerDir: THREE.Vector3) => {
@@ -2386,6 +2410,9 @@ export function createSphereChunkStreamer(
                             continue;
                         }
                         if (record.detailed !== near) setDetail(record, near);
+                        // Vegetation radius, with hysteresis: in at listenCos, out past unlistenCos.
+                        if (!record.listened && dot >= listenCos) setListened(record, true);
+                        else if (record.listened && dot < unlistenCos) setListened(record, false);
                     } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
                 }
             }
@@ -2420,7 +2447,7 @@ export function createSphereChunkStreamer(
          */
         setListener(l: ChunkListener) {
             listener = l;
-            for (const r of loaded.values()) l.chunkLoaded(r.face, r.ci * CHUNK, r.ck * CHUNK);
+            for (const r of loaded.values()) if (r.listened) l.chunkLoaded(r.face, r.ci * CHUNK, r.ck * CHUNK);
         },
         /** Settings slider: clamp to [3, tier ceiling]; takes effect on the next update (rescan). */
         setLoadRadius(r: number) {

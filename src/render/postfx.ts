@@ -381,7 +381,7 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
             /** must match scene.fog's 1/density so the two agree */
             uAerialD: { value: 196 },
             /** Must match the near plane patched into three's fog chunk. */
-            uFogNear: { value: FOG_NEAR },
+            uFogNear: { value: FOG_NEAR }, // replaced by the tier's fogNear in createPostFX
             /** how much residual chroma distance eats, on top of the fog mix */
             uDesat: { value: 0.32 }, // distance desaturation: depth, not bleach
             /** how much the midground darkens with distance before the haze (depth) */
@@ -648,6 +648,8 @@ export function createPostFX(
     const haze = new ShaderPass(makeAtmosphereShader(LIGHT.sunDir));
     haze.uniforms.tDepth.value = depthTexture;
     haze.uniforms.uAOTaps.value = ts.aoTaps;
+    // Same clear radius as the material fog (lighting.ts patchFogNear), per tier.
+    haze.uniforms.uFogNear.value = ts.fogNear ?? FOG_NEAR;
     haze.uniforms.uDof.value = ts.dof ? 1.2 : 0.0;
     haze.uniforms.uCloudShadow.value = ts.cloudShadow ? 1.0 : 0.0;
     haze.uniforms.uNightSkyFull = { value: ts.nightSkyFull ? 1.0 : 0.0 };

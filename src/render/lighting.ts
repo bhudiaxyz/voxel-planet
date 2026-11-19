@@ -106,7 +106,11 @@ const AERIAL_D = 90;
  */
 // 96 → 180: the clear radius now spans the extended stream radius, so the
 // mid-distance reads at full chroma instead of starting to mist at ~100 units.
+// This is the default; each tier sets its own (TIER_SETTINGS.fogNear: 240 mid, 300
+// high, to match their longer streams) through patchFogNear() below.
 const FOG_NEAR = 180;
+/** Clear radius actually patched into the fog chunk (set once, by the first Atmosphere). */
+let fogNearApplied = 0;
 
 /** Altitude fog thinning: radius of typical ground, metres per doubling, and cap (×). */
 const ALT_FOG_GROUND = 350 + 18;
@@ -117,16 +121,24 @@ const ALT_FOG_MAX = 7;
  *
  * three's fog chunk is shared by every shader that declares `fog: true`, so
  * editing it here is what keeps terrain, water, foliage and particles agreeing
- * on where the air begins. Doing it per material would guarantee they drift. */
-{
+ * on where the air begins. Doing it per material would guarantee they drift.
+ *
+ * The clear radius is baked into the chunk text as a constant, so this must run
+ * before any program compiles — the Atmosphere constructor calls it, and main.ts
+ * builds the Atmosphere before compileAsync / the first frame. Only the first
+ * call patches (the chunk is global); later ones keep the first value. */
+function patchFogNear(near: number) {
+    if (fogNearApplied) return;
     const chunk = THREE.ShaderChunk.fog_fragment;
     const target = 'float fogFactor = 1.0 - exp( - fogDensity * fogDensity * vFogDepth * vFogDepth );';
     if (chunk.includes(target)) {
         THREE.ShaderChunk.fog_fragment = chunk.replace(
             target,
-            `float fogDepthFar = max( vFogDepth - ${FOG_NEAR.toFixed(1)}, 0.0 );\n` +
-                '\tfloat fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogDepthFar * fogDepthFar );',
+            `float fogDepthFar = max( vFogDepth - ${near.toFixed(1)}, 0.0 );
+` +
+                '	float fogFactor = 1.0 - exp( - fogDensity * fogDensity * fogDepthFar * fogDepthFar );',
         );
+        fogNearApplied = near;
     } else if (typeof console !== 'undefined') {
         // Fail loudly rather than silently reverting to the washed look.
         console.warn('fog_fragment chunk changed shape; near-plane patch not applied');
@@ -150,6 +162,10 @@ export class Atmosphere {
     declare worldSize: any;
     declare time: any;
     declare aerialD: any;
+    /** Clear radius of the fog, world units (tier fogNear; postfx reads it for the haze pass). */
+    declare fogNear: number;
+    /** Tier multiplier applied to the settings fog distance (setAerialD). */
+    declare fogScale: number;
     declare fogEnabled: any;
     declare hazeColor: any;
     declare sky: any;
@@ -167,6 +183,11 @@ export class Atmosphere {
         this.aerialD = AERIAL_D;
         this.fogEnabled = true;
         const ts = TIER_SETTINGS[tier];
+        // Fog: this tier's clear radius (patched into every fog shader, before any compiles)
+        // and aerial-distance scale, both larger on the tiers that stream further.
+        patchFogNear(ts.fogNear ?? FOG_NEAR);
+        this.fogNear = fogNearApplied || FOG_NEAR;
+        this.fogScale = ts.fogScale ?? 1;
 
         /* ---- the air ------------------------------------------------- */
         // Fog colour is the skyline colour, because that is where most of the
@@ -246,6 +267,8 @@ export class Atmosphere {
      * frame, so this keeps the material fog and the post pass in agreement.
      */
     setAerialD(d: any) {
+        // The slider value is the authored distance; longer-streaming tiers stretch it.
+        d *= this.fogScale;
         this.aerialD = d;
         this.scene.fog.density = this.fogEnabled ? 1 / d : 0;
         this.scene.fog.aerialD = d;

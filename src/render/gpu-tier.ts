@@ -68,7 +68,10 @@ export interface TierSettings {
     nightSkyFull: boolean;
     /** Anti-aliasing quality. 'smaa' = full SMAA, 'fxaa' = single-pass, 'none' = off. */
     aaQuality: 'smaa' | 'fxaa' | 'none';
-    /** Terrain stream radius in chunks (~28 surface units each). The outer quarter dither-fades out. */
+    /**
+     * Terrain stream radius in chunks (~29 surface units each). The outer FADE_BAND (28%) dither-
+     * fades into the far-field shell. Vegetation stops at LISTEN_RADIUS (16) whatever this is.
+     */
     streamRadius: number;
     /** Water plane subdivision (NxN quads). Higher = smoother waves but more vertices. */
     waterSubdivision: number;
@@ -94,6 +97,14 @@ export interface TierSettings {
     maxMegapixels: number;
     /** Main-thread ms per frame for terrain chunk meshing. Lower = steadier frames, slower fill-in. */
     buildBudgetMs: number;
+    /**
+     * Fog clear radius in world units: the air is fully clear out to here, then the aerial
+     * haze starts (render/lighting.ts patches it into three's fog chunk; postfx reads it too).
+     * Scales with streamRadius so a longer stream is not hidden in the haze it brought in.
+     */
+    fogNear: number;
+    /** Multiplier on the settings "fog distance" (aerial distance) — further on longer streams. */
+    fogScale: number;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -112,7 +123,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: true,
         nightSkyFull: true,
         aaQuality: 'smaa',
-        streamRadius: 22,
+        streamRadius: 28, // was 22 (~815 units); vegetation stays capped at LISTEN_RADIUS
         waterSubdivision: 64,
         particleCount: 1200,
         grassDensity: 1,
@@ -124,6 +135,8 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 4.2,
+        fogNear: 300,
+        fogScale: 1.45,
         buildBudgetMs: 5,
     },
     'mobile-high': {
@@ -152,6 +165,8 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 2.0,
+        fogNear: 180,
+        fogScale: 1.0,
         buildBudgetMs: 3,
     },
     mid: {
@@ -168,7 +183,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         cloudShadow: true,
         nightSkyFull: true,
         aaQuality: 'smaa',
-        streamRadius: 17,
+        streamRadius: 20, // was 17; 20 not 22: mid includes shared-memory iGPUs and 2019-21 phones
         waterSubdivision: 32,
         particleCount: 600,
         grassDensity: 0.8,
@@ -180,6 +195,8 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 2.4,
+        fogNear: 225,
+        fogScale: 1.15,
         buildBudgetMs: 4,
     },
     low: {
@@ -208,6 +225,8 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 1.6,
+        fogNear: 180,
+        fogScale: 1.0,
         buildBudgetMs: 3,
     },
     'very-low': {
@@ -236,6 +255,8 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: false,
         farField: false,
         maxMegapixels: 1.0,
+        fogNear: 180,
+        fogScale: 1.0,
         buildBudgetMs: 2,
     },
 };
