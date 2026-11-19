@@ -66,12 +66,14 @@ export const DEADWOOD = registerBlock('DEADWOOD', {
  */
 export const SNOW = registerBlock('SNOW', {
     top: c(0xf4f7fb),
-    topTint: c(0xb8c8dc), // drift shadows and wind hollows: cool blue-grey
+    // Drift shadows and wind hollows: cool blue-grey. Paler than before (was 0xb8c8dc) —
+    // with the shader's snow lift (patGround m=5) the snowfield reads ~20% whiter.
+    topTint: c(0xd2deec),
     side: c(0x8d939b), // frost-dusted granite
     bottom: c(0x6f757d),
     tint: c(0x5e646c),
     fringe: 0.35, // snow lip down the top third of each exposed side
-    fringeColor: c(0xe6edf5),
+    fringeColor: c(0xf2f6fb), // the lip on cliff sides, matched to the brighter tops (was 0xe6edf5)
     pattern: PATTERN.NONE,
     rough: 0.35,
 });

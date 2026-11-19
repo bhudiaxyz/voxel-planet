@@ -711,6 +711,8 @@ const FRAG_DECL = /* glsl */ `
   uniform vec3  uAoTint;
   uniform float uShadowTintStrength;
   uniform float uShadowDeepen;
+  uniform float uSnowGlow;
+  uniform vec3  uSnowGlowWarm;
   uniform vec3  uShadowHue;
   uniform sampler2D uWaterMap;
   uniform float uWaterLevel, uWaterRange, uWorldSize;
@@ -1195,7 +1197,12 @@ const FRAG_DECL = /* glsl */ `
         // Sastrugi: wind-carved ridges, elongated along one direction.
         vec2 sp = mat2(0.6, -0.8, 0.8, 0.6) * uv;
         float sas = vxNoise(sp * vec2(0.9, 3.2)) * 0.6 + vxNoise(sp * vec2(1.8, 7.0)) * 0.4;
-        col *= 0.93 + 0.12 * smoothstep(0.3, 0.8, sas);
+        col *= 0.96 + 0.08 * smoothstep(0.3, 0.8, sas);   // softer ridges (was 0.93 + 0.12)
+        // ~20% whiter and brighter: lift the value and pull the remaining tint toward
+        // white. patTerrain's mottle, bevel and drift tint grey a pure-white top down to a
+        // dull grey; this restores fresh snow without flattening the drifts (relative
+        // shading survives the scale). Lighting is applied after, so it still shades.
+        col = mix(col * 1.2, vec3(1.0), 0.12);
         // Sparkle: a few crystals catch the sun (screen-stable, faded with distance).
         float glint = step(0.985, vxHash(floor(uv * 14.0) + floor(sas * 3.0)));
         col += vec3(0.35) * glint * near * max(dot(uSunDir, normalize(vPosW)), 0.0);
@@ -1293,6 +1300,33 @@ const FRAG_DECL = /* glsl */ `
   }
 `;
 
+/*
+ * Sun glow on snow, added to the lit colour (linear HDR) after shadows.
+ *
+ * Sunlit snow tops are pushed past the bloom threshold (postfx: 1.25 linear), so on
+ * tiers with bloom (high, mobile-high, mid) snowfields and peaks glow softly in the sun;
+ * on the others they simply read brighter. Scaled by:
+ *   - sun elevation, uSunDir.y — the same world-space "elev" DayNight drives the whole
+ *     scene's light with (uSunAmbient, sky glow). The sun follows a fixed world arc, not
+ *     each spot's local horizon (DESIGN.md "Day/night"), so a local up·sun test left
+ *     sunlit-looking snow on most of the planet without any glow,
+ *   - cast-shadow visibility (no glow in a peak's own shadow), when there is a shadow map,
+ * The tint warms toward uSnowGlowWarm as the sun drops (alpenglow at dawn and dusk),
+ * near white at noon. Uses vxSnowGlow, set in FRAG_BODY.
+ */
+const SNOW_GLOW_GLSL = /* glsl */ `
+        if (vxSnowGlow > 0.5) {
+          float sunUp = uSunDir.y;
+          float sunOn = smoothstep(-0.05, 0.2, sunUp);
+          float lit = 1.0;
+          #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+            lit = petalVisibility;
+          #endif
+          vec3 tint = mix(uSnowGlowWarm, vec3(1.0, 0.98, 0.95), smoothstep(0.15, 0.6, sunUp));
+          outgoingLight += tint * (uSnowGlow * sunOn * lit);
+        }
+`;
+
 const BAYER_DITHER_GLSL = /* glsl */ `
   {
     // Bayer 4×4 ordered dither — screen-door fade, no blending cost.
@@ -1335,6 +1369,9 @@ const BAYER_DITHER_GLSL = /* glsl */ `
  * in three's own chunks.
  */
 const FRAG_BODY = /* glsl */ `
+  // Sun-glow weight for snow tops (0 elsewhere), read after lighting (SNOW_GLOW_GLSL).
+  // Declared out here, at main() scope, so it outlives this block.
+  float vxSnowGlow = 0.0;
   {
     vec3 col = diffuseColor.rgb;
     float pat = mod(vDataV.y, 8.0);
@@ -1351,6 +1388,10 @@ const FRAG_BODY = /* glsl */ `
     float _radial = dot(_geoN, normalize(vPosW));
     bool isSide = abs(_radial) < 0.5;
     bool isTopFace = _radial > 0.5;
+    // Snow (bright, cool vertex colour with a lip fringe — see patGround m=5): its tops
+    // catch the sun as a glow after lighting. Works on every tier and in the far field.
+    if (isTopFace && fringe > 0.001 && dot(diffuseColor.rgb, vec3(0.333)) > 0.6 && diffuseColor.b >= diffuseColor.r)
+      vxSnowGlow = 1.0;
 
     if (fringe < -9.5 && fringe > -29.5) col = patRock(vUvW, col, vTintV, isTopFace, -fringe - 10.0);
     else if (pat > 0.5 && pat < 1.5) col = patBrick(vUvW, col, vTintV);
@@ -3048,6 +3089,9 @@ export function makeVoxelMaterial() {
         uShadowTintStrength: { value: 0.82 },
         /** Extra darkening inside cast shadows (0 = hue shift only). */
         uShadowDeepen: { value: 0.22 },
+        // Snow sun-glow (SNOW_GLOW_GLSL): strength, and the low-sun tint it warms toward.
+        uSnowGlow: { value: 0.75 },
+        uSnowGlowWarm: { value: new THREE.Color(1.0, 0.72, 0.5) },
         uNoiseTex: { value: voxelNoiseTexture() },
         uSunDir: { value: LIGHT.sunDir.clone() },
         uSunAmbient: { value: 0.14 }, // diffuse lift on sun-facing sides
@@ -3104,12 +3148,13 @@ export function makeVoxelMaterial() {
           // canopies above all — thin casters that a soft VSM washes out) read
           // stronger and darker on the terrain and objects beneath them.
           outgoingLight *= 1.0 - uShadowDeepen * (1.0 - petalVisibility);
-        #endif`,
+        #endif
+        ${SNOW_GLOW_GLSL}`,
             );
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v27' +
+        'VoxelWorld-voxel-v29' +
         (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') +
         (mat.defines?.FAR_FIELD ? '-far' : '') +
         (mat.side === THREE.DoubleSide ? '-ds' : '');
