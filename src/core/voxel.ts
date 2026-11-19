@@ -2333,6 +2333,8 @@ export function createSphereChunkStreamer(
     setCos();
     const lastScan = new THREE.Vector3();
     let forceScan = true;
+    /** Loaded chunks waiting to be announced to the listener (drained by update, budgeted). */
+    const listenQueue: number[] = [];
     /** scan() stamps every chunk it keeps with the scan's generation (no per-scan Set). */
     const keptGen = new Uint32Array(CHUNK_COUNT);
     let scanGen = 0;
@@ -2428,6 +2430,7 @@ export function createSphereChunkStreamer(
         lastScan.copy(playerDir);
         forceScan = false;
         loadQueue = [];
+        listenQueue.length = 0; // re-derived below; stale entries would announce far chunks
         const gen = ++scanGen;
         for (let face = 0; face < 6; face++) {
             for (let ci = 0; ci < CHUNKS_PER_FACE_EDGE; ci++) {
@@ -2450,7 +2453,9 @@ export function createSphereChunkStreamer(
                         }
                         if (record.detailed !== near) setDetail(record, near);
                         // Vegetation radius, with hysteresis: in at listenCos, out past unlistenCos.
-                        if (!record.listened && dot >= listenCos) setListened(record, true);
+                        // Entering is queued (a patch build is ~1 ms; a rescan can cross dozens at
+                        // once, which was a 10-14 ms spike outside any budget); leaving is immediate.
+                        if (!record.listened && dot >= listenCos) listenQueue.push(id);
                         else if (record.listened && dot < unlistenCos) setListened(record, false);
                     } else if (dot >= loadCos) loadQueue.push({ face, ci, ck, dot });
                 }
@@ -2532,6 +2537,14 @@ export function createSphereChunkStreamer(
                 avgChunkMs += (performance.now() - a - avgChunkMs) * 0.15;
                 built++;
                 starved = 0;
+            }
+            // Then vegetation for chunks that crossed into its radius on a rescan, within
+            // what's left of the budget (at least one per frame, so it always progresses).
+            while (listenQueue.length) {
+                if (performance.now() - t0 > budgetMs && built > 0) break;
+                const r = loaded.get(listenQueue.pop()!);
+                if (r) setListened(r, true);
+                built++;
             }
         },
 

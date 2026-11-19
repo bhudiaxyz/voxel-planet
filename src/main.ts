@@ -214,7 +214,10 @@ async function start(): Promise<void> {
 
     const ts = TIER_SETTINGS[tier];
     const world = await buildSphereWorld(SEED, scene, setProgress, {
-        streamRadius: ts.streamRadius,
+        // Phones/tablets classed `mid` (2019-21 Adreno 6xx / Mali-G7x, often 4-6 GB shared with
+        // the GPU) stream no further than `mobile-high` does (16): radius 20 is ~500 MB of
+        // geometry, and Android kills the GPU process before a laptop would notice.
+        streamRadius: isTouchDevice ? Math.min(ts.streamRadius, TIER_SETTINGS['mobile-high'].streamRadius) : ts.streamRadius,
         grassDensity: ts.grassDensity,
         groundDetail: ts.groundDetail,
         shoreFoam: ts.shoreFoam,
