@@ -302,6 +302,15 @@ export class DayNight {
             // Ambient tint: cool blue at night, neutral at day
             const night = this.getNightFactor();
             vu['uAmbientTint'].value.set(1.0 - night * 0.08, 1.0 - night * 0.04, 1.0 + night * 0.12);
+            // Snow sun-glow (voxel SNOW_GLOW_GLSL): follows the CLOCK-keyframed sun, like the
+            // sky does — 1 at noon, ~0.4 at sunrise/sunset, 0 at night — tinted by the keyframed
+            // sun colour (gold at the ends of the day, white at noon: alpenglow for free).
+            // Not _sunDir.y: the world-space sun arc runs ahead of the clock (it is overhead at
+            // 06:00 and below the world horizon by ~11:30), so it disagreed with the sky.
+            if (vu['uSnowSun']) {
+                vu['uSnowSun'].value = Math.min(1, lerpScalar(PALETTE.sunIntensity, ia) / 1.85);
+                vu['uSnowGlowWarm'].value.copy(this._col);
+            }
         }
     }
 }

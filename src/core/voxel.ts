@@ -711,7 +711,7 @@ const FRAG_DECL = /* glsl */ `
   uniform vec3  uAoTint;
   uniform float uShadowTintStrength;
   uniform float uShadowDeepen;
-  uniform float uSnowGlow;
+  uniform float uSnowGlow, uSnowSun;
   uniform vec3  uSnowGlowWarm;
   uniform vec3  uShadowHue;
   uniform sampler2D uWaterMap;
@@ -1306,24 +1306,22 @@ const FRAG_DECL = /* glsl */ `
  * Sunlit snow tops are pushed past the bloom threshold (postfx: 1.25 linear), so on
  * tiers with bloom (high, mobile-high, mid) snowfields and peaks glow softly in the sun;
  * on the others they simply read brighter. Scaled by:
- *   - sun elevation, uSunDir.y — the same world-space "elev" DayNight drives the whole
- *     scene's light with (uSunAmbient, sky glow). The sun follows a fixed world arc, not
- *     each spot's local horizon (DESIGN.md "Day/night"), so a local up·sun test left
- *     sunlit-looking snow on most of the planet without any glow,
- *   - cast-shadow visibility (no glow in a peak's own shadow), when there is a shadow map,
- * The tint warms toward uSnowGlowWarm as the sun drops (alpenglow at dawn and dusk),
- * near white at noon. Uses vxSnowGlow, set in FRAG_BODY.
+ *   - uSnowSun, the clock-keyframed sun intensity (1 noon, ~0.4 sunrise/sunset, 0 night),
+ *     pushed by DayNight. Not uSunDir.y: the world-space sun arc runs ahead of the clock,
+ *     so it disagreed with the sky (overhead at 06:00, under the horizon by ~11:30);
+ *   - cast-shadow visibility (no glow in a peak's own shadow), when there is a shadow map.
+ * Tinted by the keyframed sun colour (uSnowGlowWarm, hue only): gold at the ends of the
+ * day — alpenglow — and near white at noon. Uses vxSnowGlow, set in FRAG_BODY.
  */
 const SNOW_GLOW_GLSL = /* glsl */ `
         if (vxSnowGlow > 0.5) {
-          float sunUp = uSunDir.y;
-          float sunOn = smoothstep(-0.05, 0.2, sunUp);
           float lit = 1.0;
           #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
             lit = petalVisibility;
           #endif
-          vec3 tint = mix(uSnowGlowWarm, vec3(1.0, 0.98, 0.95), smoothstep(0.15, 0.6, sunUp));
-          outgoingLight += tint * (uSnowGlow * sunOn * lit);
+          // Keyframed sun colour, normalised to unit brightness so only its hue tints.
+          vec3 tint = uSnowGlowWarm / max(max(uSnowGlowWarm.r, uSnowGlowWarm.g), max(uSnowGlowWarm.b, 1e-3));
+          outgoingLight += tint * (uSnowGlow * uSnowSun * lit);
         }
 `;
 
@@ -3090,8 +3088,10 @@ export function makeVoxelMaterial() {
         /** Extra darkening inside cast shadows (0 = hue shift only). */
         uShadowDeepen: { value: 0.22 },
         // Snow sun-glow (SNOW_GLOW_GLSL): strength, and the low-sun tint it warms toward.
-        uSnowGlow: { value: 0.75 },
-        uSnowGlowWarm: { value: new THREE.Color(1.0, 0.72, 0.5) },
+        uSnowGlow: { value: 0.5 }, // ~+20% luminance on sunlit snow; above ~1.0 it blooms hard
+        // Sun amount 0..1 and colour for the glow, pushed each frame by DayNight (clock-keyframed).
+        uSnowSun: { value: 1 },
+        uSnowGlowWarm: { value: new THREE.Color(1.0, 0.95, 0.85) },
         uNoiseTex: { value: voxelNoiseTexture() },
         uSunDir: { value: LIGHT.sunDir.clone() },
         uSunAmbient: { value: 0.14 }, // diffuse lift on sun-facing sides
@@ -3154,7 +3154,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v29' +
+        'VoxelWorld-voxel-v30' +
         (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') +
         (mat.defines?.FAR_FIELD ? '-far' : '') +
         (mat.side === THREE.DoubleSide ? '-ds' : '');
