@@ -10,8 +10,11 @@
  *     the CPU. Around it the vertex shader moves the critter on a small wandering path.
  *   - place(): tries CANDIDATES (4) random spots, drops water (GroundSampler.groundAt < 0), scores
  *     the rest with butterflyPref / fireflyPref (plus a little jitter) and keeps the best; with
- *     no habitat function the first dry spot wins. The first update seeds every anchor, then a
- *     slice per frame refreshes the whole set every RESAMPLE (1.1) s.
+ *     no habitat function the first dry spot wins. A negative score excludes a spot. For
+ *     butterflies, butterflyDensity (0..1) is then rolled as the chance one is present there,
+ *     so they thin out with altitude and cold. A critter with no valid spot is parked at the
+ *     planet's centre (hidden) until a later resample. The first update seeds every anchor,
+ *     then a slice per frame refreshes the whole set every RESAMPLE (1.1) s.
  *   - Butterflies: instanced geometry of a body plus fore- and hindwing panels on each side that
  *     fold about the body axis; they flap in bursts, bank into turns, and take flower colours from
  *     PETAL_COLORS. Fireflies: additive blinking points (default 2 per butterfly) that the bloom
@@ -21,7 +24,9 @@
  *
  * Usage
  *   Created by src/main.ts: createCritters(scene, count, sampler, seed, fireflies), where the
- *   sampler implements GroundSampler (groundAt, optional butterflyPref / fireflyPref).
+ *   sampler implements GroundSampler (groundAt; optional butterflyPref / fireflyPref /
+ *   butterflyDensity — main.ts drives all three from its butterflyHabitat, which limits
+ *   butterflies to the warm coast, lowland and lower midland).
  *   Per frame: critters.update(dt, playerPos, night, pixelRatio); dispose() on teardown.
  *   count <= 0 returns a no-op.
  *
@@ -186,9 +191,19 @@ const FIREFLY_FRAG = /* glsl */ `
 export interface GroundSampler {
     /** World radius of the walkable ground under a direction, or -1 for water. */
     groundAt(dir: THREE.Vector3): number;
-    /** Optional 0..1 habitat scores: the best of a few candidate spots wins. */
+    /**
+     * Optional 0..1 habitat scores: the best of a few candidate spots wins.
+     * A negative score excludes the spot entirely; if every candidate is excluded
+     * the critter is hidden until a later resample finds habitat.
+     */
     butterflyPref?(dir: THREE.Vector3): number;
     fireflyPref?(dir: THREE.Vector3): number;
+    /**
+     * Optional 0..1 chance that a butterfly is present at its chosen spot (rolled
+     * once per placement, after the habitat pick). Thins butterflies with altitude:
+     * a preference alone only ranks the candidates, so the count never dropped.
+     */
+    butterflyDensity?(dir: THREE.Vector3): number;
 }
 
 /** Candidate spots tried per anchor; the highest habitat score is kept. */
@@ -403,8 +418,11 @@ export function createCritters(
                 .normalize();
             const g = sampler.groundAt(_d);
             if (g < 0) continue;
+            // A negative habitat score means "never here" (e.g. butterflies on cold uplands).
+            const p = pref ? pref(_d) : 0;
+            if (p < 0) continue;
             // A little jitter so a uniform field still spreads them out.
-            const score = (pref ? pref(_d) : 0) + rnd() * 0.15;
+            const score = p + rnd() * 0.15;
             if (score > bestScore) {
                 bestScore = score;
                 bestG = g;
@@ -412,9 +430,21 @@ export function createCritters(
             }
             if (!pref) break; // no habitat: first dry spot is fine
         }
-        if (bestG < 0) return;
         const arr = i < count ? bAnchor : fAnchor;
         const j = i < count ? i : i - count;
+        // Butterflies thin out where the sampler says they're scarce (altitude, cold).
+        if (bestG >= 0 && i < count && sampler.butterflyDensity && rnd() > sampler.butterflyDensity(_best)) bestG = -1;
+        if (bestG < 0) {
+            // No suitable ground nearby (all water, or no habitat): park the critter
+            // just off the planet's centre, hidden inside the shell, rather than
+            // leaving it at an old anchor the player may have walked out of.
+            if (pref) {
+                arr[j * 3] = _up.x;
+                arr[j * 3 + 1] = _up.y;
+                arr[j * 3 + 2] = _up.z;
+            }
+            return;
+        }
         arr[j * 3] = _best.x * bestG;
         arr[j * 3 + 1] = _best.y * bestG;
         arr[j * 3 + 2] = _best.z * bestG;

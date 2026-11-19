@@ -107,6 +107,16 @@ const _upNow = new THREE.Vector3();
 const _cloudNight = new THREE.Color(0.035, 0.045, 0.07);
 /** Sea surface layer on the sphere (matches sphere-terrain). */
 const SEA_LAYER = 11;
+/**
+ * Butterfly habitat (see butterflyHabitat): full numbers up to BUTTERFLY_FULL_RISE layers
+ * above the sea (the coast zone), thinning to none at BUTTERFLY_MAX_RISE (top of the midland
+ * zone; zoneOf in world/trees.ts: coast <= 3, lowland <= 7, midland <= 14), and none colder
+ * than BUTTERFLY_MIN_WARM on terrain.ts's warmth proxy (1 = warm equator lowland, 0.6 =
+ * grassland edge, < 0 = pale upland rock).
+ */
+const BUTTERFLY_FULL_RISE = 3;
+const BUTTERFLY_MAX_RISE = 14;
+const BUTTERFLY_MIN_WARM = 0.35;
 
 const container = document.getElementById('app')!;
 const bootEl = document.getElementById('boot')!;
@@ -264,6 +274,19 @@ async function start(): Promise<void> {
     scene.add(particles.group);
     const birds = createBirds(scene, ts.birdFlock, SEED ^ 0xb1d5);
     const clouds = createClouds(scene, ts.clouds, SEED ^ 0xc10d);
+    /**
+     * Butterfly habitat 0..1 at a unit direction: 1 on warm coast, falling with altitude
+     * to 0 at BUTTERFLY_MAX_RISE, and to 0 as warmth drops to BUTTERFLY_MIN_WARM. Warmth is
+     * terrain.ts's surface temperature proxy (latitude² and elevation, AMPLITUDE 24 layers).
+     */
+    const butterflyHabitat = (d: THREE.Vector3) => {
+        const { face, u, v } = dirToFaceUV(d, FACE_RES);
+        const rise = world.grid.groundColumnTop(face, u, v) - SEA_LAYER;
+        const warm = 1 - 1.1 * d.y * d.y - (1.2 * Math.max(0, rise)) / 24;
+        const byHeight = 1 - THREE.MathUtils.smoothstep(rise, BUTTERFLY_FULL_RISE, BUTTERFLY_MAX_RISE);
+        const byWarmth = THREE.MathUtils.smoothstep(warm, BUTTERFLY_MIN_WARM, BUTTERFLY_MIN_WARM + 0.25);
+        return byHeight * byWarmth;
+    };
     const critters = createCritters(
         scene,
         Math.round(ts.critters * 0.8), // 20% fewer butterflies
@@ -273,8 +296,12 @@ async function start(): Promise<void> {
                 const top = world.grid.columnTop(face, u, v);
                 return top <= SEA_LAYER ? -1 : world.grid.surfaceRadius(face, u, v);
             },
-            // Butterflies follow the flower drifts.
-            butterflyPref: (d) => world.veg.bloomAt(d),
+            // Butterflies keep to the lower, warmer land: excluded (-1) above the midland
+            // zone and where it's cold; within that, they follow the flower drifts.
+            butterflyPref: (d) => (butterflyHabitat(d) > 0 ? world.veg.bloomAt(d) : -1),
+            // ...and grow scarcer as you climb: full on the coast, thinning through the
+            // lowland and midland to none at the limit (and fewer on cold ground).
+            butterflyDensity: (d) => butterflyHabitat(d),
             // Fireflies gather over damp, lush ground by the water.
             fireflyPref: (d) => {
                 const { face, u, v } = dirToFaceUV(d, FACE_RES);
