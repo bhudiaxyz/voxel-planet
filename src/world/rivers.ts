@@ -47,7 +47,18 @@ function step(f: number, u: number, v: number, du: number, dv: number): number {
     return key(f2, u2, v2);
 }
 
-export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: number) {
+/** Yield to the browser (paints the loading bar; keeps the tab from being flagged hung). */
+const paint = () => new Promise((r) => setTimeout(r, 0));
+
+export async function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: number) {
+    // Yield whenever this much main-thread time has passed since the last one.
+    // Pure scheduling: the RNG stream and results are unchanged.
+    let lastYield = performance.now();
+    const maybeYield = async () => {
+        if (performance.now() - lastYield < 40) return;
+        await paint();
+        lastYield = performance.now();
+    };
     const rng = makeRng(seed ^ 0x51e7a);
     const grassIds = new Set([BLOCKS.GRASS.id, BLOCKS.GRASS_LIGHT.id, BLOCKS.GRASS_DEEP.id]);
     const sourceIds = new Set([...grassIds, SNOW.id]);
@@ -55,10 +66,19 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
         const [f, u, v] = unkey(k);
         return grid.columnTop(f, u, v);
     };
-    /** Ground height (ignores trees, so a canopy on the bank doesn't raise it). */
+    /**
+     * Ground height (ignores trees, so a canopy on the bank doesn't raise it).
+     * Memoised: phases 4-5 read the grid ~50× per channel column (the bank
+     * search) and only write it in phase 5, after the last read. Uncached this
+     * was ~1.3 s of unyielding main thread on desktop, several seconds on phones.
+     */
+    const groundMemo = new Int16Array(6 * N * N).fill(-2);
     const ground = (k: number) => {
-        const [f, u, v] = unkey(k);
-        return grid.groundColumnTop(f, u, v);
+        if (groundMemo[k] === -2) {
+            const [f, u, v] = unkey(k);
+            groundMemo[k] = grid.groundColumnTop(f, u, v);
+        }
+        return groundMemo[k];
     };
 
     /* ---- 1. channels: key → half-width at that column ------------------- */
@@ -223,7 +243,10 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
     // water a layer above the sand beside it. A surface at or below the sea is
     // the sea's job: that reach is carved as a dry mouth and the sea fills it.
     const surf = new Map<number, number>();
+    await maybeYield();
+    let visited = 0;
     for (const [k] of half) {
+        if ((++visited & 4095) === 0) await maybeYield();
         const [f, u, v] = unkey(k);
         const h = grid.columnTop(f, u, v);
         if (h <= seaLayer) continue; // the sea already covers it
@@ -239,12 +262,14 @@ export function carveFreshWater(grid: SphereVoxelGrid, seaLayer: number, seed: n
     // Relax: no surface more than one layer above a neighbour's surface, and never
     // above a dry 4-neighbour, so the river steps down with the land.
     // Iterate to a fixed point: a fixed pass count left long reaches unsettled.
-    for (let changed = true; changed;) {
+    const D4 = D8.slice(0, 4);
+    for (let changed = true; changed; ) {
         changed = false;
+        await maybeYield();
         for (const [k, s0] of surf) {
             const [f, u, v] = unkey(k);
             let s = s0;
-            for (const [du, dv] of D8.slice(0, 4)) {
+            for (const [du, dv] of D4) {
                 const j = step(f, u, v, du, dv);
                 const n = surf.get(j);
                 // A neighbour whose water is the sea (surface at/below sea level, so it

@@ -4,10 +4,13 @@
  * A translucent sphere at sea level. Three things make it read as water rather
  * than as a blue sheet:
  *
- *   1. A real surface normal, from the analytic derivative of the wave field
- *      rather than from a fake ripple scalar. Everything angular hangs off it
- *      — the sun glint, the fresnel, and the refraction offset — so all three
- *      agree with each other and with the wave you can see.
+ *   1. A real surface normal, per pixel, from the analytic gradient of a 3D
+ *      plane-wave field. Everything angular hangs off it — the sun glint and
+ *      the fresnel — so they agree with each other. The field lives in 3D and
+ *      is sampled on the sphere, so it has no seams or stretching anywhere
+ *      (the old XZ projection streaked into vertical lines along the equator).
+ *      Waves are not displaced in the vertex shader: sphere vertices sit ~17
+ *      units apart, longer than the waves, so displacement only aliased.
  *   2. Depth blending by Beer-Lambert absorption along the ACTUAL view ray,
  *      not by a lookup keyed on position. Path length is what the eye reads as
  *      depth, and it grows as the camera lowers, so the far water darkens and
@@ -30,34 +33,33 @@ const SEA_LAYER_SPHERE = 11;
 // with shoreline voxel side faces at grazing angles.
 const SPHERE_WATER_RADIUS = PLANET_RADIUS + SEA_LAYER_SPHERE - 0.5;
 
-// Shared noise + analytic wave field — injected into both vertex and fragment
-// shaders so displaced geometry and surface normals always agree.
+// Shared noise + analytic wave field (fragment shader).
 const WAVE_GLSL = /* glsl */ `
   float h21(vec2 p){ p = fract(p*vec2(123.34,456.21)); p += dot(p,p+45.32); return fract(p.x*p.y); }
   float n2(vec2 p){
     vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
     return mix(mix(h21(i), h21(i+vec2(1,0)), f.x), mix(h21(i+vec2(0,1)), h21(i+vec2(1,1)), f.x), f.y);
   }
-  // Returns height in .x, partial derivatives (slope) in .yz.
-  // Amplitudes are 3× the original fragment-only values so vertex
-  // displacement is visible from the default play camera.
-  vec3 waveField(vec2 p, float t) {
-    vec3 acc = vec3(0.0);
-    vec2 d0 = normalize(vec2( 1.00,  0.34));
-    vec2 d1 = normalize(vec2(-0.42,  1.00));
-    vec2 d2 = normalize(vec2( 0.83, -0.72));
-    vec2 d3 = normalize(vec2(-0.91, -0.55));
+  // World-space gradient of the wave height: plane waves in 3D, sampled on the
+  // sphere. Directions are spread over 3D so no region sees them edge-on.
+  vec3 waveGrad(vec3 p, float t) {
+    vec3 d0 = normalize(vec3( 1.00,  0.34,  0.62));
+    vec3 d1 = normalize(vec3(-0.42,  1.00, -0.70));
+    vec3 d2 = normalize(vec3( 0.83, -0.72,  0.95));
+    vec3 d3 = normalize(vec3(-0.91, -0.55, -0.38));
     float k0 = 0.34, k1 = 0.51, k2 = 1.07, k3 = 1.93;
     float a0 = 0.21,  a1 = 0.14,  a2 = 0.06,  a3 = 0.025;
     float s0 = 0.62, s1 = 0.83, s2 = 1.34, s3 = 2.05;
-    float ph0 = dot(d0, p)*k0 + t*s0;
-    float ph1 = dot(d1, p)*k1 + t*s1;
-    float ph2 = dot(d2, p)*k2 + t*s2;
-    float ph3 = dot(d3, p)*k3 + t*s3;
-    acc.x  = a0*sin(ph0) + a1*sin(ph1) + a2*sin(ph2) + a3*sin(ph3);
-    acc.yz = a0*k0*cos(ph0)*d0 + a1*k1*cos(ph1)*d1
-           + a2*k2*cos(ph2)*d2 + a3*k3*cos(ph3)*d3;
-    return acc;
+    return a0*k0*cos(dot(d0, p)*k0 + t*s0)*d0 + a1*k1*cos(dot(d1, p)*k1 + t*s1)*d1
+         + a2*k2*cos(dot(d2, p)*k2 + t*s2)*d2 + a3*k3*cos(dot(d3, p)*k3 + t*s3)*d3;
+  }
+  // Fine wind ripples (WATER_DETAIL tiers), faded out with distance before they alias.
+  vec3 rippleGrad(vec3 p, float t) {
+    vec3 e0 = normalize(vec3( 0.3,  0.9, -0.5));
+    vec3 e1 = normalize(vec3(-0.8,  0.2,  0.6));
+    vec3 e2 = normalize(vec3( 0.5, -0.6, -0.7));
+    return 0.012*3.7*cos(dot(e0, p)*3.7 + t*2.6)*e0 + 0.008*6.1*cos(dot(e1, p)*6.1 - t*3.4)*e1
+         + 0.004*9.4*cos(dot(e2, p)*9.4 + t*4.1)*e2;
   }
 `;
 
@@ -106,27 +108,20 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
                 uNight: { value: 0 },
             },
         ]),
-        defines: { ...(shoreMap ? { USE_SHORE_MAP: 1 } : {}), ...(foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {}) },
+        defines: {
+            ...(shoreMap ? { USE_SHORE_MAP: 1 } : {}),
+            ...(foam && shoreMap ? { USE_SHORE_FOAM: 1 } : {}),
+            // Ripples, sun path and glitter: a few ALU ops per sea pixel.
+            ...(tier !== 'low' && tier !== 'very-low' ? { WATER_DETAIL: 1 } : {}),
+        },
         vertexShader: /* glsl */ `
       #include <common>
       #include <fog_pars_vertex>
-      ${WAVE_GLSL}
-      uniform float uTime;
       varying vec3 vWorld;
-      varying vec3 vNrm;
       void main() {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vWorld = wp.xyz;
-        // Wave tiling uses XZ — reasonable approximation near any face centre
-        vec3 wave = waveField(vWorld.xz, uTime);
-        // Radial displacement along sphere normal
-        vec3 radial = normalize(vWorld);
-        vWorld += radial * wave.x;
-        // Perturb sphere normal by wave slope
-        vec3 tangX = normalize(vec3(-vWorld.z, 0.0, vWorld.x));
-        vec3 tangZ = normalize(cross(radial, tangX));
-        vNrm = normalize(radial - tangX * wave.y - tangZ * wave.z);
-        vec4 mvPosition = viewMatrix * vec4(vWorld, 1.0);
+        vec4 mvPosition = viewMatrix * wp;
         gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
       }
@@ -140,7 +135,6 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
       uniform float uNight;
       uniform vec3 uExtinction;
       varying vec3 vWorld;
-      varying vec3 vNrm;
 
       ${WAVE_GLSL}
       #ifdef USE_SHORE_MAP
@@ -161,11 +155,18 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
       }
 
       void main() {
-        vec3 N = normalize(vNrm);
+        vec3 up = normalize(vWorld);
+        float dist = length(cameraPosition - vWorld);
+        vec3 g = waveGrad(vWorld, uTime);
+        #ifdef WATER_DETAIL
+          g += rippleGrad(vWorld, uTime) * (1.0 - smoothstep(30.0, 120.0, dist));
+        #endif
+        // Calm the far sea: sub-pixel waves there only sparkle.
+        g *= 1.0 - 0.6 * smoothstep(250.0, 900.0, dist);
+        vec3 N = normalize(up - (g - up * dot(g, up)));
         vec3 V = normalize(cameraPosition - vWorld);
         float NdotV = max(dot(N, V), 0.0);
 
-        vec3 up = normalize(vWorld);
         // Depth from the shore-distance map: 0 at the waterline, rising offshore.
         // Grazing views see through more water, so the path lengthens toward the horizon.
         #ifdef USE_SHORE_MAP
@@ -196,7 +197,18 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
         waterCol = mix(waterCol, skyRef * uReflect, fresnel * 0.6);
 
         vec3 H = normalize(V + uSunDir);
-        float spec = pow(max(dot(N, H), 0.0), 80.0) * 2.0;
+        float NdotH = max(dot(N, H), 0.0);
+        // No glint once the sun is below the LOCAL horizon.
+        float sunUp = smoothstep(-0.05, 0.12, dot(up, uSunDir));
+        float spec = pow(NdotH, 80.0) * 2.0;
+        #ifdef WATER_DETAIL
+          // Broad sun path on the swell, and glitter: cells that flash only
+          // where the surface is close to the mirror angle.
+          spec += pow(NdotH, 14.0) * 0.12;
+          float cell = h21(floor(cUV * 2.5) + floor(uTime * 4.0) * 17.0);
+          spec += step(0.92, cell) * smoothstep(0.96, 0.995, NdotH) * 1.5 * (1.0 - smoothstep(40.0, 150.0, dist));
+        #endif
+        spec *= sunUp;
         waterCol += uSunColor * spec;
 
         // Clear in the shallows (the seabed shows through), opaque out at sea.

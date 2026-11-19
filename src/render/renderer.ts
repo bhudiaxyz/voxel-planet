@@ -10,10 +10,12 @@ export function createRenderer(container: any, tier: GpuTier = 'high') {
     // Cap by both DPR and a pixel budget: a HiDPI laptop or a large iPad at the
     // tier's DPR cap meant ~8 MP of HalfFloat post targets on high.
     const maxPx = TIER_SETTINGS[tier].maxMegapixels * 1e6;
+    /** Dynamic-resolution factor (main.ts governor), 1 = the tier's full resolution. */
+    let renderScale = 1;
     const choosePixelRatio = (w?: number, h?: number) => {
         const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
         const px = Math.max(1, (w || window.innerWidth) * (h || window.innerHeight));
-        return Math.max(1, Math.min(dpr, Math.sqrt(maxPx / px)));
+        return Math.max(1, Math.min(dpr, Math.sqrt(maxPx / px))) * renderScale;
     };
 
     const renderer = new THREE.WebGLRenderer({
@@ -56,6 +58,10 @@ export function createRenderer(container: any, tier: GpuTier = 'high') {
     (renderer as any).resizeTo = (width: any, height: any) => {
         renderer.setPixelRatio(choosePixelRatio(width, height));
         renderer.setSize(width, height);
+    };
+    /** Set the dynamic-resolution factor; the caller then resizes the post chain. */
+    (renderer as any).setRenderScale = (s: number) => {
+        renderScale = s;
     };
     return renderer;
 }

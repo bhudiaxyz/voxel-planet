@@ -494,14 +494,17 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
           float px = clamp(uAORadius * uFocal / max(-zc, 1.0), 2.0, 64.0);
           vec2 aoStep = px / uResolution;
           float occ = 0.0;
+          // Break, not step()-weight: a weighted-out tap still paid its two depth
+          // fetches, so 4-tap tiers ran all 16. uAOTaps is uniform, so the exit is
+          // coherent across the screen (no divergence cost).
           for (int i = 0; i < 8; i++) {
-            float w = step(float(i), uAOTaps - 1.0);
+            if (float(i) >= uAOTaps) break;
             float zs1 = viewZ(vUv + AO_DIR[i] * aoStep * 0.45);
             float zs2 = viewZ(vUv + AO_DIR[i] * aoStep);
             float d1 = zs1 - zc;
             float d2 = zs2 - zc;
-            occ += w * clamp(d1 / uAORange, 0.0, 1.0) * (1.0 - smoothstep(uAORange, uAORange * 4.0, d1)) * 0.6;
-            occ += w * clamp(d2 / uAORange, 0.0, 1.0) * (1.0 - smoothstep(uAORange, uAORange * 4.0, d2)) * 0.4;
+            occ += clamp(d1 / uAORange, 0.0, 1.0) * (1.0 - smoothstep(uAORange, uAORange * 4.0, d1)) * 0.6;
+            occ += clamp(d2 / uAORange, 0.0, 1.0) * (1.0 - smoothstep(uAORange, uAORange * 4.0, d2)) * 0.4;
           }
           occ = clamp(occ / max(uAOTaps, 1.0), 0.0, 1.0);
           // Fade AO out with distance: it has nothing to say once the air has
@@ -663,15 +666,19 @@ export function createPostFX(
       varying vec2 vUv;
       void main() {
         if (uSunVisible < 0.01 || uTaps < 0.5) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
-        vec2 delta = (vUv - uSunScreen) * uDensity / 8.0;
+        // Taps beyond 8 subdivide the same ray length (and the same total decay),
+        // so extra taps only smooth the banding; 4- and 8-tap tiers are unchanged.
+        float span = max(uTaps, 8.0);
+        vec2 delta = (vUv - uSunScreen) * uDensity / span;
+        float decay = pow(uDecay, 8.0 / span);
         vec2 uv = vUv;
         float illum = 1.0;
         vec3 accum = vec3(0.0);
-        for (int i = 0; i < 8; i++) {
-          float w = step(float(i), uTaps - 1.0);
+        for (int i = 0; i < 16; i++) {
+          if (float(i) >= uTaps) break; // skipped taps no longer fetch (see AO)
           uv -= delta;
-          accum += textureLod(tDiffuse, uv, 0.0).rgb * illum * w;
-          illum *= mix(1.0, uDecay, w);
+          accum += textureLod(tDiffuse, uv, 0.0).rgb * illum;
+          illum *= decay;
         }
         accum *= uWeight * uSunVisible / max(uTaps, 1.0);
         gl_FragColor = texture2D(tDiffuse, vUv) + vec4(accum, 0.0);

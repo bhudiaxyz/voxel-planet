@@ -132,6 +132,8 @@ export class Atmosphere {
     declare shadowExtent: any;
     declare sun: any;
     declare shadowResolution: any;
+    /** Tier/hardware ceiling for the VSM edge; the settings slider can only go below it. */
+    declare shadowCap: number;
     declare hemi: any;
     declare fill: any;
     constructor(scene: any, worldSize: any, tier: GpuTier = 'high', maxTextureSize?: number) {
@@ -176,6 +178,8 @@ export class Atmosphere {
         // released, and mobile browsers cap how many contexts a page may hold.
         const maxTex = maxTextureSize ?? 2048;
         const shadowRes = Math.min(requestedRes, maxTex);
+        // The settings slider may lower this, never raise it (see setShadowResolution).
+        this.shadowCap = shadowRes;
         sun.shadow.mapSize.set(shadowRes, shadowRes);
         // Voxels are 1 unit. The old normalBias of 0.5 was half a block, which
         // slid every shadow half a block off its caster (peter-panning at every
@@ -233,7 +237,12 @@ export class Atmosphere {
     /** Reallocate the VSM targets at a developer-selected resolution. */
     setShadowResolution(resolution: any) {
         const requested = Number(resolution);
-        const next = requested <= 0 ? 0 : THREE.MathUtils.clamp(Math.round(requested / 1024) * 1024, 1024, 4096);
+        // Capped to the tier: the stored/default 3072 was applied on every device at
+        // boot, so a very-low phone (tier 512) and a low laptop (1024) ran a 3K VSM.
+        const next =
+            requested <= 0
+                ? 0
+                : Math.min(this.shadowCap, THREE.MathUtils.clamp(Math.round(requested / 1024) * 1024, 1024, 4096));
         if (next === this.shadowResolution) return;
 
         const shadow = this.sun.shadow;

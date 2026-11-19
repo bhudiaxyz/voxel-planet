@@ -30,7 +30,7 @@ export interface TierSettings {
     aoTaps: number;
     /** Whether the defocus blur runs in the atmosphere pass. */
     dof: boolean;
-    /** Crepuscular ray taps per pixel (0 = disabled, 4 = half, 8 = full). */
+    /** Crepuscular ray taps per pixel (0 = disabled, 4 = half, 8 = full, up to 16 = smoother). */
     crepuscularTaps: number;
     /** Whether EdgeMaskPass (full second scene render) is added. High-only — it doubles scene draw calls. */
     edgeMask: boolean;
@@ -64,6 +64,8 @@ export interface TierSettings {
     farField: boolean;
     /** Drawing-buffer pixel budget in megapixels (DPR is lowered to fit). */
     maxMegapixels: number;
+    /** Main-thread ms per frame for terrain chunk meshing. Lower = steadier frames, slower fill-in. */
+    buildBudgetMs: number;
 }
 
 //                         dprCap  shadowRes  blurSamples  shadowExtent  cameraFar  bloom   aoTaps  dof    crep  edge   cloud  nightFull  aa       stream  waterSub  particles
@@ -77,7 +79,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         bloom: true,
         aoTaps: 8,
         dof: true,
-        crepuscularTaps: 8,
+        crepuscularTaps: 12, // >8 = same rays, finer steps (no banding on big screens)
         edgeMask: true,
         cloudShadow: true,
         nightSkyFull: true,
@@ -94,6 +96,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 4.2,
+        buildBudgetMs: 5,
     },
     'mobile-high': {
         dprCap: 1.5,
@@ -121,6 +124,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 2.0,
+        buildBudgetMs: 3,
     },
     mid: {
         dprCap: 1.25,
@@ -148,6 +152,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 2.4,
+        buildBudgetMs: 4,
     },
     low: {
         dprCap: 1,
@@ -175,6 +180,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: true,
         farField: true,
         maxMegapixels: 1.6,
+        buildBudgetMs: 3,
     },
     'very-low': {
         dprCap: 1,
@@ -202,6 +208,7 @@ export const TIER_SETTINGS: Record<GpuTier, TierSettings> = {
         foliageDetail: false,
         farField: false,
         maxMegapixels: 1.0,
+        buildBudgetMs: 2,
     },
 };
 

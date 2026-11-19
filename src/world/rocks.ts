@@ -14,7 +14,8 @@ import * as THREE from 'three';
 import { BLOCKS } from '../core/palette';
 import { makeRng } from '../core/rng';
 import { QuadBuffer, _up, box, boxYawed, root } from './veg-geom';
-import { SNOW, Zone, weightedPick, zoneOf } from './trees';
+import { SNOW, weightedPick, zoneOf } from './trees';
+import type { Zone } from './trees';
 
 type Rng = ReturnType<typeof makeRng>;
 

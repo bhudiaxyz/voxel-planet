@@ -235,7 +235,7 @@ export async function generateSphereTerrain(
     // Rivers, streams, lakes and ponds — carved into the land before anything grows.
     onProgress?.(0.6, 'carving rivers & lakes');
     await paint();
-    carveFreshWater(grid, SEA_LAYER, seed);
+    await carveFreshWater(grid, SEA_LAYER, seed);
     onProgress?.(0.75, 'growing forests');
     await paint();
 
@@ -314,6 +314,8 @@ export async function generateSphereTerrain(
 
     for (let face = 0; face < 6; face++) {
         claim.fill(0);
+        // One paint per face: ~35 ms each on desktop, several times that on phones.
+        await paint();
         for (let v = 0; v < FACE_RES; v++) {
             for (let u = 0; u < FACE_RES; u++) {
                 const sl = grid.columnTop(face, u, v);

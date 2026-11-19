@@ -73,6 +73,8 @@ const _c = new THREE.Color();
 
 /** Radians the sun moves before the shadow light follows (~0.11°): stable shadow texels. */
 const SHADOW_DIR_STEP = 0.002;
+/** Low tiers redraw the (on-demand) shadow map after the viewer moves this many units. */
+const SHADOW_MOVE = 4;
 
 export class DayNight {
     timeOfDay: number; // 0–1; 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
@@ -89,6 +91,8 @@ export class DayNight {
     private readonly _col = new THREE.Color();
     private readonly _fillBase = new THREE.Color(0x8090c0);
     private _shadowSunY = Infinity;
+    /** Shadow-frustum centre at the last on-demand redraw (low tiers). */
+    private readonly _shadowAt = new THREE.Vector3(Infinity, 0, 0);
 
     constructor(atmosphere: AtmoLike, renderer?: THREE.WebGLRenderer) {
         this.atmo = atmosphere;
@@ -222,9 +226,18 @@ export class DayNight {
             this.renderer.setClearColor(atmo.scene.fog.color);
             // When shadowMap.autoUpdate is off (very-low tier) only re-render shadows
             // when the sun has moved enough to be visible (~0.5° in Y).
+            // The frustum also follows the viewer (Atmosphere.followTarget), so redraw
+            // when it has slid a few units too — otherwise walking or flying at
+            // noon (sun ~still) left the low tiers with a stale map whose shadows
+            // slid with the viewer and ran out past the old frustum.
             if (!this.renderer.shadowMap.autoUpdate) {
-                if (Math.abs(this._sunDir.y - this._shadowSunY) > 0.009) {
+                const tgt = atmo.sun.target.position;
+                if (
+                    Math.abs(this._sunDir.y - this._shadowSunY) > 0.009 ||
+                    tgt.distanceToSquared(this._shadowAt) > SHADOW_MOVE * SHADOW_MOVE
+                ) {
                     this._shadowSunY = this._sunDir.y;
+                    this._shadowAt.copy(tgt);
                     this.renderer.shadowMap.needsUpdate = true;
                 }
             }

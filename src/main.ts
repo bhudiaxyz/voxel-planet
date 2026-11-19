@@ -147,6 +147,7 @@ async function start(): Promise<void> {
         groundDetail: ts.groundDetail,
         shoreFoam: ts.shoreFoam,
         edges: ts.edgeMask,
+        buildBudgetMs: ts.buildBudgetMs,
         tier,
     });
 
@@ -479,10 +480,64 @@ async function start(): Promise<void> {
     // everything — including a VSM update — twice as often, and heats and throttles.
     const minFrameMs = tier === 'mobile-high' || (isTouchDevice && tier !== 'high') ? 15.5 : 0;
     let lastFrameAt = 0;
+
+    /*
+     * Dynamic resolution: if the GPU can't hold ~48 fps (slow frames while the
+     * main thread is mostly idle, i.e. fill-rate bound — the post chain on an
+     * older iGPU or phone), shrink the render scale 10% per 2 s window down to
+     * 70%; creep back up after a run of good windows. Every failed step up
+     * doubles the wait before the next try, so it settles instead of see-sawing
+     * (each change reallocates the render targets). Off for ?capture=1.
+     * ponytail: single fps heuristic; GPU timer queries if it misjudges a device.
+     */
+    const governed = new URLSearchParams(location.search).get('capture') !== '1';
+    let govScale = 1,
+        govT = 0,
+        govFrames = 0,
+        govCpu = 0,
+        govGood = 0,
+        govNeed = 3,
+        govLastUp = false;
+    const setScale = (s: number) => {
+        govScale = Math.round(s * 100) / 100;
+        (renderer as any).setRenderScale(govScale);
+        const w = container.clientWidth,
+            h = container.clientHeight;
+        (renderer as any).resizeTo(w, h);
+        post.setSize(w, h);
+    };
+    const govern = (rawDt: number, cpuMs: number) => {
+        if (!governed || rawDt > 0.25) return; // tab switch / hitch: not a GPU signal
+        govT += rawDt;
+        govFrames++;
+        govCpu += cpuMs;
+        if (govT < 2) return;
+        const fps = govFrames / govT,
+            cpu = govCpu / govFrames,
+            frameMs = 1000 / fps;
+        govT = govFrames = govCpu = 0;
+        if (fps < 48 && cpu < frameMs * 0.6 && govScale > 0.7) {
+            if (govLastUp) govNeed = Math.min(govNeed * 2, 48); // the last step up didn't hold
+            govLastUp = false;
+            govGood = 0;
+            setScale(Math.max(0.7, govScale - 0.1));
+        } else if (fps >= 57 && govScale < 1) {
+            if (++govGood >= govNeed) {
+                govGood = 0;
+                govLastUp = true;
+                setScale(Math.min(1, govScale + 0.05));
+            }
+        } else {
+            govGood = 0;
+            govLastUp = false;
+        }
+    };
+
     function frame(now = performance.now()): void {
         requestAnimationFrame(frame);
         if (minFrameMs && now - lastFrameAt < minFrameMs) return;
         lastFrameAt = now;
+        const cpuStart = performance.now();
         clock.update();
         const rawDt = clock.getDelta();
         const dt = Math.min(rawDt, 1 / 20);
@@ -524,6 +579,8 @@ async function start(): Promise<void> {
             world.sphereWater.update(dt, dayNight.getNightFactor());
             post.grade.uniforms.uNight.value = dayNight.getNightFactor();
             world.sphereWater.material.uniforms.uSunDir.value.copy(dayNight.sunDir);
+            // Live (time-of-day) sun colour, so the glint turns gold at sunset.
+            world.sphereWater.material.uniforms.uSunColor.value.copy(atmo.sun.color);
         }
 
         if (tier !== 'very-low' && voxMat?.userData?.uniforms) {
@@ -622,6 +679,8 @@ async function start(): Promise<void> {
         settings.update();
 
         post.render(dt);
+        // Only once the player is in: the boot screen's frames say nothing about play.
+        if (bootEl.classList.contains('dismissed')) govern(rawDt, performance.now() - cpuStart);
 
         if (!started) {
             started = true;

@@ -48,6 +48,8 @@ export async function buildSphereWorld(
         shoreFoam?: boolean;
         /** Build outline edges (tier edgeMask): skipped entirely where nothing draws them. */
         edges?: boolean;
+        /** Per-frame chunk meshing budget (tier). */
+        buildBudgetMs?: number;
         tier?: string;
     } = {},
 ): Promise<SphereWorld> {
@@ -67,7 +69,11 @@ export async function buildSphereWorld(
     const wet = bakeWetMap(grid, SEA_LAYER);
 
     onProgress(0.73, 'building terrain meshes');
-    const streaming = createSphereChunkStreamer(grid, { loadRadius: streamRadius, edges: opts.edges ?? true });
+    const streaming = createSphereChunkStreamer(grid, {
+        loadRadius: streamRadius,
+        edges: opts.edges ?? true,
+        buildBudgetMs: opts.buildBudgetMs,
+    });
 
     const spawnDir = new THREE.Vector3();
     const _n = new THREE.Vector3(),

@@ -426,14 +426,22 @@ export const CHUNK_ANGLE = (CHUNK * 2) / FACE_RES;
  */
 const SWAY_BY_BARK: Record<number, number> = { 0: 0.5, 1: 0.8, 2: 0.18, 3: 0.75, 4: 0.9 };
 const _swayCol = new THREE.Color();
+/** Per block id: 1 if it culls every neighbouring face (see meshSphereFaceRegion). */
+const _opaque = new Uint8Array(256);
 /** Chunks filled synchronously around the viewer on boot/teleport/rebuild (~250 units). */
 export const NEAR_FILL = 9;
 /** Unload a little past the load edge so walking along the boundary doesn't thrash. */
 const UNLOAD_MARGIN = 1.5;
 /** Rescan the planet only after moving this far (radians) — about a third of a chunk. */
 const RESCAN_ANGLE = CHUNK_ANGLE / 3;
-/** Main-thread time allowed for chunk meshing per frame. At least one chunk always builds. */
+/** Default main-thread time for chunk meshing per frame (tiers pass their own). */
 const BUILD_BUDGET_MS = 4;
+/** A chunk costlier than the whole budget still builds once per this many frames. */
+const STARVE_FRAMES = 3;
+/** Chunks built synchronously on teleport / palette rebuild (the ground underfoot). */
+const NEAR_SYNC = 3;
+/** Per-frame meshing budget while refilling the near view after a teleport/rebuild. */
+const BURST_BUDGET_MS = 10;
 /** Outer fraction of the load radius that dither-fades out with distance. */
 const FADE_BAND = 0.28;
 /** Beyond this (chunks), outlines are hidden and chunks stop casting shadows. */
@@ -1866,8 +1874,17 @@ export function crossFaceUV(face: number, u: number, v: number): [number, number
     return [f2, u2, v2];
 }
 
-export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRadius?: number; edges?: boolean } = {}) {
+export function createSphereChunkStreamer(
+    grid: SphereVoxelGrid,
+    opts: { loadRadius?: number; edges?: boolean; buildBudgetMs?: number } = {},
+) {
     const tierEdges = opts.edges ?? true;
+    const frameBudget = opts.buildBudgetMs ?? BUILD_BUDGET_MS;
+    /** Running mean of one chunk's build cost (mesh + listener), for the predictive budget. */
+    let avgChunkMs = 2;
+    let starved = 0;
+    /** While the queue's closest chunk is inside this dot, update() uses the burst budget. 2 = off. */
+    let burstMinDot = 2;
     const meshes = createMeshRoots();
     const loaded = new Map<string, any>();
     const fadingMeshes = new Set<any>();
@@ -2045,30 +2062,48 @@ export function createSphereChunkStreamer(grid: SphereVoxelGrid, opts: { loadRad
          * @param budgetMs main-thread meshing budget this call. Pass Infinity at
          *        startup to fill the view before the first frame (no fade-in then).
          */
-        update(playerDir: THREE.Vector3, budgetMs = BUILD_BUDGET_MS) {
+        update(playerDir: THREE.Vector3, budgetMs = frameBudget) {
             if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
             const fade = Number.isFinite(budgetMs);
+            // After a teleport/rebuild: a larger budget until the near view is back.
+            const tail = loadQueue[loadQueue.length - 1];
+            if (tail && tail.dot >= burstMinDot) budgetMs = Math.max(budgetMs, BURST_BUDGET_MS);
+            else burstMinDot = 2;
             const t0 = performance.now();
-            do {
-                const next = loadQueue.pop();
-                if (!next) break;
+            let built = 0;
+            while (loadQueue.length) {
+                // Predictive: stop if the next chunk would likely overrun the budget.
+                // Building "one more" after the budget was nearly spent is what
+                // stacked a 10-20 ms chunk on top of a full frame. A chunk slower
+                // than the whole budget still builds, after a few frames' wait.
+                const spent = performance.now() - t0;
+                if (built > 0 && spent + avgChunkMs > budgetMs) break;
+                if (built === 0 && avgChunkMs > budgetMs && ++starved < STARVE_FRAMES) break;
+                const next = loadQueue.pop()!;
+                const a = performance.now();
                 loadChunk(next.face, next.ci, next.ck, next.dot, fade);
-            } while (performance.now() - t0 < budgetMs);
+                avgChunkMs += (performance.now() - a - avgChunkMs) * 0.15;
+                built++;
+                starved = 0;
+            }
         },
 
         /**
-         * Build, synchronously and without fade, every queued chunk within
-         * `radiusChunks` of `playerDir` (closest first); the rest stream in on the
-         * normal per-frame budget. Used for the first view, teleports and palette
-         * rebuilds — a full-radius synchronous fill was 1,400-2,200 chunks there.
+         * Build, synchronously and without fade, the queued chunks within
+         * NEAR_SYNC of `playerDir` — the ground at your feet — then stream the
+         * rest out to `radiusChunks` on a raised per-frame budget. Used for
+         * teleports and palette rebuilds: building the whole NEAR_FILL disc in one
+         * go froze the page ~3 s on desktop (far longer on phones). The far field
+         * covers the distance while the near chunks arrive.
          */
         fillNear(playerDir: THREE.Vector3, radiusChunks = NEAR_FILL) {
             if (forceScan || lastScan.angleTo(playerDir) > RESCAN_ANGLE) scan(playerDir);
-            const minDot = Math.cos(radiusChunks * CHUNK_ANGLE);
+            const minDot = Math.cos(Math.min(NEAR_SYNC, radiusChunks) * CHUNK_ANGLE);
             while (loadQueue.length && loadQueue[loadQueue.length - 1].dot >= minDot) {
                 const next = loadQueue.pop()!;
                 loadChunk(next.face, next.ci, next.ck, next.dot, false);
             }
+            burstMinDot = Math.cos(radiusChunks * CHUNK_ANGLE);
         },
 
         /** Queued chunks with dot >= minDot (i.e. within a radius), for boot progress. */
@@ -2201,22 +2236,49 @@ export function meshSphereFaceRegion(
     const scanU1 = Math.min(FACE_RES, u1 + uHalo);
     const scanV1 = Math.min(FACE_RES, v1 + uHalo);
 
+    // Opaque = a neighbour that culls every face of any block against it: solid,
+    // not water, not swaying solid foliage (see the face test below). A voxel
+    // walled in by six of these emits no faces and no edges, so it is skipped up
+    // front — most of a chunk is buried rock, and each one otherwise paid six
+    // global lookups. Rebuilt per call: registerBlock can add ids at runtime.
+    for (let i = 0; i < 256; i++) {
+        const b = BLOCK_BY_ID[i] as any;
+        _opaque[i] = b && i !== 0 && !b.isWater && !(b.sway && b.solid) ? 1 : 0;
+    }
+    const data = grid.data;
+    const SU = SHELL_DEPTH,
+        SV = FACE_RES * SHELL_DEPTH;
+
     for (let v = scanV0; v < scanV1; v++) {
         for (let u = scanU0; u < scanU1; u++) {
             const top = grid.columnTop(face, u, v);
             if (top < 0) continue;
+            // Interior columns: all four side neighbours are on this face.
+            const interior = u > 0 && v > 0 && u < FACE_RES - 1 && v < FACE_RES - 1;
+            const colBase = ((face * FACE_RES + v) * FACE_RES + u) * SHELL_DEPTH;
+            const [rdx, rdy, rdz] = radialDir(u, v);
 
             for (let layer = 0; layer <= top; layer++) {
-                const id = grid.get(face, u, v, layer);
+                const id = data[colBase + layer];
                 if (id === 0) continue;
+                if (interior && layer > 0 && layer < SHELL_DEPTH - 1) {
+                    const p = colBase + layer;
+                    if (
+                        _opaque[data[p + 1]] &&
+                        _opaque[data[p - 1]] &&
+                        _opaque[data[p + SU]] &&
+                        _opaque[data[p - SU]] &&
+                        _opaque[data[p + SV]] &&
+                        _opaque[data[p - SV]]
+                    )
+                        continue;
+                }
                 const block = BLOCK_BY_ID[id];
                 if (!block) continue;
                 // Leaves go to their own buffer (drawn double-sided; see buildSphereMeshChunk).
                 const target = (block as any).emissive ? glow : (block as any).sway && leaves ? leaves : solid;
                 const emitGeometry = u >= u0 && u < u1 && v >= v0 && v < v1;
                 const isWaterBlk = !!(block as any).isWater;
-
-                const [rdx, rdy, rdz] = radialDir(u, v);
 
                 for (let f = 0; f < 6; f++) {
                     const F = FACES[f];
