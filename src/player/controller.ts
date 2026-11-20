@@ -54,6 +54,8 @@ const MAX_STEP = 1.1; // max terrain step-up in world units
  * rate (the old one-step-ahead probe let a 45° approach reach 0.001 at any frame rate).
  */
 const CLEARANCE = 0.3;
+/** How far above a bush/cactus top the feet must be to move over it (drop or jump), units. */
+const STAND_CLEAR = 2.2;
 const _cn = new THREE.Vector3(),
     _ctu = new THREE.Vector3(),
     _ctv = new THREE.Vector3(),
@@ -155,12 +157,17 @@ export class SphereController {
         const feet = this.groundRadius - EYE_HEIGHT;
         const ground = grid.surfaceRadius(f, u, v);
         if (ground > feet + MAX_STEP) return true;
-        // Voxel obstacles at body height.
+        // Voxel obstacles at body height (the feet layer and the one above).
         const fl = Math.floor(feet - PLANET_RADIUS + 0.01);
         for (let l = fl; l <= fl + 1; l++) {
             const b = BLOCK_BY_ID[grid.get(f, u, v, l)];
             if (b && (b.isTrunk || (b.sway && b.solid) || b.pattern === PATTERN.CACTUS)) return true;
         }
+        // A bush or cactus as the column's ground (groundColumnTop counts solid foliage as
+        // ground): stepping out onto it — level with the feet or a terrace down — is walking
+        // through it. Only clear when well above it (dropping from a ledge, mid-jump).
+        const top = BLOCK_BY_ID[grid.get(f, u, v, Math.round(ground - PLANET_RADIUS) - 1)];
+        if (top && ((top.sway && top.solid) || top.pattern === PATTERN.CACTUS) && feet - ground < STAND_CLEAR) return true;
         // Sprite plants and rocks stand on this column's ground: blocking unless cleared.
         const above = feet - ground;
         const plant = BLOCK_BY_ID[grid.plantAt(f, u, v)];
