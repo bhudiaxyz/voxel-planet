@@ -35,6 +35,7 @@ import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
 import { dirToFaceUV, columnDir } from '../core/geoutil';
 import { createSpherePathfinder, type Col } from './path';
+import type { ObstacleMap } from './walk-rules';
 
 /**
  * Deepest walkable layer. The sea surface sits at layer 11.5, so layer-11
@@ -65,6 +66,13 @@ const REPLAN_EVERY = 1.5;
 /** Terrace hop: a little slower than a stride and this high at its peak, so the climb reads. */
 const HOP_SLOWDOWN = 0.65;
 const HOP_HEIGHT = 0.7;
+/**
+ * The dog jumps clutter up to this tall (world units): dry scrub (0.45), logs, small rocks.
+ * Taller clutter — tall shrubs (1.0), yucca (1.1), big boulders — and voxel obstacles block it,
+ * as they do the player (walk-rules.ts). The arc clears the clutter by JUMP_MARGIN.
+ */
+const DOG_JUMP_CLEAR = 0.6;
+const JUMP_MARGIN = 0.3;
 /** How fast the drawn height follows terrace steps (the terrain is 2-layer terraces). */
 const STEP_EASE = 12;
 
@@ -136,13 +144,25 @@ function buildDogModel() {
  * their right — a step ahead while they walk, so it stays in view — and when
  * no route exists, or it's left far behind, it reappears ahead and runs in.
  */
-export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawnDir?: THREE.Vector3): SphereDog {
+export function createSphereDog(
+    grid: SphereVoxelGrid,
+    scene: THREE.Scene,
+    spawnDir?: THREE.Vector3,
+    /** Rock/log clutter map (world.veg.obstacleAt), so the dog obeys the player's walk rules. */
+    obstacleAt: ObstacleMap | null = null,
+): SphereDog {
     const model = buildDogModel();
     const mesh = model.root;
     mesh.name = 'dog';
     scene.add(mesh);
 
-    const router = createSpherePathfinder(grid, { maxUp: 2, maxDown: 4, seaLayer: DEEP_WATER });
+    const router = createSpherePathfinder(grid, {
+        maxUp: 2,
+        maxDown: 4,
+        seaLayer: DEEP_WATER,
+        obstacleAt,
+        jumpClear: DOG_JUMP_CLEAR,
+    });
     const dir = new THREE.Vector3();
     const _axis = new THREE.Vector3();
     const _look = new THREE.Vector3();
@@ -170,7 +190,8 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
     let hop = 0;
     let hopGap = 0;
     let hopFrom = 0,
-        hopTo = 0;
+        hopTo = 0,
+        hopPeak = HOP_HEIGHT;
 
     const colOf = (d: THREE.Vector3): Col => dirToFaceUV(d, FACE_RES);
     const sameCol = (a: Col, b: Col) => a.face === b.face && a.u === b.u && a.v === b.v;
@@ -305,17 +326,28 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
 
             // Follow the route one waypoint (column) at a time.
             if (route.length > 0 && wpIndex < route.length) {
-                const next = route[wpIndex];
+                let next = route[wpIndex];
+                let jump = 0;
+                if (hop === 0) {
+                    // Low clutter next (scrub, a log, a small rock): aim for the column beyond it
+                    // and clear it on the arc, rather than landing inside it.
+                    const cl = router.clutterOf(next.face, next.u, next.v);
+                    if (cl > 0 && wpIndex + 1 < route.length) {
+                        jump = cl;
+                        next = route[++wpIndex];
+                    }
+                }
                 columnDir(next.face, next.u, next.v, FACE_RES, _wp);
                 const gap = dir.angleTo(_wp);
                 if (hop === 0) {
                     const here = groundR(colOf(dir)),
                         there = groundR(next);
-                    if (here > 0 && there - here > 0.5) {
+                    if (here > 0 && there > 0 && (jump > 0 || there - here > 0.5)) {
                         hop = 1e-6;
                         hopGap = Math.max(gap, 1e-9);
                         hopFrom = here;
                         hopTo = there;
+                        hopPeak = jump > 0 ? Math.max(HOP_HEIGHT, jump + JUMP_MARGIN) : HOP_HEIGHT;
                     }
                 }
                 const speed = route.length - wpIndex > RUN_COLS ? RUN_SPEED : TROT_SPEED;
@@ -339,7 +371,7 @@ export function createSphereDog(grid: SphereVoxelGrid, scene: THREE.Scene, spawn
         // ease over small steps. Unloaded/empty columns borrow the player's ground.
         let r = surfaceAt(dir);
         if (r <= PLANET_RADIUS) r = playerGround;
-        if (hop > 0) drawnR = hopFrom + (hopTo - hopFrom) * hop + Math.sin(Math.PI * hop) * HOP_HEIGHT;
+        if (hop > 0) drawnR = hopFrom + (hopTo - hopFrom) * hop + Math.sin(Math.PI * hop) * hopPeak;
         else drawnR = Math.abs(r - drawnR) > 4 ? r : drawnR + (r - drawnR) * (1 - Math.exp(-STEP_EASE * dt));
         mesh.position.copy(dir).multiplyScalar(drawnR);
 

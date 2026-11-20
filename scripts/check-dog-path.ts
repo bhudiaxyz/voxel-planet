@@ -11,7 +11,10 @@
  *   - water (layer 5) at u=50..54, v=40..44 and a trunk at (45, 50): must be avoided;
  *   - a 2-layer terrace at u >= 90: climbable; a 6-layer cliff at u >= 120: unreachable from
  *     below, and the drop back down exceeds maxDown 4 too (state must be 'failed');
- *   - a long route is searched with step(400) and must still be found.
+ *   - a long route is searched with step(400) and must still be found;
+ *   - walk rules shared with the player (walk-rules.ts): a bush and a tall-shrub sprite (obstacleH
+ *     1.0) wall must be routed round; with jumpClear 0.6 (the dog's) a row of dry scrub (0.45) or
+ *     a low rock (0.3) may be crossed, a 1.5 boulder may not; without jumpClear, scrub blocks.
  *   Every path step is also checked to be legal (passable, rise <= 2, drop <= 4).
  *
  * Usage
@@ -24,6 +27,7 @@ import assert from 'node:assert/strict';
 import { SphereVoxelGrid } from '../src/core/voxel.ts';
 import { BLOCKS } from '../src/core/blocks.ts';
 import { createSpherePathfinder, type Col } from '../src/player/path.ts';
+import { SHRUB_TALL, SCRUB_DRY } from '../src/world/plants.ts';
 
 const grid = new SphereVoxelGrid();
 const F = 0;
@@ -91,5 +95,36 @@ const legal = (path: Col[]) => {
     assert.equal(r.state, 'found');
     legal(r.path);
     assert.ok(r.frames >= 1, 'long route should take more than one 400-node step');
+}
+// 6. Walk rules shared with the player (walk-rules.ts). Flat ground band at v = 20..30.
+{
+    const rocks = new Map<string, number>();
+    const obstacleAt = (f: number, u: number, v: number) => (f === F ? rocks.get(`${u},${v}`) ?? 0 : 0);
+    const jumper = createSpherePathfinder(grid, { obstacleAt, jumpClear: 0.6 });
+    const go = (p: typeof pf, from: Col, to: Col) => {
+        p.start(from, to);
+        while (p.step(400) === 'searching');
+        return p;
+    };
+    // A wall of tall shrubs (sprites, obstacleH 1.0) across u = 30, v = 20..28, and a bush at v = 29.
+    for (let v = 20; v <= 28; v++) grid.setPlant(F, 30, v, SHRUB_TALL.id);
+    grid.set(F, 30, 29, 21, (BLOCKS as any).SHRUB_SAGE.id); // a bush (sway + solid voxel) on the ground
+    let r = go(jumper, at(25, 24), at(35, 24));
+    assert.equal(r.state, 'found', 'shrub wall: should route round its end');
+    assert.ok(!r.path.some((c) => c.u === 30 && c.v <= 29), 'must not pass through tall shrubs or the bush');
+    // Dry scrub (0.45) at u = 30 for v = 31..33: the dog jumps it (straight across)...
+    for (let v = 31; v <= 33; v++) grid.setPlant(F, 30, v, SCRUB_DRY.id);
+    r = go(jumper, at(25, 32), at(35, 32));
+    assert.equal(r.state, 'found');
+    assert.ok(r.path.some((c) => c.u === 30 && c.v === 32), 'dog should jump low scrub, not detour');
+    assert.ok(jumper.clutterOf(F, 30, 32) > 0, 'scrub column reports clutter for the jump arc');
+    // ...but a pathfinder that can't jump treats it as a wall.
+    r = go(pf, at(25, 32), at(29, 32));
+    assert.equal(pf.groundOf(F, 30, 32), -1, 'without jumpClear, scrub blocks');
+    // Rocks: a 0.3 rock is jumped, a 1.5 boulder is not.
+    rocks.set('40,32', 0.3);
+    rocks.set('40,24', 1.5);
+    assert.ok(jumper.groundOf(F, 40, 32) >= 0, 'a low rock is jumpable');
+    assert.equal(jumper.groundOf(F, 40, 24), -1, 'a boulder blocks');
 }
 console.log('dog path ok');

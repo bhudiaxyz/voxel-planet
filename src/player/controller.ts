@@ -46,7 +46,8 @@
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, crossFaceUV } from '../core/voxel';
-import { BLOCK_BY_ID, PATTERN } from '../core/blocks';
+import { BLOCK_BY_ID } from '../core/blocks';
+import { clutterHeight, isBodyObstacle, type ObstacleMap } from './walk-rules';
 import { basisFromCode, dirToFaceUV } from '../core/geoutil';
 
 const GRAVITY = 28;
@@ -85,7 +86,7 @@ export class SphereController {
      * Rocks and logs drawn by the vegetation layer (not in the voxel grid): height above the
      * ground at a column, 0 if clear. main.ts wires world.veg.obstacleAt here.
      */
-    obstacleAt: ((face: number, u: number, v: number) => number) | null = null;
+    obstacleAt: ObstacleMap | null = null;
     private _pos = new THREE.Vector3();
 
     constructor(spawnDir: THREE.Vector3, grid: SphereVoxelGrid) {
@@ -168,12 +169,10 @@ export class SphereController {
      * Can't the walker stand in this column at its current height? One rule for moving
      * (the destination column) and for the camera clearance (keepClear):
      *   - terrain: the ground is more than MAX_STEP above the feet (a cliff, a terrace wall);
-     *   - voxel obstacles at body height (the feet layer and the one above): tree and dead
-     *     trunks, bushes and shrubs (solid sway blocks), cacti;
-     *   - ground-cover sprites that declare obstacleH (tall shrub, yucca, dry scrub) and
-     *     rocks/logs from the vegetation layer (obstacleAt), unless the feet are above them
-     *     (jumping over a low rock or scrub works).
-     * Grass, flowers, ferns, moss, tall grass, reeds and pebbles are always walk-through.
+     *   - body obstacles (walk-rules.ts isBodyObstacle: trunks, bushes, cacti) at body height;
+     *   - clutter (walk-rules.ts clutterHeight: tall shrub / yucca / scrub sprites, rocks, logs)
+     *     unless the feet are above it (jumping over a low rock or scrub works).
+     * The dog's pathfinder applies the same walk-rules.ts definitions (without jumping).
      */
     private blocked(grid: SphereVoxelGrid, f: number, u: number, v: number): boolean {
         const feet = this.groundRadius - EYE_HEIGHT;
@@ -183,8 +182,7 @@ export class SphereController {
         // will be after stepping in: a step up lifts the body into whatever is over it.
         const fl = Math.floor(Math.max(feet, ground) - PLANET_RADIUS + 0.01);
         for (let l = fl; l <= fl + 1; l++) {
-            const b = BLOCK_BY_ID[grid.get(f, u, v, l)];
-            if (b && (b.isTrunk || (b.sway && b.solid) || b.pattern === PATTERN.CACTUS)) return true;
+            if (isBodyObstacle(BLOCK_BY_ID[grid.get(f, u, v, l)])) return true;
         }
         // Head height: a solid overhang (cliff lip, a floating island's underside) blocks too.
         const headId = grid.get(f, u, v, fl + 1); // (BLOCK_BY_ID[0] is the AIR record, so test the id)
@@ -194,13 +192,10 @@ export class SphereController {
         // ground): stepping out onto it — level with the feet or a terrace down — is walking
         // through it. Only clear when well above it (dropping from a ledge, mid-jump).
         const top = BLOCK_BY_ID[grid.get(f, u, v, Math.round(ground - PLANET_RADIUS) - 1)];
-        if (top && ((top.sway && top.solid) || top.pattern === PATTERN.CACTUS) && feet - ground < STAND_CLEAR) return true;
+        if (isBodyObstacle(top) && feet - ground < STAND_CLEAR) return true;
         // Sprite plants and rocks stand on this column's ground: blocking unless cleared.
-        const above = feet - ground;
-        const plant = BLOCK_BY_ID[grid.plantAt(f, u, v)];
-        if (plant?.obstacleH && above < plant.obstacleH) return true;
-        const rock = this.obstacleAt ? this.obstacleAt(f, u, v) : 0;
-        return rock > 0 && above < rock;
+        const clutter = clutterHeight(grid, f, u, v, this.obstacleAt);
+        return clutter > 0 && feet - ground < clutter;
     }
 
     /**

@@ -323,7 +323,8 @@ async function start(): Promise<void> {
     const sphereMap = createSphereMap(world.grid);
     const drone = createSphereDroneMode();
     const fly = createSphereFlyMode();
-    const dog = createSphereDog(world.grid, scene, world.spawnDir);
+    // The dog obeys the player's walk rules (walk-rules.ts), rocks and logs included.
+    const dog = createSphereDog(world.grid, scene, world.spawnDir, (f, u, v) => world.veg.obstacleAt(f, u, v));
 
     const controller = new SphereController(world.spawnDir, world.grid);
     // Rocks and logs live in the vegetation meshes, not the voxel grid: let the walker see them.

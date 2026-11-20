@@ -37,6 +37,7 @@
  */
 import { SphereVoxelGrid, FACE_RES, crossFaceUV, FN, FTU, FTV } from '../core/voxel';
 import { BLOCK_BY_ID } from '../core/blocks';
+import { clutterHeight, isBodyObstacle, type ObstacleMap } from './walk-rules';
 
 export interface Col {
     face: number;
@@ -53,6 +54,10 @@ export interface PathOptions {
     seaLayer?: number;
     /** Hard cap on expanded nodes per search; the search gives up (unreachable) beyond it. */
     maxNodes?: number;
+    /** Rock/log clutter map from the vegetation layer (veg.obstacleAt); see walk-rules.ts. */
+    obstacleAt?: ObstacleMap | null;
+    /** Clutter up to this height (world units) is passable — the walker jumps it. 0 = none. */
+    jumpClear?: number;
 }
 
 const N8: Array<[number, number]> = [
@@ -72,6 +77,8 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
     const maxDown = opts.maxDown ?? 4;
     const seaLayer = opts.seaLayer ?? 11;
     const maxNodes = opts.maxNodes ?? 20000;
+    const obstacleAt = opts.obstacleAt ?? null;
+    const jumpClear = opts.jumpClear ?? 0;
 
     // Search state, keyed by a compact node id. Sized to maxNodes; ids are
     // assigned on first touch through a Map from column key.
@@ -135,22 +142,32 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
         return Math.acos(c) * COLS_PER_RAD_MIN;
     }
 
-    /** Walkable ground layer of a column, or -1 if it can't be stood on. */
+    /**
+     * Walkable ground layer of a column, or -1 if it can't be stood on. Obstacles follow the
+     * player's rules (walk-rules.ts): body obstacles (trunks, bushes, cacti) block; clutter (tall
+     * shrub / yucca / scrub sprites, rocks, logs) blocks unless it's at most `jumpClear` high, in
+     * which case the walker jumps it (see clutterOf); small plants never block.
+     * Rivers/lakes the dog keeps out of, like the sea.
+     */
     function groundOf(f: number, u: number, v: number): number {
         const top = grid.columnTop(f, u, v);
         if (top <= seaLayer) return -1; // sea (or empty)
-        const b = BLOCK_BY_ID[grid.get(f, u, v, top)] as any;
-        // Trunks and bushes (solid foliage) are obstacles; rivers/lakes the dog keeps out of, like the sea.
-        if (b?.isTrunk || b?.isWater || b?.solid) return -1;
+        const b = BLOCK_BY_ID[grid.get(f, u, v, top)];
+        if (b?.isWater || isBodyObstacle(b)) return -1;
+        let gl = top;
         // Canopy over the column: stand on the ground beneath it, unless a trunk is in the way.
         if (b?.sway) {
-            const gl = grid.groundColumnTop(f, u, v);
+            gl = grid.groundColumnTop(f, u, v);
             if (gl <= seaLayer) return -1;
-            const above = BLOCK_BY_ID[grid.get(f, u, v, gl + 1)] as any;
-            if (above?.isTrunk) return -1;
-            return gl;
+            if (isBodyObstacle(BLOCK_BY_ID[grid.get(f, u, v, gl)]) || isBodyObstacle(BLOCK_BY_ID[grid.get(f, u, v, gl + 1)]))
+                return -1;
         }
-        return top;
+        return clutterHeight(grid, f, u, v, obstacleAt) > jumpClear ? -1 : gl;
+    }
+
+    /** Height of jumpable clutter at a column (0 = clear), for the walker's jump arc. */
+    function clutterOf(f: number, u: number, v: number): number {
+        return clutterHeight(grid, f, u, v, obstacleAt);
     }
 
     const _nb = [0, 0, 0];
@@ -227,6 +244,7 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
         },
         /** Walkable ground layer at a column, or -1 (sea / trunk). */
         groundOf,
+        clutterOf,
 
         /** Begin a new search; any search in progress is abandoned. */
         start(from: Col, to: Col) {
