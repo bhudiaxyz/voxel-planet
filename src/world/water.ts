@@ -35,7 +35,11 @@
  *   - Night: uNight dims the sea to blue-black with a faint sheen on crests (the shader is
  *     unlit; its colours are the daytime palette).
  *   - Geometry: SphereGeometry, 128 segments on 'high' else 64, FrontSide, depthWrite off,
- *     renderOrder 1, polygon offset against the terrain.
+ *     polygon offset against the terrain.
+ *   - Draw order: in the OPAQUE list (transparent: false) with explicit CustomBlending, at
+ *     renderOrder 1 — after the terrain (0), before the vegetation (2). Vegetation writes no
+ *     depth, so as a transparent material the sea drew after it and painted over every reed or
+ *     shrub standing in front of sea-level water (coasts, river mouths, sea-level ponds).
  *
  * Usage
  *   const w = createSphereWater(tier, shoreMap, foam); scene.add(w.mesh);  (world.ts, with the
@@ -44,12 +48,12 @@
  *   LIGHT palette colours, then main.ts writes uSunDir and uSunColor live from the day/night
  *   cycle and atmosphere (w.material.uniforms). w.planetUnis exposes the uniforms.
  *
- * See also: shore-map.ts (SHORE_GLSL, bakeShoreMap), world.ts, core/palette.ts (WATER, SKY,
+ * See also: distance-maps.ts (SHORE_GLSL, bakeShoreMap), world.ts, core/palette.ts (WATER, SKY,
  * LIGHT); DESIGN.md "8. Water".
  */
 
 import * as THREE from 'three';
-import { SHORE_GLSL } from './shore-map';
+import { SHORE_GLSL } from './distance-maps';
 import { WATER, SKY, LIGHT } from '../core/palette';
 import { PLANET_RADIUS } from '../core/voxel';
 

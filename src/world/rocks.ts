@@ -17,7 +17,9 @@
  *     treeline  frost-shattered shards, standing stones, scree, bare and pale
  *   - scatterBoulder makes one roll per column (BOULDER_P x detail x rockAt, x3 on bare stone),
  *     then builds a group of sunk, yawed boxes. Colours come from the theme's three stones,
- *     varied light/dark, mossy low down, bleached high up.
+ *     varied light/dark, mossy low down, bleached high up. It returns the group's extent
+ *     ({ h: top above ground, r: reach from the column centre }, or null) so the vegetation layer
+ *     can record it as a walker obstacle.
  *   - scatterPebble does the small stones (PEBBLE_P x rockAt), on the grass RNG stream so the
  *     grass layout is unchanged.
  *   - STONE_IDS lists bare ground that takes rocks but no grass: stone blocks and SNOW.

@@ -27,16 +27,26 @@
  *   - One shared MeshLambertMaterial (one program, one clock) with a vertex-shader wind sway
  *     along the surface; aDetail = (sway, phase). Phase >= HANGING marks vines, which first
  *     follow the voxel canopy's sway through the shared canopyWind uniforms (setCanopyWind).
- *     No depth write (avoids scratchy outlines); drawn at renderOrder 2.
+ *     No depth write (avoids scratchy outlines); drawn at renderOrder 2, after the terrain and the
+ *     sea (water.ts draws the sea in the opaque list at renderOrder 1, so it can't paint over a
+ *     plant standing in front of it).
+ *   - drawPlant draws the sprite plants (PLANT marker blocks from plants.ts) from their blocks'
+ *     colours, beside the other non-voxel drawers here.
+ *   - Walker obstacles: rocks (scatterBoulder returns its extent) and fallen logs at least
+ *     OBSTACLE_MIN_H (0.2) tall are recorded per column in obstacleH (OBSTACLE_STEP 0.05 units)
+ *     as patches build; big ones (reach > 1.2) also mark their 8 neighbours. obstacleAt() feeds
+ *     player/controller.ts. Never cleared: placement is deterministic, so rebuilds write the
+ *     same values.
  *
  * Usage
  *   const veg = createSphereVegetation(grid, seed, scene, density, windAmp, groundDetail, wet);
  *   world.ts creates it and attaches it with streaming.setListener(veg) BEFORE the first chunk
  *   fill; it is also in world.animated (update(dt) advances the wind clock). main.ts calls
  *   setCanopyWind(voxel uniforms) and uses bloomAt / lushAt (butterfly and firefly habitat).
- *   Imports PLANT from terrain.ts (re-exported from plants.ts).
+ *   Draws the sprite plants (drawPlant) from their marker blocks in plants.ts (PLANT), alongside
+ *   the other non-voxel ground cover here (grass, flowers, reed clumps, lilies, vines, logs).
  *
- * See also: veg-geom.ts, rocks.ts, plants.ts, wet-map.ts, terrain.ts, world.ts; DESIGN.md
+ * See also: veg-geom.ts, rocks.ts, plants.ts, distance-maps.ts, terrain.ts, world.ts; DESIGN.md
  * "7. Vegetation".
  */
 import * as THREE from 'three';
@@ -45,8 +55,8 @@ import { columnDir } from '../core/geoutil';
 import { PETAL_COLORS } from '../core/palette';
 import { BLOCK_BY_ID, BLOCKS, PATTERN } from '../core/blocks';
 import { makeRng, makeNoise3D } from '../core/rng';
-import { PLANT } from './terrain';
-import { QuadBuffer, _up, _ta, _tb, _base, _base2, box, boxYawed, root } from './veg-geom';
+import { QuadBuffer, _up, _ta, _tb, _base, _base2, box, boxYawed, root, tuft, type Rng } from './veg-geom';
+import { PLANT } from './plants';
 import { STONE_IDS, scatterBoulder, scatterPebble } from './rocks';
 
 const SEA_LAYER = 11;
@@ -75,7 +85,6 @@ const OBSTACLE_STEP = 0.05;
 const OBSTACLE_MIN_H = 0.2;
 const PATCHES_PER_EDGE = Math.ceil(FACE_RES / VEG_PATCH);
 
-type Rng = ReturnType<typeof makeRng>;
 
 /** Shared across every patch: one program, one uniform set, one wind clock. */
 /** Canopy wind uniforms from the voxel material, shared by reference (see setCanopyWind). */
@@ -91,9 +100,6 @@ const HANGING = 100;
 const _centre = new THREE.Vector3();
 const _dark = new THREE.Color();
 const _light = new THREE.Color();
-const _root = new THREE.Color();
-/** Blade root brightness relative to its authored base colour (contact shadow). */
-const ROOT_SHADE = 0.72;
 
 /**
  * Ground-cover plants recorded by the terrain step (grid.plants), each drawn
@@ -236,49 +242,7 @@ function makeVegMaterial(windAmp: number) {
     return { mat, uniforms };
 }
 
-/**
- * A crossed pair of blades rooted at `base`, standing along `up`.
- * `ox`/`oy` are tangent offsets for the root; `lean` tilts the tip.
- */
-function tuft(
-    buf: QuadBuffer,
-    base: THREE.Vector3,
-    up: THREE.Vector3,
-    w: number,
-    h: number,
-    dark: THREE.Color,
-    light: THREE.Color,
-    rot: number,
-    leanA: number,
-    leanB: number,
-    sway: number,
-    /** Added to the phase attribute only (e.g. HANGING marks vines); not to the facing. */
-    phaseTag = 0,
-) {
-    const hw = w * 0.5;
-    const ph = rot + phaseTag;
-    const c = Math.cos(rot),
-        s = Math.sin(rot);
-    // Contact shadow: the root sits in its own shade (the blades around it block
-    // the sky), so it is darker than the tip — grass reads rooted, not pasted on.
-    _root.copy(dark).multiplyScalar(ROOT_SHADE);
-    for (let k = 0; k < 2; k++) {
-        // Blade direction in the tangent plane; the second blade is perpendicular.
-        const bx = k === 0 ? c : -s,
-            by = k === 0 ? s : c;
-        const dx = (_ta.x * bx + _tb.x * by) * hw,
-            dy = (_ta.y * bx + _tb.y * by) * hw,
-            dz = (_ta.z * bx + _tb.z * by) * hw;
-        const tx = base.x + up.x * h + _ta.x * leanA + _tb.x * leanB,
-            ty = base.y + up.y * h + _ta.y * leanA + _tb.y * leanB,
-            tz = base.z + up.z * h + _ta.z * leanA + _tb.z * leanB;
-        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, _root, 0, ph);
-        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, ph);
-        buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, ph);
-        buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, ph);
-    }
-}
-
+/** Draw one sprite plant (`id` from grid.plants, see plants.ts PLANT) at a column centre. */
 function drawPlant(buf: QuadBuffer, centre: THREE.Vector3, rng: Rng, id: number) {
     const b = BLOCK_BY_ID[id] as any;
     _pLight.copy(b.topTint ?? b.top);
@@ -700,7 +664,7 @@ export function createSphereVegetation(
     windAmp = 0.1,
     /** Ground clutter multiplier (boulders, logs, mushrooms), 0 = none. */
     groundDetail = 1,
-    /** Distance-to-water per column (wet-map.ts); null = no waterside growth. */
+    /** Distance-to-water per column (distance-maps.ts); null = no waterside growth. */
     wet: Uint8Array | null = null,
 ) {
     const reedNoise = makeNoise3D(seed ^ 0x2eed);

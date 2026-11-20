@@ -33,7 +33,7 @@
  *   not in channels. Exports RIVER_WATER (registerBlock at module load, isWater: non-solid, so
  *   the player wades). Registration is top level so block ids stay deterministic.
  *
- * See also: terrain.ts, wet-map.ts, trees.ts (SNOW); DESIGN.md "4a. Fresh water".
+ * See also: terrain.ts, distance-maps.ts, trees.ts (SNOW); DESIGN.md "4a. Fresh water".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH, crossFaceUV } from '../core/voxel';

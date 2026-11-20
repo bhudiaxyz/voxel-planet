@@ -14,15 +14,21 @@
  *     is clamped to surface + EYE_HEIGHT.
  *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
  *     speed*dt/groundRadius (WALK_SPEED, or SPRINT_SPEED when sprinting).
- *   - Collision: blocked() decides whether a column can be entered — terrain more than MAX_STEP
- *     above the feet, trunks / bushes / cacti at body height, ground-cover sprites with an
- *     obstacleH (tall shrub, yucca, scrub) and rocks/logs from the vegetation layer
- *     (obstacleAt hook, wired by main.ts). Only small plants and flowers are walk-through.
- *     A blocked destination reverts the move (`dir` restored, speed 0); higher terrain is only
- *     climbed in MAX_STEP-sized terraces, and a jump clears low obstacles. Then keepClear() holds the eye CLEARANCE (0.3) from every
- *     neighbouring wall face (sides and corners, across cube seams), whatever the approach angle
- *     or frame rate, so the camera's near plane never clips a cliff or a river bank and you can't
- *     see through it. snapToDir() applies it too (teleports, landing from drone/fly).
+ *   - Collision: blocked(column) is the one rule for "can the walker stand here":
+ *       terrain more than MAX_STEP above the feet (cliff, terrace wall);
+ *       trunks, bushes (solid sway) and cacti at body height, measured where the feet would be
+ *       after the step; a bush or cactus as the column's ground (no walking onto it) unless
+ *       STAND_CLEAR above it; a solid overhang at head height (cliff lip, island underside);
+ *       sprite plants with an obstacleH (tall shrub, yucca, dry scrub) and rocks/logs from the
+ *       vegetation layer (obstacleAt hook, wired by main.ts) unless the feet clear their height.
+ *     Only small ground plants and flowers (grass, ferns, moss, tall grass, reeds, pebbles) are
+ *     walk-through. A blocked destination reverts the move (`dir` restored, speed 0); a jump
+ *     clears low obstacles.
+ *   - Clearance: keepClear() then holds the eye CLEARANCE (0.3) from every blocked neighbour's
+ *     face (4 sides, 4 corners, across cube seams), whatever the approach angle or frame rate,
+ *     so the camera's near plane (0.02, corners ~0.035) never clips a cliff, river bank or bush
+ *     and you can't see through it. The old one-step-ahead probe let a 45° approach reach 0.001.
+ *     snapToDir() applies it too.
  *   - Scratch vectors are module-level, so `pos` returns a shared vector: copy it if you keep it.
  *
  * Usage
@@ -35,7 +41,8 @@
  *
  *     controller.update(dt, fpCam.getWish(...), jumpEdge, world.grid, sprint);
  *
- * See also: fly.ts, drone.ts, src/render/fp-camera.ts; DESIGN.md "14. Player".
+ * See also: fly.ts, drone.ts, src/render/fp-camera.ts, core/voxel.ts (standTop),
+ * world/vegetation.ts (obstacleAt), scripts/check-walker.ts; DESIGN.md "14. Player".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, crossFaceUV } from '../core/voxel';

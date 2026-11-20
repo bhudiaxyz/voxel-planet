@@ -18,11 +18,14 @@
  *     streams the planet. Then: FPCamera, Atmosphere, DayNight (themed from the active palette),
  *     optional far field (ts.farField) and FOLIAGE_DETAIL define (ts.foliageDetail), stored wind
  *     strength from localStorage, particles/birds/clouds/critters (seeded from SEED), map, the
- *     three movement modes (SphereController walking, drone, fly) and the dog.
+ *     three movement modes (SphereController walking, drone, fly) and the dog. The walker gets
+ *     the vegetation's rock/log map (controller.obstacleAt = veg.obstacleAt) so it can't walk
+ *     through boulders, which aren't in the voxel grid.
  *   - Modes: cycleMode (F / touch) goes walk -> drone -> fly -> walk; the drone hands its in-air
- *     position to fly, fly exits by snapping the walker to its direction; land (L) lands from
- *     either air mode. teleportTo() (Locations panel) steps a few columns off the landmark,
- *     faces it, keeps the current mode and calls streaming.fillNear().
+ *     position to fly. Landing (L, or fly -> walk) snaps the walker down from the flyer's own
+ *     height (snapToDir(dir, grid, fromRadius)), so you land on a floating island when over one.
+ *     teleportTo() (Locations panel) steps a few columns off the landmark, faces it, keeps the
+ *     current mode, snaps to the planet ground (no fromRadius) and calls streaming.fillNear().
  *   - Other keys: M map, G panels, X dog sit, B block outlines, [ ] step time of day (these
  *     last three need pointer lock or touch). Touch buttons call the same actions.
  *   - Palette live-switch: settings.onPaletteChange calls setVoxelPalette, then copies SKY/LIGHT/
@@ -80,7 +83,7 @@ import { createParticles } from './fx/particles';
 import { createBirds } from './fx/birds';
 import { createClouds } from './fx/clouds';
 import { createCritters } from './fx/critters';
-import { wetIdx, WET_MAX } from './world/wet-map';
+import { wetIdx, WET_MAX } from './world/distance-maps';
 import { dirToFaceUV } from './core/geoutil';
 import { createSphereMap } from './render/map';
 import { createSphereDroneMode } from './player/drone';

@@ -19,7 +19,7 @@ All paths below are relative to `src/` unless noted. Palette colours are stored 
 - [5. Chunk streaming and meshing (core/voxel.ts)](#5-chunk-streaming-and-meshing-corevoxelts)
 - [6. Voxel material shader (core/voxel.ts)](#6-voxel-material-shader-corevoxelts)
 - [7. Vegetation (world/vegetation.ts)](#7-vegetation-worldvegetationts)
-- [8. Water (world/water.ts, world/shore-map.ts)](#8-water-worldwaterts-worldshore-mapts)
+- [8. Water (world/water.ts, world/distance-maps.ts)](#8-water-worldwaterts-worlddistance-mapsts)
 - [9. Sky and lighting](#9-sky-and-lighting)
 - [10. Post-processing (render/postfx.ts)](#10-post-processing-renderpostfxts)
 - [11. Palette system (core/palette.ts)](#11-palette-system-corepalettets)
@@ -41,7 +41,7 @@ All paths below are relative to `src/` unless noted. Palette colours are stored 
       │ ChunkListener                                    ▼
       ▼                                   scene ─► SceneDepth ─► Atmosphere ─► Bloom ─► Rays ─► Grade ─► AA
  vegetation.ts (lazy patches)               ▲       (postfx.ts: fog, mist, AO, cloud shadows, sky blend)
- water.ts (sea sphere) ◄─ shore-map.ts ─────┘
+ water.ts (sea sphere) ◄─ distance-maps.ts ─┘
  fx/ (clouds, birds, particles, critters) · player/ (walk, drone, fly, dog) · ui/
 ```
 
@@ -97,14 +97,13 @@ src/
     world.ts                  buildSphereWorld: generation order, streamer, vegetation, water
     terrain.ts                Elevation, terracing, surface/rock, desert, scatter pass (drives placement)
     trees.ts                  Bark/leaf blocks, altitude zones (zoneOf, ZONE), species mixes, tree builders
-    plants.ts                 Ground-cover/shrub/cactus blocks, GROUND table, bushes, cacti, dead trunks, PLANT
+    plants.ts                 Plant blocks: voxel bushes/shrubs/cacti and the sprite-plant marker blocks (PLANT, obstacleH); GROUND table; builders
     rivers.ts                 Fresh water: rivers, streams, lakes, ponds carved into the land (RIVER_WATER)
-    wet-map.ts                Distance-to-water per column (critters, waterside plants)
-    vegetation.ts             Lazy per-patch grass/flowers/plants/logs/mushrooms meshes
+    vegetation.ts             Lazy per-patch meshes of everything non-voxel on the ground: grass, flowers, sprite plants (drawPlant), reeds, lilies, vines, logs, mushrooms, rocks; walker obstacle map
     rocks.ts                  Boulders, scree, slabs, tors, standing stones, pebbles by altitude zone
-    veg-geom.ts               Shared detail-mesh primitives: QuadBuffer, tangent frame, box/boxYawed/root
+    veg-geom.ts               Shared detail-mesh primitives: QuadBuffer, tangent frame, box/boxYawed/root, tuft, Rng
     water.ts                  Sea sphere shader
-    shore-map.ts              Distance-to-land atlas bake + SHORE_GLSL
+    distance-maps.ts          Per-column distance fields baked once: wet (to water; plants, critters) + shore (sea to land; atlas + SHORE_GLSL)
     landmarks.ts              Eleven landmark kinds, sky islands, names, site picker
   player/
     controller.ts             Walking physics on the sphere (SphereController)
@@ -152,11 +151,11 @@ The planet is a cube projected onto a sphere ("cube-sphere"). Each of the six cu
 | `SHELL_DEPTH` | 96 | Layers per column |
 | `CHUNK` | 16 | Columns per chunk edge (25 x 25 chunks per face, 3,750 total) |
 
-A voxel at `(face, u, v, layer)` occupies radius `PLANET_RADIUS + layer` to `+ layer + 1`. Layer 11 is the sea layer (`SEA_LAYER = 11`, redefined in terrain, world, water, shore-map, landmarks, vegetation, map, and main); the sea surface sphere is at radius `PLANET_RADIUS + 11 - 0.5`.
+A voxel at `(face, u, v, layer)` occupies radius `PLANET_RADIUS + layer` to `+ layer + 1`. Layer 11 is the sea layer (`SEA_LAYER = 11`, redefined in terrain, world, water, distance-maps, landmarks, vegetation, map, and main); the sea surface sphere is at radius `PLANET_RADIUS + 11 - 0.5`.
 
 ### Face codes and bases
 
-Face codes: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z. `basisFromCode(code, normal, tangentU, tangentV)` in `geoutil.ts` produces the face basis: normal is +/- the axis `code >> 1`; `tangentU` is (0,1,0) except for the Y faces where it is (1,0,0); `tangentV = normal x tangentU`. `voxel.ts` exports the same basis as precomputed tables, `FN`, `FTU` and `FTV` (one row per face). They are the only copy in TypeScript: the far-field builder in `voxel.ts` and the dog's pathfinder (`player/path.ts`) use them rather than keeping their own. They must agree with `basisFromCode`, which computes the basis instead of storing it, and with the GLSL copy in `shore-map.ts`.
+Face codes: 0 = +X, 1 = -X, 2 = +Y, 3 = -Y, 4 = +Z, 5 = -Z. `basisFromCode(code, normal, tangentU, tangentV)` in `geoutil.ts` produces the face basis: normal is +/- the axis `code >> 1`; `tangentU` is (0,1,0) except for the Y faces where it is (1,0,0); `tangentV = normal x tangentU`. `voxel.ts` exports the same basis as precomputed tables, `FN`, `FTU` and `FTV` (one row per face). They are the only copy in TypeScript: the far-field builder in `voxel.ts` and the dog's pathfinder (`player/path.ts`) use them rather than keeping their own. They must agree with `basisFromCode`, which computes the basis instead of storing it, and with the GLSL copy in `distance-maps.ts` (SHORE_GLSL).
 
 A column centre direction is `normalize(n + tu*(2(u+0.5)/FACE_RES - 1) + tv*(2(v+0.5)/FACE_RES - 1))` (`columnDir`). `dirToFaceUV(dir, faceRes)` inverts it: dominant axis picks the face, then `u, v` are `floor(((d.tu/d.n + 1) * faceRes) / 2)`, clamped to `[0, faceRes)`.
 
@@ -172,7 +171,8 @@ A column centre direction is `normalize(n + tu*(2(u+0.5)/FACE_RES - 1) + tv*(2(v
 | `isSolidGlobal` | Like `isSolid`, but out-of-range `u/v` is translated through `crossFaceUV` (used by the mesher for neighbour lookups and AO across seams) |
 | `columnTop` | `surfaceLayer`, or -1 out of range. Includes trunks and leaves |
 | `groundColumnTop` | Walkable ground connected to the planet. Walks **up** from layer 0 through contiguous blocks to the first air gap (so floating islands above are ignored), then down past `sway`, `isTrunk` and `isWater` blocks. Walking down from the column top instead read a sky island's grass as ground and snapped the player up onto it. The player wades through river water onto the bed |
-| `surfaceRadius` | `PLANET_RADIUS + groundColumnTop + 1` (just `PLANET_RADIUS` if the column is empty). Used by the player, dog, critters |
+| `standTop(face, u, v, maxLayer)` | Highest standable layer at or **below** `maxLayer`: the first block going down that isn't air, leaves (sway, not solid), a trunk or water. Unlike `groundColumnTop` it can return a floating island's top: the caller picks the height to look down from. The walker looks from its own feet (so under an island it finds the terrain, on one it finds the island); landing looks from the flyer's height |
+| `surfaceRadius` | `PLANET_RADIUS + groundColumnTop + 1` (just `PLANET_RADIUS` if the column is empty): the planet-connected ground. Used by the dog, critters, teleports and the walker's spawn; the walker itself uses `standTop` |
 
 ### `crossFaceUV(face, u, v)`
 
@@ -264,7 +264,7 @@ Boot labels are numbered from `BOOT_STEPS` in `main.ts` ("Step i of n: label"); 
 | 0.90 | adding ocean | `bakeShoreMap` (skipped on `very-low`) then `createSphereWater` |
 | 1.0 | ready | |
 
-The result (`SphereWorld`) is `{ grid, streaming, group, spawnDir, animated, sphereWater, landmarks, wet, veg }`. `wet` is the distance-to-water map (`world/wet-map.ts`, baked after landmarks and before the streamer so vegetation can use it); `veg` is exposed so `main.ts` can hand its `bloomAt`/`lushAt` fields to the critters. `animated` holds the vegetation object, whose `update(dt)` advances the wind clock (main.ts calls it every frame). `spawnDir` is the unit direction of the spawn column returned by terrain generation.
+The result (`SphereWorld`) is `{ grid, streaming, group, spawnDir, animated, sphereWater, landmarks, wet, veg }`. `wet` is the distance-to-water map (`world/distance-maps.ts` `bakeWetMap`, baked after landmarks and before the streamer so vegetation can use it); `veg` is exposed so `main.ts` can hand its `bloomAt`/`lushAt` fields to the critters. `animated` holds the vegetation object, whose `update(dt)` advances the wind clock (main.ts calls it every frame). `spawnDir` is the unit direction of the spawn column returned by terrain generation.
 
 Seed handling (`main.ts`): `?seed=<word>` overrides the default `currentSeedWord`; `hashSeedWord` (31-multiplier hash, modulo 100000) gives the numeric `SEED`; `pushSeedUrl` writes the word back with `history.replaceState`. The settings panel's seed field and `genSeedWord` use `pushSeedUrl` then reload.
 
@@ -357,7 +357,7 @@ Ground-cover and shrub blocks are registered at module load with `registerBlock`
 
 ### Cacti (`plantCactus`)
 
-Blocks: `CACTUS` (`PATTERN.CACTUS`, ribbed), `CACTUS_CROWN` (pale woolly tip), `CACTUS_FLOWER` / `CACTUS_FLOWER_PINK`, `CACTUS_FRUIT`; all `isTrunk` (solid obstacles for player and dog). Kinds, picked from `[saguaro x3, barrel x2, pear x2, organ]`, each only on level ground:
+Blocks: `CACTUS` (`PATTERN.CACTUS`, ribbed), `CACTUS_CROWN` (pale woolly tip), `CACTUS_FLOWER` / `CACTUS_FLOWER_PINK`, `CACTUS_FRUIT`; all `isTrunk` (solid obstacles for the dog; the walker blocks on `PATTERN.CACTUS`, see section 14). Kinds, picked from `[saguaro x3, barrel x2, pear x2, organ]`, each only on level ground:
 
 | Kind | Shape |
 | --- | --- |
@@ -628,7 +628,7 @@ Two noise fields (`makeNoise3D` seeded `seed ^ 0x51ed` and `seed ^ 0xf10e`, samp
 
 Flower colours are drawn from `PETAL_COLORS` (the theme's petal colours), not leaves: canopies are mostly green and green flowers would vanish. Grass blade colours derive from the column's block: dark = `topTint x 0.86`, light = `top x 1.08`. Flowers are a stem tuft plus a small coloured box head that nods with the wind.
 
-### Plant sprites (`drawPlant`)
+### Plant sprites (`drawPlant`, blocks in `plants.ts`)
 
 Colour: tip = block `topTint ?? top`; base = `side` lerped 45% toward the tip (the raw side colour is authored for a shaded cube face and would read as a black stem). Shapes by id:
 
@@ -651,6 +651,10 @@ Colour: tip = block `topTint ?? top`; base = `side` lerped 45% toward the tip (t
 | Rocks (`BOULDER_P`, `rocks.ts`) | 0.0045 x detail x `rockAt(rise)`, x3 on bare stone | Shape, size and weathering by altitude zone (see Rocks below) |
 | Fallen logs (`LOG_P`) | 0.006 x detail, only `nearTrunk` | Long bark box (`TRUNK`/`TRUNK_PALE` side colour) with a moss strip |
 | Mushrooms (`MUSHROOM_P`) | 0.05 x detail; x1 `nearTrunk`, x0.25 in open lush meadow (`lush > 0.7`), else 0 | 2-4 stems with caps from `PETAL_COLORS[0,2,3]` and `STONE_WARM` |
+
+### Walker obstacles
+
+Rocks and logs are drawn into the patch meshes, not the voxel grid, so the walker couldn't see them. While a patch builds, `scatterBoulder` returns the group's extent (`{ h: top above ground, r: reach }`) and a fallen log reports its thickness; anything at least `OBSTACLE_MIN_H = 0.2` tall is recorded in `obstacleH`, one byte per column in `OBSTACLE_STEP = 0.05` units (960 KB). Groups reaching past 1.2 units (erratics, tors, logs) also mark the 8 neighbouring columns. `veg.obstacleAt(face, u, v)` returns the height; `main.ts` wires it to `controller.obstacleAt`. Patches always exist around the player (`LISTEN_RADIUS`), and placement is deterministic, so the map is never cleared: a rebuilt patch writes the same values.
 
 ### Rocks (`world/rocks.ts`)
 
@@ -688,7 +692,7 @@ Every group draws a size `S = WEATHER.size x 0.6-1.3`, with 8% giants at 1.6x. E
 
 ### Waterside, canopy floor and hanging growth
 
-`createSphereVegetation(..., wet)` takes the distance-to-water map (`world/wet-map.ts`: 4-way BFS per face from every sea or fresh-water column, capped at `WET_MAX = 4`, one byte per column).
+`createSphereVegetation(..., wet)` takes the distance-to-water map (`world/distance-maps.ts` `bakeWetMap`: 4-way BFS per face from every sea or fresh-water column, capped at `WET_MAX = 4`, one byte per column).
 
 | Item | Where | Drawn |
 | --- | --- | --- |
@@ -707,7 +711,7 @@ Every group draws a size `S = WEATHER.size x 0.6-1.3`, with 8% giants at 1.6x. E
 
 ---
 
-## 8. Water (`world/water.ts`, `world/shore-map.ts`)
+## 8. Water (`world/water.ts`, `world/distance-maps.ts`)
 
 ### Shore-distance atlas (`bakeShoreMap`)
 
@@ -721,7 +725,7 @@ Why it exists: the water shader needs depth and a shore line without reading sce
 
 ### Sea sphere (`createSphereWater(tier, shoreMap, foam)`)
 
-A `SphereGeometry` at radius `PLANET_RADIUS + 11 - 0.5` (just under layer-11 voxel tops, to avoid z-fighting with shoreline voxel sides), subdivision `sub*2 x sub` with `sub = 128` on `high` and 64 otherwise (the tier field `waterSubdivision` is not used by this function). With no displacement the mesh is only a carrier for per-pixel shading. Transparent, `depthWrite: false`, polygon offset (1, 1), `renderOrder 1`, fog on.
+A `SphereGeometry` at radius `PLANET_RADIUS + 11 - 0.5` (just under layer-11 voxel tops, to avoid z-fighting with shoreline voxel sides), subdivision `sub*2 x sub` with `sub = 128` on `high` and 64 otherwise (the tier field `waterSubdivision` is not used by this function). With no displacement the mesh is only a carrier for per-pixel shading. Blended, `depthWrite: false`, polygon offset (1, 1), fog on. **Drawn in the opaque list** (`transparent: false` with `CustomBlending` SrcAlpha / OneMinusSrcAlpha, since three forces no blending for `NormalBlending` on non-transparent materials) at `renderOrder 1`: after the terrain (0) and before the vegetation (2). Vegetation writes no depth, so as a transparent material the sea drew after it and painted over every reed or shrub standing in front of sea-level water (coasts, river mouths, ponds carved to sea level). Upland rivers are opaque voxels and never had the problem.
 
 - Waves: **per-pixel normals, no vertex displacement.** `waveGrad(p, t)` returns the world-space gradient of four 3D plane waves (amplitudes 0.21/0.14/0.06/0.025, wave numbers 0.34/0.51/1.07/1.93, directions spread over 3D), sampled at the fragment's world position, so the field is seamless everywhere on the sphere. The normal is `normalize(up - tangential(grad))`. The sphere's vertices are ~17 units apart, longer than the waves, so the old vertex displacement only aliased into facets; and the old `vWorld.xz` projection streaked into vertical lines along the equator. Far from the camera (250-900 units) the gradient is calmed by 60% so sub-pixel waves don't sparkle.
 - Detail (`WATER_DETAIL`, every tier except `low`/`very-low`): `rippleGrad` adds three fine wind ripples, faded out between 30 and 120 units before they alias; a broad sun path (`pow(N.H, 14) * 0.12`) on the swell; and glitter, cells that flash only near the mirror angle (faded out by 150 units).
@@ -825,7 +829,7 @@ Two modules: **`core/blocks.ts`** says what each block *is* (ids, `BlockDef` fie
 
 Atmosphere and block colours are exported as mutable objects that are zero-initialised and filled by `setVoxelPalette`: `SKY` (`zenith, horizon, ground, haze, sunTint`), `LIGHT` (sun/sky/ground/fill colours and intensities, `sunDir`), `FOG` (`color` is the same object as `SKY.haze`; `near 74, far 248, heightTop 30, heightFalloff 0.055, density 0.92`; only some fields are consumed), `WATER` (`shoal/shallow/deep` palette-driven; `warm, sheen, edge` constant; `level 24.35`, `opacity 0.88`, `extinction`, `density 0.23`, `saturation 1.2`, `cellTone`, `caustic 0.6`, `reflect 0.85`), `PETAL_COLORS` (6 slots), `MOTE_COLORS` (4 constant), `GRADE`. Systems read these objects every frame or at build time; they must not copy values at import time.
 
-`BLOCKS` (`core/blocks.ts`) is the block library (ids: AIR 0; `GRASS 1, GRASS_LIGHT 2, GRASS_DEEP 3, SOIL 4, SAND 5, GRASS_STONE 6, GRASS_LIGHT_STONE 7, GRASS_DEEP_STONE 8, STONE 10, STONE_PALE 11, STONE_WARM 12, PATH 13, PLANK 20, PLANK_PALE 21, BEAM 22, TRUNK 23, TRUNK_PALE 24, LEAF_PINK..LEAF_ROSE 30-35, LANTERN 40, CRYSTAL 41, CLOTH_PINK 42, CLOTH_CREAM 43, ROOF_ROSE 44, ROOF_LILAC 45`). Dynamic blocks are added with `registerBlock(name, def)` (ids 60..250, `Uint8`). `BLOCK_BY_ID` is the id lookup. Every field is declared and documented on the `BlockDef` interface: `sway` (leaves; the sway bit), `solid` (with sway: a bush obstacle), `isTrunk` (solid obstacle for player/dog), `isWater`, `emissive` (glow buffer), `grassCap`, `stoneSubstrate`, `lightEdge`, `fringe`/`fringeColor`, `topPattern`, `topTint`, `groundMat`, `rockStyle`, `barkStyle`, `mapColor`. Ground blocks carry a `groundMat`: GRASS* -> grass, SOIL -> soil, SAND -> sand, STONE/STONE_WARM -> stone, STONE_PALE -> pale stone, PATH -> path, DEADWOOD (trees.ts) -> deadwood.
+`BLOCKS` (`core/blocks.ts`) is the block library (ids: AIR 0; `GRASS 1, GRASS_LIGHT 2, GRASS_DEEP 3, SOIL 4, SAND 5, GRASS_STONE 6, GRASS_LIGHT_STONE 7, GRASS_DEEP_STONE 8, STONE 10, STONE_PALE 11, STONE_WARM 12, PATH 13, PLANK 20, PLANK_PALE 21, BEAM 22, TRUNK 23, TRUNK_PALE 24, LEAF_PINK..LEAF_ROSE 30-35, LANTERN 40, CRYSTAL 41, CLOTH_PINK 42, CLOTH_CREAM 43, ROOF_ROSE 44, ROOF_LILAC 45`). Dynamic blocks are added with `registerBlock(name, def)` (ids 60..250, `Uint8`). `BLOCK_BY_ID` is the id lookup. Every field is declared and documented on the `BlockDef` interface: `sway` (leaves; the sway bit), `solid` (with sway: a bush obstacle), `isTrunk` (obstacle for walker and dog), `isWater`, `emissive` (glow buffer), `grassCap`, `stoneSubstrate`, `lightEdge`, `fringe`/`fringeColor`, `topPattern`, `topTint`, `groundMat`, `rockStyle`, `barkStyle`, `obstacleH` (sprite plants the walker can't pass), `mapColor`. Ground blocks carry a `groundMat`: GRASS* -> grass, SOIL -> soil, SAND -> sand, STONE/STONE_WARM -> stone, STONE_PALE -> pale stone, PATH -> path, DEADWOOD (trees.ts) -> deadwood.
 
 ### `VoxelPalette`
 
@@ -1010,7 +1014,29 @@ State: `dir` (unit direction from centre), `groundRadius` (eye radius), `vertica
 | `EYE_HEIGHT` | 1.75 |
 | `MAX_STEP` | 1.1 |
 
-Per update: look up the column under `dir`; `surfaceR = grid.surfaceRadius` (ground, ignoring leaves and trunks' tops); grounded when altitude above surface <= 0.05; jump sets vertical velocity; gravity applies when airborne; the radius is clamped to the surface. Horizontal: `wishDir` is projected onto the tangent plane, advanced as an arc step `speed*dt/groundRadius`, then two probes are checked: the destination column and one further step ahead (a standoff that keeps the camera a column away from walls to avoid near-plane clipping). If either surface exceeds `eye - EYE_HEIGHT + MAX_STEP`, the move is reverted and `speed` set to 0. Trunks and leaves are not in `surfaceRadius`, so the player walks through leaves; trunks are solid only for the dog's pathfinder (there is no trunk collision for the player controller itself beyond `groundColumnTop` ignoring them). `snapToDir` teleports to a direction and snaps to the surface.
+| `CLEARANCE` | 0.3 (eye to any blocked neighbour's face) |
+| `STAND_CLEAR` | 2.2 (feet above a bush/cactus top to pass over it) |
+
+Per update: the surface under `dir` is `standR` = `grid.standTop` from the feet + `MAX_STEP` down. Grounded when within 0.05 of it; jump sets vertical velocity; gravity applies when airborne; the radius is clamped to the surface. Because the surface is looked up from the feet, **floating islands are walkable**: on one you stand on its top, walking off its edge drops you, and walking beneath one still finds the terrain.
+
+Horizontal: `wishDir` is projected onto the tangent plane and advanced as an arc step `speed*dt/groundRadius`. The destination column must pass `blocked()`, otherwise the move is reverted and `speed` set to 0.
+
+**`blocked(column)`, the one rule for "can the walker stand here"** (used by moving and by the clearance below):
+
+| Blocks | Rule |
+| --- | --- |
+| Cliffs, terrace walls | surface more than `MAX_STEP` above the feet |
+| Tree and dead trunks, bushes and shrubs (solid sway voxels), cacti | any at body height (feet layer and the one above), measured where the feet *will be* after the step |
+| A bush or cactus as the column's ground | blocks unless the feet are `STAND_CLEAR` above it: no stepping out onto a bush top a terrace down |
+| Overhangs | any solid block at head height (cliff lip, island underside) |
+| Tall shrub, yucca, dry scrub (sprite plants) | their block's `obstacleH`, unless the feet are above it (a jump clears scrub) |
+| Boulders, tors, standing stones, logs | the vegetation layer's per-column obstacle height (`obstacleAt`, see section 7), same jump rule |
+
+Walk-through: only small ground plants and flowers: grass, flowers, ferns, moss, lichen, tall grass, reeds, mushrooms, pebbles, lily pads, low cobbles and slabs (under `OBSTACLE_MIN_H = 0.2`). Reeds are deliberately walk-through so river banks stay reachable. Obstacles are column-granular, so a boulder fills its ~1.8-unit column.
+
+**Clearance (`keepClear`).** After moving, the eye is clamped inside its column so it stays `CLEARANCE` from the face of every blocked neighbour: 4 sides, then 4 corners, in the face's continuous column coordinates, with neighbours across cube seams via `crossFaceUV`. The camera's near plane is 0.02 with frustum corners ~0.035 from the eye, so closer than that a wall is clipped and you see through it. The previous rule (block if the column one *step ahead* is a wall) depended on approach angle and frame rate: a 45° approach reached 0.001 from a cliff at any frame rate, which is how cliffs and river banks became see-through. Measured now: >= 0.315 at every angle and rate.
+
+`snapToDir(dir, grid, fromRadius?)` places the walker: with `fromRadius` (leaving drone or fly) it stands on `standTop` below that height, so landing over a floating island lands **on** it; without (teleports, spawn) it uses the planet-connected ground. `scripts/check-walker.ts` guards clearance, obstacles and island landing.
 
 ### Drone (`player/drone.ts`)
 
@@ -1022,7 +1048,7 @@ Per update: look up the column under `dir`; `surfaceR = grid.surfaceRadius` (gro
 
 ### Mode cycling and handoff (`main.ts`)
 
-`cycleMode()` (F / touch cycle button): fly -> walk (`exitFly`), drone -> fly, walk -> drone. `land()` (L / touch land): drone -> `beginLanding` (completes inside `drone.update`, then the controller snaps to `drone.dir` and pointer lock is re-requested); fly -> `exitFly` (immediate: `controller.snapToDir(fly.dir)`). Drone -> fly preserves the in-air position (`fly.enter(drone.dir, drone.altitude + PLANET_RADIUS)`) rather than snapping to the ground first. While airborne the streamer, map and critters follow the active mode's `dir`.
+`cycleMode()` (F / touch cycle button): fly -> walk (`exitFly`), drone -> fly, walk -> drone. `land()` (L / touch land): drone -> `beginLanding` (descends to `columnTop`, which includes an island or canopy top, then the controller snaps down from the drone's height: `snapToDir(drone.dir, grid, PLANET_RADIUS + altitude + 1)`, and pointer lock is re-requested); fly -> `exitFly` (immediate: `controller.snapToDir(fly.dir, grid, fly.groundRadius)`). Both land on a floating island when over one; over a tree you drop through the canopy (leaves aren't standable) to the ground. Drone -> fly preserves the in-air position (`fly.enter(drone.dir, drone.altitude + PLANET_RADIUS)`) rather than snapping to the ground first. While airborne the streamer, map and critters follow the active mode's `dir`.
 
 ---
 
@@ -1138,7 +1164,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 | `build` | `tsc --noEmit && vite build` | Typecheck then production bundle (`target es2020`, `three` split into its own chunk) |
 | `typecheck` | `tsc --noEmit` | |
 | `preview` | `vite preview --port 5161` | |
-| `check` | eight node scripts (below) | Sanity checks |
+| `check` | nine node scripts (below) | Sanity checks |
 | `format` | `prettier --write "src/**/*.{ts,css}" "scripts/**/*.ts" vite.config.ts index.html` | Prettier config: 4-space tabs, single quotes, trailing commas, 120 columns |
 
 `npm run check` runs, in order:
@@ -1150,7 +1176,8 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 5. `check-rivers.ts`: generates seed 1337; asserts at least 2,000 fresh-water columns and that no water column's top is above a dry neighbour's ground (the "carved, never floating" rule).
 6. `check-islands.ts`: under all ten sky islands the walkable ground is the terrain, not the island.
 7. `check-names.ts`: name pools cover every kind, no shared names, and every landmark name is distinct.
-8. `node scripts/check-sky-frame.ts`: JS replica of `_toSky` maps `up` to +Y and keeps horizontal directions on the horizon; also greps `sky.ts` for the exact axis line so a shader change forces an update here.
+8. `check-walker.ts`: on seed 1337, the walker keeps >= 0.1 from cliff faces at 60 Hz / 45°, 240 Hz / 45° and 144 Hz / 8°; bushes and trunks block while small plants don't; landing from above stands on all ten sky islands, and a teleport under one stays on the terrain.
+9. `node scripts/check-sky-frame.ts`: JS replica of `_toSky` maps `up` to +Y and keeps horizontal directions on the horizon; also greps `sky.ts` for the exact axis line so a shader change forces an update here.
 
 `scripts/ts-resolve.mjs` registers a `node:module` resolve hook that retries extensionless relative specifiers (`'./palette'`, as Vite allows) with `.ts`. `check-dog-path.ts`, `check-trees.ts`, `check-rivers.ts`, `check-islands.ts` and `check-names.ts` need it because it imports `src/core/voxel.ts` and `src/player/path.ts`, which import siblings without extensions; the other checks import files whose own imports are fully resolvable (or only external modules). Deployment: `.github/workflows/deploy-pages.yml` builds with Node 20 and publishes to GitHub Pages on push to `main`.
 
@@ -1171,6 +1198,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 - The bloom pass is constructed with hard-coded `0.22 / 0.9 / 1.25` but `onPaletteChange` overwrites them with `GRADE.bloom` values after any palette switch.
 - Tier fields `waterSubdivision` and (above 300) `particleCount` are declared but do not drive geometry: the sea sphere uses 128/64 segments by tier name (it is only a carrier for per-pixel waves now), and particles are capped at 300 in `main.ts`.
 - The world-space sun arc (`sunDir`) is not in phase with the clock keyframes: `sunDir.y` is ~0.96 at 06:00 and negative from ~11:30. Lighting that reads `sunDir.y` (`uSunAmbient`, the haze sun glow, the crepuscular visibility test) therefore disagrees with the sky's time of day; the snow glow uses the keyframed intensity to avoid it. Re-phasing the arc (`a = (t - 0.25) * 2pi`) would fix all of them but changes every lighting angle.
+- The dog's pathfinder still uses the planet-connected ground and isn't told about rocks: it can't follow you onto a floating island (it reappears at heel when you come back down), and it walks through boulders.
 - `low` tier: Chrome on Windows logs two HLSL warnings from three.js's own `FXAAShader` (`gradient instruction used in a loop`, `potentially uninitialized variable (f_ApplyFXAA)`). Harmless, and not from this project's shaders.
 - `WATER.level` (24.35) and `FOG.near/far/...` are legacy constants from the flat world; the sea level used everywhere is layer 11.
 - The default `LIGHT.sunDir` in `palette.ts` is only an initial value; `DayNight` overwrites it through uniforms each frame.

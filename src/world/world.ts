@@ -11,7 +11,7 @@
  *   buildSphereWorld, in order (yielding a frame between steps so the loading bar paints):
  *   1. generateSphereTerrain (terrain.ts; includes rivers, trees, plants) -> grid + spawn.
  *   2. buildSphereLandmarks (landmarks.ts), after terrain so structures overwrite trees.
- *   3. bakeWetMap (wet-map.ts) over the final grid; handed to vegetation and returned.
+ *   3. bakeWetMap (distance-maps.ts) over the final grid; handed to vegetation and returned.
  *   4. createSphereChunkStreamer (core/voxel.ts) with loadRadius, edges and the tier's
  *      buildBudgetMs (per-frame meshing budget).
  *   5. createSphereVegetation, attached with streaming.setListener BEFORE the first fill, so
@@ -34,11 +34,10 @@ import { createSphereChunkStreamer, NEAR_FILL, CHUNK_ANGLE } from '../core/voxel
 import { makeRng } from '../core/rng';
 import { SphereVoxelGrid, FACE_RES } from '../core/voxel';
 import { generateSphereTerrain } from './terrain';
-import { bakeWetMap } from './wet-map';
+import { bakeWetMap, bakeShoreMap } from './distance-maps';
 import { basisFromCode } from '../core/geoutil';
 import { createSphereWater } from './water';
 import { createSphereVegetation } from './vegetation';
-import { bakeShoreMap } from './shore-map';
 
 import { buildSphereLandmarks, LandmarkRecord } from './landmarks';
 
@@ -54,7 +53,7 @@ export interface SphereWorld {
     animated: any[];
     sphereWater: ReturnType<typeof createSphereWater>;
     landmarks: LandmarkRecord[];
-    /** Distance to water per column (see wet-map.ts). */
+    /** Distance to water per column (see distance-maps.ts). */
     wet: Uint8Array;
     veg: ReturnType<typeof createSphereVegetation>;
 }

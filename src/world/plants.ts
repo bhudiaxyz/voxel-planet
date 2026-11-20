@@ -12,8 +12,10 @@
  *     load order (60..250), so registration stays at top level and deterministic. Bushes
  *     (shrub(): sway + solid leafy blocks; the BUSH_* and SCRUB blocks are patched to the same
  *     with Object.assign) are voxel blobs. FERN, FERN_RED, MOSS_THICK, LICHEN_PALE, SHRUB_TALL,
- *     GRASS_TALL, REED, SCRUB_DRY and YUCCA are the PLANT kinds: one marker block id stored in
- *     the grid's plant layer and drawn as sprites by vegetation.ts (see plantSingle).
+ *     GRASS_TALL, REED, SCRUB_DRY and YUCCA are the PLANT kinds (sprite plants): one marker
+ *     block id stored in the grid's plant layer (plantSingle) and drawn as sprites by
+ *     vegetation.ts drawPlant from the block's colours. obstacleH on SHRUB_TALL, YUCCA and
+ *     SCRUB_DRY makes them walker obstacles (player/controller.ts); the rest are walk-through.
  *   - GROUND[zone]: per altitude zone (trees.ts Zone) the chance per grass column of a bush,
  *     fern and tall plant, and which blocks they draw from (lush ferns/grass at the coast,
  *     flowering bushes in the lowlands, moss and scrub among the rocks up high).
@@ -23,8 +25,11 @@
  *     leaning or a low stump. plantSingle: sets the plant-layer marker one layer above ground.
  *
  * Usage
- *   terrain.ts imports the blocks, GROUND and the builders, and re-exports PLANT (vegetation.ts
- *   reads it from there to draw plants). Imports DEADWOOD and Zone from trees.ts.
+ *   terrain.ts imports the blocks, GROUND and the builders to place plants; vegetation.ts imports
+ *   PLANT to draw the sprite kinds (drawPlant) from these blocks' colours. The sprite kinds'
+ *   obstacleH tells the walker which it can't pass (player/controller.ts). Imports DEADWOOD and
+ *   Zone from trees.ts. Kept out of vegetation.ts on purpose: generation places plants, so it
+ *   must not depend on the render module.
  *
  * See also: terrain.ts, trees.ts, vegetation.ts, core/blocks.ts; DESIGN.md "4. Terrain
  * generation" (Ground cover as plants, Cacti, Dead trunks).
@@ -78,6 +83,92 @@ export const SCRUB_BLOCK = registerBlock('SCRUB', {
     pattern: PATTERN.GRASS,
     rough: 0.6,
 });
+/**
+ * Cactus: solid like a trunk (isTrunk), so the player and the dog's pathfinder
+ * treat it as an obstacle. Its own pattern gives ribbed green sides.
+ */
+export const CACTUS = registerBlock('CACTUS', {
+    top: c(0x9cc064),
+    side: c(0x84ae52),
+    bottom: c(0x6a9040),
+    tint: c(0x5e8a3c),
+    pattern: PATTERN.CACTUS,
+    rough: 0.5,
+    isTrunk: true,
+});
+/** Saguaro / barrel crown: the pale, woolly growing tip. */
+const CACTUS_CROWN = registerBlock('CACTUS_CROWN', {
+    top: c(0xd8e0a8),
+    side: c(0xb8cc80),
+    bottom: c(0x9cb468),
+    tint: c(0x8aa858),
+    pattern: PATTERN.CACTUS,
+    rough: 0.6,
+    isTrunk: true,
+});
+/** Cactus flowers (crown and barrel rim). */
+const CACTUS_FLOWER = registerBlock('CACTUS_FLOWER', {
+    top: c(0xffe066),
+    side: c(0xf2c94c),
+    bottom: c(0xd4a52c),
+    tint: c(0xfff2a8),
+    pattern: PATTERN.NONE,
+    rough: 0.3,
+    isTrunk: true,
+});
+const CACTUS_FLOWER_PINK = registerBlock('CACTUS_FLOWER_PINK', {
+    top: c(0xff7eb3),
+    side: c(0xf06292),
+    bottom: c(0xc2185b),
+    tint: c(0xffb3d1),
+    pattern: PATTERN.NONE,
+    rough: 0.3,
+    isTrunk: true,
+});
+/** Prickly-pear fruit on the paddle rims. */
+const CACTUS_FRUIT = registerBlock('CACTUS_FRUIT', {
+    top: c(0xd6336c),
+    side: c(0xb02a5b),
+    bottom: c(0x8a1f47),
+    tint: c(0xe85d8a),
+    pattern: PATTERN.NONE,
+    rough: 0.35,
+    isTrunk: true,
+});
+/*
+ * Foliage bushes. The old bushes were dusty rose/mauve/cream (blossom palette)
+ * with the grass pattern, so they read as pink lumps, not shrubs. These are real
+ * leaf greens and are `sway` blocks, so they get the canopy shading (lit clumps,
+ * shaded pockets, leaf speckle), per-plant shade variety, and a gentle sway —
+ * and, like leaves, you can push through them.
+ */
+const shrub = (name: string, top: number, side: number) =>
+    registerBlock(name, {
+        top: c(top),
+        side: c(side),
+        bottom: c(side).multiplyScalar(0.78),
+        tint: c(top).lerp(c(0xd8e8a0), 0.25),
+        pattern: PATTERN.NONE,
+        rough: 0.4,
+        sway: true, // leafy shading + gentle sway…
+        solid: true, // …but a bush is an obstacle, not walk-through like a canopy
+    });
+const SHRUB_SAGE = shrub('SHRUB_SAGE', 0x8aa070, 0x748a5c);
+export const SHRUB_OLIVE = shrub('SHRUB_OLIVE', 0x7a8a3c, 0x66752f);
+const SHRUB_DEEP = shrub('SHRUB_DEEP', 0x3f6a32, 0x325627);
+const SHRUB_FOREST = shrub('SHRUB_FOREST', 0x4f7d3a, 0x41692f);
+export const SHRUB_BLUEGREEN = shrub('SHRUB_BLUEGREEN', 0x5a8a74, 0x4a7461);
+const SHRUB_LIME = shrub('SHRUB_LIME', 0x9cb84a, 0x84a03c);
+export const SHRUB_RUSSET = shrub('SHRUB_RUSSET', 0x9a6a3a, 0x7e562e); // autumn / dry
+/** Flowering accents: the old blossom bushes, now leafy too, used sparingly. */
+for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK])
+    Object.assign(b, { sway: true, solid: true, pattern: PATTERN.NONE });
+const BUSH_PALETTE = [SHRUB_FOREST, SHRUB_SAGE, SHRUB_DEEP, SHRUB_LIME, SHRUB_FOREST, BUSH_ROSE];
+
+/* ---- sprite plants ------------------------------------------------------
+ * Ground cover drawn as sprites, not voxels: each is a marker block stored in the
+ * grid's plant layer by plantSingle(), and drawn by vegetation.ts drawPlant() from
+ * these colours. obstacleH marks the ones the walker can't pass (controller.ts). */
 export const FERN = registerBlock('FERN', {
     top: c(0x4a6b3e),
     side: c(0x3d5933),
@@ -143,59 +234,6 @@ export const REED_BLOCK = registerBlock('REED', {
     pattern: PATTERN.GRASS,
     rough: 0.5,
 });
-
-/**
- * Cactus: solid like a trunk (isTrunk), so the player and the dog's pathfinder
- * treat it as an obstacle. Its own pattern gives ribbed green sides.
- */
-export const CACTUS = registerBlock('CACTUS', {
-    top: c(0x9cc064),
-    side: c(0x84ae52),
-    bottom: c(0x6a9040),
-    tint: c(0x5e8a3c),
-    pattern: PATTERN.CACTUS,
-    rough: 0.5,
-    isTrunk: true,
-});
-/** Saguaro / barrel crown: the pale, woolly growing tip. */
-const CACTUS_CROWN = registerBlock('CACTUS_CROWN', {
-    top: c(0xd8e0a8),
-    side: c(0xb8cc80),
-    bottom: c(0x9cb468),
-    tint: c(0x8aa858),
-    pattern: PATTERN.CACTUS,
-    rough: 0.6,
-    isTrunk: true,
-});
-/** Cactus flowers (crown and barrel rim). */
-const CACTUS_FLOWER = registerBlock('CACTUS_FLOWER', {
-    top: c(0xffe066),
-    side: c(0xf2c94c),
-    bottom: c(0xd4a52c),
-    tint: c(0xfff2a8),
-    pattern: PATTERN.NONE,
-    rough: 0.3,
-    isTrunk: true,
-});
-const CACTUS_FLOWER_PINK = registerBlock('CACTUS_FLOWER_PINK', {
-    top: c(0xff7eb3),
-    side: c(0xf06292),
-    bottom: c(0xc2185b),
-    tint: c(0xffb3d1),
-    pattern: PATTERN.NONE,
-    rough: 0.3,
-    isTrunk: true,
-});
-/** Prickly-pear fruit on the paddle rims. */
-const CACTUS_FRUIT = registerBlock('CACTUS_FRUIT', {
-    top: c(0xd6336c),
-    side: c(0xb02a5b),
-    bottom: c(0x8a1f47),
-    tint: c(0xe85d8a),
-    pattern: PATTERN.NONE,
-    rough: 0.35,
-    isTrunk: true,
-});
 /** Dry desert scrub, drawn by the vegetation layer (see plantSingle). */
 export const SCRUB_DRY = registerBlock('SCRUB_DRY', {
     top: c(0xb8a070),
@@ -219,36 +257,6 @@ export const YUCCA = registerBlock('YUCCA', {
     rough: 0.5,
     obstacleH: 1.1, // walker can't pass through (stiff rosette, often with a flower spike); see controller.ts
 });
-
-/*
- * Foliage bushes. The old bushes were dusty rose/mauve/cream (blossom palette)
- * with the grass pattern, so they read as pink lumps, not shrubs. These are real
- * leaf greens and are `sway` blocks, so they get the canopy shading (lit clumps,
- * shaded pockets, leaf speckle), per-plant shade variety, and a gentle sway —
- * and, like leaves, you can push through them.
- */
-const shrub = (name: string, top: number, side: number) =>
-    registerBlock(name, {
-        top: c(top),
-        side: c(side),
-        bottom: c(side).multiplyScalar(0.78),
-        tint: c(top).lerp(c(0xd8e8a0), 0.25),
-        pattern: PATTERN.NONE,
-        rough: 0.4,
-        sway: true, // leafy shading + gentle sway…
-        solid: true, // …but a bush is an obstacle, not walk-through like a canopy
-    });
-const SHRUB_SAGE = shrub('SHRUB_SAGE', 0x8aa070, 0x748a5c);
-export const SHRUB_OLIVE = shrub('SHRUB_OLIVE', 0x7a8a3c, 0x66752f);
-const SHRUB_DEEP = shrub('SHRUB_DEEP', 0x3f6a32, 0x325627);
-const SHRUB_FOREST = shrub('SHRUB_FOREST', 0x4f7d3a, 0x41692f);
-export const SHRUB_BLUEGREEN = shrub('SHRUB_BLUEGREEN', 0x5a8a74, 0x4a7461);
-const SHRUB_LIME = shrub('SHRUB_LIME', 0x9cb84a, 0x84a03c);
-export const SHRUB_RUSSET = shrub('SHRUB_RUSSET', 0x9a6a3a, 0x7e562e); // autumn / dry
-/** Flowering accents: the old blossom bushes, now leafy too, used sparingly. */
-for (const b of [BUSH_ROSE, BUSH_MAUVE, BUSH_CREAM, SCRUB_BLOCK])
-    Object.assign(b, { sway: true, solid: true, pattern: PATTERN.NONE });
-const BUSH_PALETTE = [SHRUB_FOREST, SHRUB_SAGE, SHRUB_DEEP, SHRUB_LIME, SHRUB_FOREST, BUSH_ROSE];
 
 /** Ground-cover kinds the vegetation layer draws as sprites (see plantSingle). */
 export const PLANT = {
@@ -588,6 +596,7 @@ export function plantSphereBush(
 }
 
 /** Place a single decorative block one layer above the surface. */
+
 /**
  * Ground cover (ferns, tall grass, reeds, moss, lichen). Recorded per column
  * and drawn by the vegetation layer as blades/fronds — not a voxel cube, so

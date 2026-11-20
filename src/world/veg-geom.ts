@@ -15,15 +15,20 @@
  *   - box: small surface-aligned box, lit along the surface frame like voxel blocks (top 1.0,
  *     sides 0.85, bottom 0.7). root: position on the surface at tangent offset (a, b).
  *     boxYawed: a box rotated in the tangent plane (temporarily swaps the shared frame).
+ *   - tuft: a crossed pair of blades rooted on the surface, root darkened by ROOT_SHADE (contact
+ *     shadow) — the building block of grass, flowers, sprite plants, reeds, mushrooms, vines.
  *   - Normals point along the surface up, so blades stay in the lit band instead of going dark.
+ *   - Rng: the seeded RNG type every drawer takes (core/rng makeRng).
  *
  * Usage
  *   Imported by vegetation.ts (which owns the buffer per build) and rocks.ts. Set _up/_ta/_tb
- *   (vegetation.ts's frame()) before calling box / boxYawed / root.
+ *   (vegetation.ts's frame()) before calling box / boxYawed / root / tuft. Put a primitive here
+ *   once a second file needs it; single-use helpers stay with their caller.
  *
  * See also: vegetation.ts, rocks.ts; DESIGN.md "7. Vegetation".
  */
 import * as THREE from 'three';
+import type { makeRng } from '../core/rng';
 
 /** Growable typed buffers — avoids the boxed-number arrays the flat DetailField uses. */
 export class QuadBuffer {
@@ -148,4 +153,54 @@ export function boxYawed(
     box(buf, base, up, w, h, color, 0, 0);
     _ta.copy(sa);
     _tb.copy(sb);
+}
+
+/** Seeded RNG type shared by every detail drawer (core/rng makeRng). */
+export type Rng = ReturnType<typeof makeRng>;
+
+const _root = new THREE.Color();
+/** Blade root brightness relative to its authored base colour (contact shadow). */
+export const ROOT_SHADE = 0.72;
+
+/**
+ * A crossed pair of blades rooted at `base`, standing along `up`.
+ * `ox`/`oy` are tangent offsets for the root; `lean` tilts the tip.
+ */
+export function tuft(
+    buf: QuadBuffer,
+    base: THREE.Vector3,
+    up: THREE.Vector3,
+    w: number,
+    h: number,
+    dark: THREE.Color,
+    light: THREE.Color,
+    rot: number,
+    leanA: number,
+    leanB: number,
+    sway: number,
+    /** Added to the phase attribute only (e.g. HANGING marks vines); not to the facing. */
+    phaseTag = 0,
+) {
+    const hw = w * 0.5;
+    const ph = rot + phaseTag;
+    const c = Math.cos(rot),
+        s = Math.sin(rot);
+    // Contact shadow: the root sits in its own shade (the blades around it block
+    // the sky), so it is darker than the tip — grass reads rooted, not pasted on.
+    _root.copy(dark).multiplyScalar(ROOT_SHADE);
+    for (let k = 0; k < 2; k++) {
+        // Blade direction in the tangent plane; the second blade is perpendicular.
+        const bx = k === 0 ? c : -s,
+            by = k === 0 ? s : c;
+        const dx = (_ta.x * bx + _tb.x * by) * hw,
+            dy = (_ta.y * bx + _tb.y * by) * hw,
+            dz = (_ta.z * bx + _tb.z * by) * hw;
+        const tx = base.x + up.x * h + _ta.x * leanA + _tb.x * leanB,
+            ty = base.y + up.y * h + _ta.y * leanA + _tb.y * leanB,
+            tz = base.z + up.z * h + _ta.z * leanA + _tb.z * leanB;
+        buf.vert(base.x - dx, base.y - dy, base.z - dz, up, _root, 0, ph);
+        buf.vert(base.x + dx, base.y + dy, base.z + dz, up, _root, 0, ph);
+        buf.vert(tx + dx * 0.62, ty + dy * 0.62, tz + dz * 0.62, up, light, sway, ph);
+        buf.vert(tx - dx * 0.62, ty - dy * 0.62, tz - dz * 0.62, up, light, sway, ph);
+    }
 }

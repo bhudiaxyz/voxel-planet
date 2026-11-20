@@ -32,17 +32,16 @@
  *
  * Usage
  *   const { grid, spawn } = await generateSphereTerrain(seed, (p, stage) => ...);
- *   Called by world.ts (buildSphereWorld). Also re-exports PLANT (from plants.ts), which
- *   vegetation.ts imports from here. Deterministic for a seed; all seeded Noise3/RNG streams
- *   are derived from `seed`.
+ *   Called by world.ts (buildSphereWorld). Deterministic for a seed; all seeded Noise3/RNG
+ *   streams are derived from `seed`.
  *
- * See also: trees.ts, plants.ts, rivers.ts, wet-map.ts, world.ts; DESIGN.md "4. Terrain
+ * See also: trees.ts, plants.ts, rivers.ts, distance-maps.ts, world.ts; DESIGN.md "4. Terrain
  * generation" and "4a. Fresh water".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, FACE_RES, SHELL_DEPTH } from '../core/voxel';
 import { basisFromCode, columnDir } from '../core/geoutil';
-import { bakeWetMap, wetIdx, WET_MAX } from './wet-map';
+import { bakeWetMap, wetIdx, WET_MAX } from './distance-maps';
 import { Noise3 } from '../core/noise3';
 import { makeRng } from '../core/rng';
 import { BLOCKS, BLOCK_BY_ID } from '../core/blocks';
@@ -67,7 +66,6 @@ import {
 } from './plants';
 import { SNOW, ZONE, plantZoneTree, zoneOf } from './trees';
 import type { Zone } from './trees';
-export { PLANT } from './plants';
 
 // Sea level is layer 9; terrace step is 2 (same aesthetic as flat terrain)
 const SEA_LAYER = 11;
