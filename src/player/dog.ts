@@ -65,6 +65,8 @@ const RUN_IN_AHEAD = 12;
 const STRANDED_DIST = 8 / PLANET_RADIUS;
 /** Path search: nodes per frame; re-plan if the heel spot moves this many columns, or every N s. */
 const SEARCH_BUDGET = 400;
+/** Main-thread ms per frame the route search may use (router.step's time cap). */
+const SEARCH_MS = 0.8;
 const REPLAN_DRIFT = 2;
 const REPLAN_EVERY = 1.5;
 /** Terrace hop: a little slower than a stride and this high at its peak, so the climb reads. */
@@ -305,7 +307,7 @@ export function createSphereDog(
 
             // Advance the search a bounded amount each frame.
             if (searching) {
-                const st = router.step(SEARCH_BUDGET);
+                const st = router.step(SEARCH_BUDGET, SEARCH_MS);
                 if (st === 'found') {
                     searching = false;
                     route = router.path.length > 1 ? router.path : [];

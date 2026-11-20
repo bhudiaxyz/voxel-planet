@@ -33,8 +33,9 @@
  *     rebuilds terrain (streaming.rebuildAll) and the far field, since colours are baked.
  *   - Shaders are pre-compiled (renderer.compileAsync) before the first frame().
  *   Frame loop, frame(), in order:
- *   1. rAF re-arm; mobile tiers skip frames closer than 15.5 ms (~60 fps cap, so 120 Hz phones
- *      do not do double work). Timer delta; dt clamped to 1/20 s; __fps updated every 0.75 s.
+ *   1. rAF re-arm; mobile tiers cap at ~60 fps by tracking when the next 60 Hz frame is due
+ *      (frameDue), so 120 Hz phones don't do double work and 90/96/144 Hz screens still get 60
+ *      (a "15.5 ms since last" rule gave them 45-48). Timer delta; dt clamped to 1/20 s; __fps updated every 0.75 s.
  *   2. Walking: controller.update and fpCam.updateSphere (skipped in drone/fly).
  *   3. streaming.update/tick around the active mode's direction; far-field band follows.
  *   4. atmo.followTarget, dayNight.update, sea water update plus night/sun uniforms.
@@ -51,7 +52,9 @@
  *   70%. It creeps back up 5% after govNeed consecutive windows at >= 54 fps; each failed step
  *   up doubles govNeed (max 48) to avoid oscillation. Hitches (rawDt > 0.25 s) and windows while
  *   terrain is streaming (> STREAM_BUSY queued chunks: slow frames there are mesh uploads, not
- *   fill-rate) are ignored; ?capture=1 disables it. setScale() reallocates the render targets, hence the damping.
+ *   fill-rate) are ignored; ?capture=1 disables it. A scale change reallocates the render targets
+ *   (hence the damping) and is applied at the start of the next frame, before it draws: resizing
+ *   after drawing left the cleared canvas on screen for a frame, a black flicker.
  *   Pause is input-only (ui/pause.ts): the loop and world keep updating by design.
  *
  * Usage
@@ -577,8 +580,14 @@ async function start(): Promise<void> {
 
     // Mobile tiers: hold ~60 fps. A 120 Hz phone (e.g. S22 Ultra) otherwise renders
     // everything — including a VSM update — twice as often, and heats and throttles.
-    const minFrameMs = tier === 'mobile-high' || (isTouchDevice && tier !== 'high') ? 15.5 : 0;
-    let lastFrameAt = 0;
+    // The cap tracks when the next 60 Hz frame is DUE rather than "15.5 ms since the last
+    // one": that rule halved 90 Hz screens to 45 fps (48 at 96 and 144 Hz, 55 at 165), since a
+    // frame arriving just early was skipped and the next one was a full refresh late. Now any
+    // refresh rate averages 60; 1.5 ms slack absorbs rAF jitter; `due` never lags more than one
+    // frame, so a stall doesn't cause a catch-up burst.
+    const capFrames = tier === 'mobile-high' || (isTouchDevice && tier !== 'high');
+    const FRAME_MS = 1000 / 60;
+    let frameDue = 0;
 
     /*
      * Dynamic resolution: if the GPU can't hold ~48 fps (slow frames while the
@@ -599,7 +608,16 @@ async function start(): Promise<void> {
         govGood = 0,
         govNeed = 3,
         govLastUp = false;
+    /**
+     * Applied at the START of a frame (pendingScale), not where govern() decides: resizing the
+     * canvas clears it, and doing that after the frame was drawn let the browser show the empty
+     * near-black canvas for a frame (a black flicker, most often in fly/drone while streaming).
+     */
+    let pendingScale = 0;
     const setScale = (s: number) => {
+        pendingScale = s;
+    };
+    const applyScale = (s: number) => {
         govScale = Math.round(s * 100) / 100;
         (renderer as any).setRenderScale(govScale);
         const w = container.clientWidth,
@@ -647,9 +665,16 @@ async function start(): Promise<void> {
 
     function frame(now = performance.now()): void {
         requestAnimationFrame(frame);
-        if (minFrameMs && now - lastFrameAt < minFrameMs) return;
-        lastFrameAt = now;
+        if (capFrames) {
+            if (now < frameDue - 1.5) return;
+            frameDue = Math.max(frameDue + FRAME_MS, now - FRAME_MS);
+        }
         const cpuStart = performance.now();
+        if (pendingScale) {
+            // Before this frame draws, so the resized (cleared) canvas is repainted in the same task.
+            applyScale(pendingScale);
+            pendingScale = 0;
+        }
         clock.update();
         const rawDt = clock.getDelta();
         const dt = Math.min(rawDt, 1 / 20);

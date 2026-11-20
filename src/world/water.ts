@@ -26,8 +26,9 @@
  *     shallows; sky reflection by fresnel (no real reflections, they would fight the flat
  *     pastel look); sun specular from N; alpha clear in shallows, opaque offshore.
  *   - WATER_DETAIL (tiers other than low / very-low): fine ripples (rippleGrad, faded with
- *     distance), a broad sun path on the swell, and glitter cells near the mirror angle. A few
- *     ALU ops per pixel.
+ *     distance), a broad sun path on the swell, glitter cells near the mirror angle, and at
+ *     night a silver moonlight path (moon opposite the sun, gated by uNight). A few ALU ops per
+ *     pixel.
  *   - The sun glint is hidden once the sun is below the LOCAL horizon (sunUp from dot(up, sun)).
  *     Far waves are calmed by distance so sub-pixel waves don't sparkle.
  *   - USE_SHORE_FOAM (foam flag + shore map): two animated bands roll in toward the shore plus a
@@ -284,6 +285,15 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
           float nightDim = mix(1.0, 0.07, uNight);
           float sheen = smoothstep(0.55, 1.0, fresnel + spec * 0.5) * 0.06 * uNight;
           waterCol = waterCol * nightDim * mix(vec3(1.0), vec3(0.75, 0.85, 1.15), uNight) + vec3(0.55, 0.65, 0.85) * sheen;
+          #ifdef WATER_DETAIL
+            // Moonlight path: the moon sits opposite the sun; a tight glint plus a soft path on
+            // the swell, cool silver, gated by the clock-based night factor (uNight), not the
+            // world-space sun height, so it shows exactly when the sky is dark.
+            vec3 Hm = normalize(V - uSunDir);
+            float NdotHm = max(dot(N, Hm), 0.0);
+            float moon = (pow(NdotHm, 120.0) * 1.2 + pow(NdotHm, 18.0) * 0.06) * smoothstep(0.5, 0.9, uNight);
+            waterCol += vec3(0.62, 0.7, 0.85) * moon;
+          #endif
         }
         gl_FragColor = vec4(waterCol, alpha);
         #include <fog_fragment>

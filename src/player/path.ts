@@ -20,8 +20,8 @@
  *     per layer climbed, so level routes are preferred.
  *   - Heuristic: octile distance on the same face (exact for this grid); across a seam, the
  *     great-circle angle times the narrowest column width, which never overestimates.
- *   - The search is incremental: step(budget) expands up to `budget` nodes and returns, so a long
- *     route spreads over frames. State is 'idle' | 'searching' | 'found' | 'failed'; it fails
+ *   - The search is incremental: step(budget, maxMs) expands up to `budget` nodes or `maxMs` of
+ *     time and returns, so a long route spreads over frames and no frame pays for it all. State is 'idle' | 'searching' | 'found' | 'failed'; it fails
  *     when the heap empties, `maxNodes` expansions are reached, or start/goal is unwalkable.
  *   - All working storage (heap, g, parent, closed, key arrays) is preallocated typed arrays
  *     sized from maxNodes, so a search makes no garbage. start() abandons any search in progress.
@@ -275,10 +275,17 @@ export function createSpherePathfinder(grid: SphereVoxelGrid, opts: PathOptions 
             state = 'searching';
         },
 
-        /** Expand up to `budget` nodes. Returns the state afterwards. */
-        step(budget = 400) {
+        /**
+         * Expand up to `budget` nodes, or for at most `maxMs` of main-thread time (checked every
+         * 16 expansions), whichever comes first. Returns the state afterwards. The time cap is
+         * what bounds a frame: a node budget alone let one call take ~20 ms on desktop where a
+         * search spread over awkward terrain (several times that on a phone).
+         */
+        step(budget = 400, maxMs = Infinity) {
             if (state !== 'searching') return state;
+            const t0 = performance.now();
             for (let n = 0; n < budget; n++) {
+                if ((n & 15) === 15 && performance.now() - t0 > maxMs) return state;
                 if (heapN === 0 || expanded >= maxNodes) {
                     state = 'failed';
                     return state;

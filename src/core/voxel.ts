@@ -1405,7 +1405,11 @@ const FRAG_BODY = /* glsl */ `
     // real sideways direction toward a face's edges — enough to misread trunk and
     // cliff sides as tops (end-grain rings on trunk sides). Derivatives give the
     // actual plane of the face anywhere on the sphere.
-    vec3 _geoN = normalize(cross(dFdx(vPosW), dFdy(vPosW)));
+    // Sub-pixel faces (seen from altitude in fly/drone) have parallel derivatives: the cross
+    // product is ~0 and normalize() would return NaN, which the bloom pass then smeared over
+    // the whole frame as a black flash. Fall back to the vertex normal there.
+    vec3 _geoC = cross(dFdx(vPosW), dFdy(vPosW));
+    vec3 _geoN = dot(_geoC, _geoC) > 1e-24 ? normalize(_geoC) : normalize(vNrmW);
     if (dot(_geoN, vNrmW) < 0.0) _geoN = -_geoN;
     float _radial = dot(_geoN, normalize(vPosW));
     bool isSide = abs(_radial) < 0.5;
@@ -3191,7 +3195,7 @@ export function makeVoxelMaterial() {
         mat.userData.shader = shader;
     };
     mat.customProgramCacheKey = () =>
-        'VoxelWorld-voxel-v30' +
+        'VoxelWorld-voxel-v31' +
         (mat.defines?.FOLIAGE_DETAIL ? '-fol' : '') +
         (mat.defines?.FAR_FIELD ? '-far' : '') +
         (mat.side === THREE.DoubleSide ? '-ds' : '');

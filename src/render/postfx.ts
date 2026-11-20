@@ -46,6 +46,9 @@
  *        analytically along the view ray so it pools in valleys and at the island rim.
  *     6. Sun in-scatter and a four-tap defocus (tier dof), both driven by the fog amount
  *        already computed, so they cost almost nothing.
+ *     7. Sanitise: non-finite colour (NaN/Inf from any scene shader) becomes 0, and HDR is capped
+ *        at 64, before bloom/rays/SMAA read it. One NaN pixel otherwise spread across the whole
+ *        frame through the bloom mip chain as a black flash (seen in fly/drone at altitude).
  *   - The aerial term uses the same FOG_NEAR (render/lighting.ts) and scene.fog.aerialD as the
  *     material fog. If they disagree, depth-buffer effects fade on a different schedule from
  *     the surfaces they sit on and a ring is visible.
@@ -591,6 +594,13 @@ function makeAtmosphereShader(sunDir: THREE.Vector3) {
         float s = max(dot(wdir, uSunDirWorld), 0.0);
         col += uSunGlow * uInscatter * (fog + mist * 0.5) * (pow(s, 4.0) * 0.8 + pow(s, 1.2) * 0.35);
 
+        // Safety net before bloom/SMAA: one NaN or Inf pixel (any shader, any tier) would be
+        // spread across the whole frame by the bloom mip chain as a black flash.
+        // The "< 1e6" comparison catches NaN/Inf even on drivers whose fast-math folds isnan()
+        // to false (a NaN fails every comparison). Measured: stray non-finite pixels do occur in
+        // flight (~1 per 20 frames at altitude), each enough to blank a frame through bloom.
+        if (any(isnan(col)) || any(isinf(col)) || !(col.r + col.g + col.b < 1e6)) col = vec3(0.0);
+        col = min(col, vec3(64.0)); // also keeps half-float targets far from overflow
         gl_FragColor = vec4(col, src.a);
       }
     `,
