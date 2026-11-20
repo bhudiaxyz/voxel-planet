@@ -8,10 +8,13 @@
  * Operations
  *   - Nodes are surface columns (face, u, v), keyed as (face*FACE_RES + v)*FACE_RES + u. A step
  *     goes to one of eight neighbours (N8), crossing cube seams through `crossFaceUV`.
- *   - groundOf(): the standable layer of a column, or -1. Sea (top <= seaLayer), trunks, water
- *     blocks (rivers/lakes) and solid foliage (bushes) are impassable; under a swaying canopy it
- *     stands on the ground column beneath (grid.groundColumnTop) unless a trunk is in the way.
- *     Block flags come from BLOCK_BY_ID (src/core/blocks.ts).
+ *   - groundOf(): the standable layer of a column, or -1. Sea (top <= seaLayer) and water blocks
+ *     (rivers/lakes) are impassable; obstacles use the player's walk rules (walk-rules.ts):
+ *     body obstacles (trunks, bushes, cacti) block, and clutter (tall shrub / yucca / scrub
+ *     sprites, rocks and logs from opts.obstacleAt) blocks unless it's at most opts.jumpClear
+ *     high. Under a swaying canopy it stands on the ground beneath (grid.groundColumnTop) unless
+ *     a body obstacle is there.
+ *   - clutterOf(): the clutter height at a column, so the walker knows to jump it.
  *   - canStep(): rise <= maxUp (a terrace hop) and drop <= maxDown. Diagonals also need both
  *     orthogonal neighbours passable (no corner cutting). Cost is 1 (SQRT2 diagonal) plus 0.35
  *     per layer climbed, so level routes are preferred.
@@ -31,9 +34,10 @@
  *     while (pf.step(400) === 'searching') {}   // normally one call per frame
  *     if (pf.state === 'found') follow(pf.path); // start column first
  *
- *   Options: maxUp (default 2), maxDown (4), seaLayer (11), maxNodes (20000).
+ *   Options: maxUp (default 2), maxDown (4), seaLayer (11), maxNodes (20000), obstacleAt
+ *   (rock/log map, default none), jumpClear (jumpable clutter height, default 0 = no jumping).
  *
- * See also: dog.ts, scripts/check-dog-path.ts; DESIGN.md "15. Dog".
+ * See also: dog.ts, walk-rules.ts, scripts/check-dog-path.ts; DESIGN.md "15. Dog".
  */
 import { SphereVoxelGrid, FACE_RES, crossFaceUV, FN, FTU, FTV } from '../core/voxel';
 import { BLOCK_BY_ID } from '../core/blocks';

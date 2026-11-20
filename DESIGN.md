@@ -111,6 +111,7 @@ src/
     fly.ts                    Free-flight mode
     dog.ts                    Companion dog (model, heel/fallback logic, animation)
     path.ts                   Incremental column-grid A* with seam crossing
+    walk-rules.ts             What blocks a ground walker (trunks, bushes, cacti; tall sprites, rocks, logs), shared by player and dog
   render/
     renderer.ts               WebGLRenderer setup
     gpu-tier.ts               Tier detection and TIER_SETTINGS
@@ -1032,6 +1033,8 @@ Horizontal: `wishDir` is projected onto the tangent plane and advanced as an arc
 | Tall shrub, yucca, dry scrub (sprite plants) | their block's `obstacleH`, unless the feet are above it (a jump clears scrub) |
 | Boulders, tors, standing stones, logs | the vegetation layer's per-column obstacle height (`obstacleAt`, see section 7), same jump rule |
 
+The obstacle definitions (`isBodyObstacle`, `clutterHeight`) live in `player/walk-rules.ts` and are shared with the dog's pathfinder (section 15).
+
 Walk-through: only small ground plants and flowers: grass, flowers, ferns, moss, lichen, tall grass, reeds, mushrooms, pebbles, lily pads, low cobbles and slabs (under `OBSTACLE_MIN_H = 0.2`). Reeds are deliberately walk-through so river banks stay reachable. Obstacles are column-granular, so a boulder fills its ~1.8-unit column.
 
 **Clearance (`keepClear`).** After moving, the eye is clamped inside its column so it stays `CLEARANCE` from the face of every blocked neighbour: 4 sides, then 4 corners, in the face's continuous column coordinates, with neighbours across cube seams via `crossFaceUV`. The camera's near plane is 0.02 with frustum corners ~0.035 from the eye, so closer than that a wall is clipped and you see through it. The previous rule (block if the column one *step ahead* is a wall) depended on approach angle and frame rate: a 45° approach reached 0.001 from a cliff at any frame rate, which is how cliffs and river banks became see-through. Measured now: >= 0.315 at every angle and rate.
@@ -1058,7 +1061,8 @@ Walk-through: only small ground plants and flowers: grass, flowers, ferns, moss,
 
 Column-grid A*. Nodes are surface columns `(face, u, v)`; neighbours are the 8 surrounding columns, crossing cube seams through `crossFaceUV`. Options: `maxUp = 2`, `maxDown = 4`, `seaLayer = 11` (the dog passes `DEEP_WATER = 10`), `maxNodes = 20000`.
 
-- Walkability (`groundOf`): the column's top must be above `seaLayer`; a trunk top (`isTrunk`) is impassable; a leaf (`sway`) top means canopy, so the ground below (`groundColumnTop`) is used unless a trunk stands on it. This makes cacti and dead trunks obstacles and lets the dog walk under canopies.
+- Walkability (`groundOf`): the column's top must be above `seaLayer` and not water. Obstacles use **the player's walk rules** (`player/walk-rules.ts`, shared so the two can't drift apart): body obstacles (`isBodyObstacle`: trunks incl. cacti, bushes, cacti) are impassable; clutter (`clutterHeight`: sprite plants with `obstacleH`, rocks and logs from `opts.obstacleAt` = `veg.obstacleAt`) is impassable unless at most `opts.jumpClear` high. A leaf (`sway`, not solid) top means canopy, so the ground below (`groundColumnTop`) is used unless a body obstacle is there. Small plants and flowers never block.
+- Jumping: the dog passes `jumpClear = DOG_JUMP_CLEAR (0.6)`, so dry scrub (0.45), logs and small rocks are crossed; tall shrubs (1.0), yucca (1.1), big boulders and voxel obstacles are routed round. While following the route, if the next waypoint holds clutter (`clutterOf`), the dog aims for the column beyond it and clears it on the terrace-hop parabola raised to `clutter + JUMP_MARGIN (0.3)`, so it never lands inside a rock. (The player clears clutter by jumping too: up to ~1.9 units.)
 - Step rule: `canStep(from, to)`: `to >= 0`, `to - from <= maxUp`, `from - to <= maxDown`. Diagonal moves additionally require both orthogonal neighbours to be steppable (no corner cutting).
 - Cost: 1 (orthogonal) or sqrt 2 (diagonal), plus `0.35` per layer climbed (prefers level routes).
 - Heuristic: same face -> octile distance `max(du,dv) + (sqrt2 - 1)*min(du,dv)` (exact on an obstacle-free 8-way grid); different face -> great-circle angle x `COLS_PER_RAD_MIN` (columns per radian at the narrowest, face-edge, column width, so it never overestimates and stays admissible).
@@ -1171,7 +1175,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 
 1. `node scripts/check-controls.ts`: for 500 random up vectors and yaws, `tangentBasis`'s `fwd`/`rgt` match a real `PerspectiveCamera.lookAt` frame (W = view-forward, D = screen-right).
 2. `node scripts/check-tiers.ts`: `classifyGpu` over 34 real renderer strings (desktop discrete/iGPU/Arc, old GTX/MX/RX parts, SwiftShader, Adreno/Mali/Xclipse/Apple mobile, an iPad reporting 4 cores, low-memory phones, no WebGL2).
-3. `node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts`: pathfinder scenarios on a hand-built patch (wall, water, trunk, terrace, cliff, incremental search).
+3. `node --import ./scripts/ts-resolve.mjs scripts/check-dog-path.ts`: pathfinder scenarios on a hand-built patch (wall, water, trunk, terrace, cliff, incremental search), plus the shared walk rules: a tall-shrub and bush wall is routed round, low scrub and a 0.3 rock are jumped (and scrub blocks a pathfinder without `jumpClear`), a 1.5 boulder blocks.
 4. `check-trees.ts`: generates seed 1337 and fails if leaf or bark voxel counts collapse, or if any of the five bark styles is missing from the planet.
 5. `check-rivers.ts`: generates seed 1337; asserts at least 2,000 fresh-water columns and that no water column's top is above a dry neighbour's ground (the "carved, never floating" rule).
 6. `check-islands.ts`: under all ten sky islands the walkable ground is the terrain, not the island.
@@ -1198,7 +1202,7 @@ Ported from planet-explorer's 📍 Locations panel (lil-gui there; plain DOM her
 - The bloom pass is constructed with hard-coded `0.22 / 0.9 / 1.25` but `onPaletteChange` overwrites them with `GRADE.bloom` values after any palette switch.
 - Tier fields `waterSubdivision` and (above 300) `particleCount` are declared but do not drive geometry: the sea sphere uses 128/64 segments by tier name (it is only a carrier for per-pixel waves now), and particles are capped at 300 in `main.ts`.
 - The world-space sun arc (`sunDir`) is not in phase with the clock keyframes: `sunDir.y` is ~0.96 at 06:00 and negative from ~11:30. Lighting that reads `sunDir.y` (`uSunAmbient`, the haze sun glow, the crepuscular visibility test) therefore disagrees with the sky's time of day; the snow glow uses the keyframed intensity to avoid it. Re-phasing the arc (`a = (t - 0.25) * 2pi`) would fix all of them but changes every lighting angle.
-- The dog's pathfinder still uses the planet-connected ground and isn't told about rocks: it can't follow you onto a floating island (it reappears at heel when you come back down), and it walks through boulders.
+- The dog's pathfinder uses the planet-connected ground, so it can't follow you onto a floating island (it reappears at heel when you come back down). It also hops 2-layer terraces, which the player can only climb by jumping.
 - `low` tier: Chrome on Windows logs two HLSL warnings from three.js's own `FXAAShader` (`gradient instruction used in a loop`, `potentially uninitialized variable (f_ApplyFXAA)`). Harmless, and not from this project's shaders.
 - `WATER.level` (24.35) and `FOG.near/far/...` are legacy constants from the flat world; the sea level used everywhere is layer 11.
 - The default `LIGHT.sunDir` in `palette.ts` is only an initial value; `DayNight` overwrites it through uniforms each frame.

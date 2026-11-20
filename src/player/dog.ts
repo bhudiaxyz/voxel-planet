@@ -11,7 +11,9 @@
  *   - Heel spot: the column HEEL_SIDE to the player's right and HEEL_AHEAD in front (further
  *     ahead while the player walks), computed in a tangent frame from the camera forward.
  *   - Planning: createSpherePathfinder (maxUp 2, maxDown 4, sea at DEEP_WATER = 10, so layer-11
- *     shallows are wadeable). A search advances SEARCH_BUDGET nodes per frame; it re-plans when
+ *     shallows are wadeable), with the player's walk rules (walk-rules.ts): trunks, bushes,
+ *     cacti, tall shrubs, yucca and big rocks are routed round; clutter up to DOG_JUMP_CLEAR
+ *     (0.6: dry scrub, logs, small rocks) is passable and jumped. A search advances SEARCH_BUDGET nodes per frame; it re-plans when
  *     the heel spot drifts REPLAN_DRIFT columns, every REPLAN_EVERY s, or when idle off-heel.
  *     If the heel spot is unreachable it tries the player's own column (`fallback`); if that
  *     fails too and the dog is beyond STRANDED_DIST it reappears, otherwise it waits.
@@ -19,17 +21,19 @@
  *     startup (placed on the first update, once the view direction is known), when farther than
  *     TELEPORT_DIST (after fly/drone, or outrun), and when stranded.
  *   - Motion: follows the route waypoint by waypoint at TROT_SPEED, or RUN_SPEED when more than
- *     RUN_COLS waypoints remain. Terrace rises hop on a parabola (HOP_HEIGHT, HOP_SLOWDOWN);
- *     otherwise drawn height eases at STEP_EASE. Columns with no loaded ground borrow the
+ *     RUN_COLS waypoints remain. Terrace rises hop on a parabola (HOP_HEIGHT, HOP_SLOWDOWN).
+ *     Jumps: when the next waypoint holds low clutter, the dog aims for the column beyond it and
+ *     clears it on the same parabola, raised to clutter + JUMP_MARGIN (never landing inside a
+ *     rock). Otherwise drawn height eases at STEP_EASE. Columns with no loaded ground borrow the
  *     player's ground height.
  *   - main.ts disables scene-wide matrix auto-update, so update() calls mesh.updateMatrixWorld.
  *
  * Usage
- *   Created by src/main.ts: createSphereDog(grid, scene, spawnDir). Each frame:
+ *   Created by src/main.ts: createSphereDog(grid, scene, spawnDir, veg.obstacleAt). Each frame:
  *   dog.update(dt, playerDir, viewFwd). `toggleSit()` (X key / touch button) and `sitting`
  *   control the sit pose; dispose() removes the mesh and frees geometry and materials.
  *
- * See also: path.ts (router), src/ui/touch-controls.ts; DESIGN.md "15. Dog".
+ * See also: path.ts (router), walk-rules.ts, src/ui/touch-controls.ts; DESIGN.md "15. Dog".
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';

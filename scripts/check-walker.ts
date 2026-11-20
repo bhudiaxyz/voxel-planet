@@ -14,7 +14,8 @@
  *   npm run check, or: node --import ./scripts/ts-resolve.mjs scripts/check-walker.ts
  *   A failure names the case (angle/frame rate, obstacle kind, island) that broke.
  *
- * See also: src/player/controller.ts (blocked, keepClear, standR, snapToDir); DESIGN.md "14. Player".
+ * See also: src/player/controller.ts (blocked, keepClear, standR, snapToDir), src/player/walk-rules.ts;
+ * DESIGN.md "14. Player".
  */
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
