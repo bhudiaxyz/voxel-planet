@@ -97,7 +97,17 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
     const geo = new THREE.SphereGeometry(SPHERE_WATER_RADIUS, sub * 2, sub);
 
     const mat = new THREE.ShaderMaterial({
-        transparent: true,
+        // Drawn in the OPAQUE list (transparent: false) with explicit alpha blending, so it
+        // renders right after the terrain (renderOrder 0) and BEFORE the vegetation
+        // (renderOrder 2). Vegetation writes no depth; as a transparent material the sea drew
+        // after it and painted over every reed, grass tuft or shrub standing in front of
+        // sea-level water (coasts, river mouths, ponds carved to sea level). CustomBlending is
+        // used because three forces NoBlending for NormalBlending on non-transparent materials.
+        transparent: false,
+        blending: THREE.CustomBlending,
+        blendSrc: THREE.SrcAlphaFactor,
+        blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendEquation: THREE.AddEquation,
         depthWrite: false,
         fog: true,
         side: THREE.FrontSide,
@@ -278,6 +288,7 @@ export function createSphereWater(tier: string = 'high', shoreMap: THREE.Texture
     });
 
     const mesh = new THREE.Mesh(geo, mat);
+    // After terrain (0), before vegetation (2): see the material comment above.
     mesh.renderOrder = 1;
     const planetUnis: any[] = [mat.uniforms];
 
