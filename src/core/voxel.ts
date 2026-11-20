@@ -226,6 +226,26 @@ export class SphereVoxelGrid {
         return l;
     }
 
+    /**
+     * Highest layer at or below `maxLayer` that a walker can stand on — the first block found
+     * going down that isn't air, leaves (sway, not solid), a trunk or water (waded to the
+     * bed). -1 if none. Unlike groundColumnTop this can return a floating island's top:
+     * the caller decides from which height to look (the walker uses its own feet), so
+     * standing under an island still finds the terrain, and landing on one finds the island.
+     */
+    standTop(face: number, u: number, v: number, maxLayer: number): number {
+        if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
+        const surf = this.surfaceLayer[this.colIdx(face, u, v)];
+        const base = this.idx(face, u, v, 0);
+        for (let l = Math.min(maxLayer, surf); l >= 0; l--) {
+            const id = this.data[base + l];
+            if (id === 0) continue;
+            const b = BLOCK_BY_ID[id] as any;
+            if (b?.solid || (!b?.sway && !b?.isTrunk && !b?.isWater)) return l;
+        }
+        return -1;
+    }
+
     /** World-space radius of the surface (columnTop + 1 above planet centre), min PLANET_RADIUS. */
     surfaceRadius(face: number, u: number, v: number): number {
         const top = this.groundColumnTop(face, u, v);

@@ -8,7 +8,8 @@
  * Operations
  *   - State: `dir` (unit vector from centre), `groundRadius` (eye distance from centre),
  *     `verticalVelocity`, `isGrounded`, `speed` (0..1 fraction of sprint speed, for camera bob).
- *   - update(): looks up the column under `dir` (dirToFaceUV + grid.surfaceRadius), grounded when
+ *   - update(): looks up the surface under `dir` (standR: grid.standTop from the feet down, so
+ *     floating islands are walkable and you fall off their edges), grounded when
  *     the feet are within 0.05 of it; jump sets JUMP_VEL, otherwise GRAVITY pulls down. The eye
  *     is clamped to surface + EYE_HEIGHT.
  *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
@@ -27,7 +28,9 @@
  * Usage
  *   Created by src/main.ts with the spawn direction and the grid. Each frame main passes
  *   FPCamera's wish direction (getWish), the jump edge and sprint flag; `pos` feeds the camera,
- *   `speed` the head bob. `snapToDir(dir, grid)` teleports (landmarks, leaving fly/drone).
+ *   `speed` the head bob. `snapToDir(dir, grid, fromRadius?)` places the walker: teleports omit
+ *   fromRadius (planet ground); leaving drone/fly passes the flyer's radius, so landing over a
+ *   floating island lands on it.
  *   Fly and drone modes (fly.ts, drone.ts) replace this controller while active.
  *
  *     controller.update(dt, fpCam.getWish(...), jumpEdge, world.grid, sprint);
@@ -97,7 +100,7 @@ export class SphereController {
         sprint = false,
     ) {
         const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
-        const surfaceR = grid.surfaceRadius(face, u, v);
+        const surfaceR = this.standR(grid, face, u, v);
         const altitudeAboveSurface = this.groundRadius - EYE_HEIGHT - surfaceR;
 
         this.isGrounded = altitudeAboveSurface <= 0.05;
@@ -143,6 +146,18 @@ export class SphereController {
     }
 
     /**
+     * Radius of the surface the walker stands on at a column: the highest standable block at
+     * or below the feet + MAX_STEP (grid.standTop). So the ground under a floating island is
+     * the terrain while you walk beneath it, and the island's top once you're on it — walking
+     * off its edge drops you. (grid.surfaceRadius is the planet-connected ground only.)
+     */
+    private standR(grid: SphereVoxelGrid, f: number, u: number, v: number): number {
+        const feet = this.groundRadius - EYE_HEIGHT;
+        const top = grid.standTop(f, u, v, Math.floor(feet - PLANET_RADIUS + MAX_STEP));
+        return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
+    }
+
+    /**
      * Can't the walker stand in this column at its current height? One rule for moving
      * (the destination column) and for the camera clearance (keepClear):
      *   - terrain: the ground is more than MAX_STEP above the feet (a cliff, a terrace wall);
@@ -155,14 +170,19 @@ export class SphereController {
      */
     private blocked(grid: SphereVoxelGrid, f: number, u: number, v: number): boolean {
         const feet = this.groundRadius - EYE_HEIGHT;
-        const ground = grid.surfaceRadius(f, u, v);
+        const ground = this.standR(grid, f, u, v);
         if (ground > feet + MAX_STEP) return true;
-        // Voxel obstacles at body height (the feet layer and the one above).
-        const fl = Math.floor(feet - PLANET_RADIUS + 0.01);
+        // Voxel obstacles at body height (the feet layer and the one above) — where the feet
+        // will be after stepping in: a step up lifts the body into whatever is over it.
+        const fl = Math.floor(Math.max(feet, ground) - PLANET_RADIUS + 0.01);
         for (let l = fl; l <= fl + 1; l++) {
             const b = BLOCK_BY_ID[grid.get(f, u, v, l)];
             if (b && (b.isTrunk || (b.sway && b.solid) || b.pattern === PATTERN.CACTUS)) return true;
         }
+        // Head height: a solid overhang (cliff lip, a floating island's underside) blocks too.
+        const headId = grid.get(f, u, v, fl + 1); // (BLOCK_BY_ID[0] is the AIR record, so test the id)
+        const head = headId !== 0 ? BLOCK_BY_ID[headId] : undefined;
+        if (head && !head.isWater && !(head.sway && !head.solid)) return true;
         // A bush or cactus as the column's ground (groundColumnTop counts solid foliage as
         // ground): stepping out onto it — level with the feet or a terrace down — is walking
         // through it. Only clear when well above it (dropping from a ledge, mid-jump).
@@ -238,11 +258,18 @@ export class SphereController {
         at(fu, fv, this.dir);
     }
 
-    /** Teleport to a new direction, snapping groundRadius to the terrain surface. */
-    snapToDir(newDir: THREE.Vector3, grid: SphereVoxelGrid): void {
+    /**
+     * Teleport to a new direction and stand on the ground there.
+     * @param fromRadius look for ground at or below this radius (e.g. the drone's or flyer's
+     *   current height), so landing over a floating island lands ON it. Omitted (teleports):
+     *   the planet-connected ground (groundColumnTop), never an island overhead.
+     */
+    snapToDir(newDir: THREE.Vector3, grid: SphereVoxelGrid, fromRadius?: number): void {
         this.dir.copy(newDir).normalize();
         const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
-        this.groundRadius = grid.surfaceRadius(face, u, v) + EYE_HEIGHT;
+        const top = fromRadius === undefined ? -2 : grid.standTop(face, u, v, Math.floor(fromRadius - PLANET_RADIUS));
+        this.groundRadius =
+            (top >= 0 ? PLANET_RADIUS + top + 1 : grid.surfaceRadius(face, u, v)) + EYE_HEIGHT;
         this.verticalVelocity = 0;
         this.keepClear(grid);
     }

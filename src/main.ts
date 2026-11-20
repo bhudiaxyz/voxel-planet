@@ -347,7 +347,8 @@ async function start(): Promise<void> {
         fpCam.flyActive = true;
     };
     const exitFly = () => {
-        controller.snapToDir(fly.dir, world.grid);
+        // Land on whatever is below the flyer — a floating island included.
+        controller.snapToDir(fly.dir, world.grid, fly.groundRadius);
         fly.exit();
         fpCam.flyActive = false;
         if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
@@ -771,7 +772,7 @@ async function start(): Promise<void> {
             drone.update(dt, droneInput, world.grid, fpCam.camera);
             // Landing completed inside drone.update — sync controller and re-lock
             if (!drone.active && fpCam.droneActive) {
-                controller.snapToDir(drone.dir, world.grid);
+                controller.snapToDir(drone.dir, world.grid, PLANET_RADIUS + drone.altitude + 1);
                 fpCam.droneActive = false;
                 if (!fpCam.isLocked && !fpCam.touchActive) renderer.domElement.requestPointerLock();
             }
