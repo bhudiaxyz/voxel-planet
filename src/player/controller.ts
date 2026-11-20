@@ -13,10 +13,12 @@
  *     is clamped to surface + EYE_HEIGHT.
  *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
  *     speed*dt/groundRadius (WALK_SPEED, or SPRINT_SPEED when sprinting).
- *   - Collision: the destination column and one extra step ahead (a standoff probe, so the near
- *     plane never clips a wall face) must not be higher than the feet + MAX_STEP; otherwise the
- *     move is reverted (`dir` restored, speed 0). Higher terrain is therefore only climbed in
- *     MAX_STEP-sized terraces.
+ *   - Collision: the destination column must not be higher than the feet + MAX_STEP, otherwise
+ *     the move is reverted (`dir` restored, speed 0); higher terrain is only climbed in
+ *     MAX_STEP-sized terraces. Then keepClear() holds the eye CLEARANCE (0.3) from every
+ *     neighbouring wall face (sides and corners, across cube seams), whatever the approach angle
+ *     or frame rate, so the camera's near plane never clips a cliff or a river bank and you can't
+ *     see through it. snapToDir() applies it too (teleports, landing from drone/fly).
  *   - Scratch vectors are module-level, so `pos` returns a shared vector: copy it if you keep it.
  *
  * Usage
@@ -30,8 +32,8 @@
  * See also: fly.ts, drone.ts, src/render/fp-camera.ts; DESIGN.md "14. Player".
  */
 import * as THREE from 'three';
-import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES } from '../core/voxel';
-import { dirToFaceUV } from '../core/geoutil';
+import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, crossFaceUV } from '../core/voxel';
+import { basisFromCode, dirToFaceUV } from '../core/geoutil';
 
 const GRAVITY = 28;
 const JUMP_VEL = 10.5;
@@ -40,9 +42,21 @@ const SPRINT_SPEED = 18;
 const EYE_HEIGHT = 1.75;
 
 const MAX_STEP = 1.1; // max terrain step-up in world units
+/**
+ * How close (world units) the eye may get to a wall face: any neighbouring column the feet
+ * can't step onto. The camera's near plane is 0.02 and its frustum corners reach ~0.035 from
+ * the eye; inside that a wall is clipped and you see through it. 0.3 leaves room for head
+ * bob and wide fields of view. Enforced by keepClear(), whatever the approach angle or frame
+ * rate (the old one-step-ahead probe let a 45° approach reach 0.001 at any frame rate).
+ */
+const CLEARANCE = 0.3;
+const _cn = new THREE.Vector3(),
+    _ctu = new THREE.Vector3(),
+    _ctv = new THREE.Vector3(),
+    _cA = new THREE.Vector3(),
+    _cB = new THREE.Vector3();
 
 const _scratchStep = new THREE.Vector3();
-const _scratchPos = new THREE.Vector3();
 const _oldDir = new THREE.Vector3();
 
 export class SphereController {
@@ -102,22 +116,9 @@ export class SphereController {
             _scratchStep.multiplyScalar((speed * dt) / this.groundRadius);
             this.dir.add(_scratchStep).normalize();
 
-            // Destination column check
+            // Destination column check: never enter a column the feet can't step onto.
             const { face: nf, u: nu, v: nv } = dirToFaceUV(this.dir, FACE_RES);
-            const newSurfR = grid.surfaceRadius(nf, nu, nv);
-            // Standoff probe: one extra step forward — keeps the player a column-width
-            // away from vertical wall faces, preventing near-plane clipping.
-            const {
-                face: af,
-                u: au,
-                v: av,
-            } = dirToFaceUV(_scratchPos.copy(this.dir).add(_scratchStep).normalize(), FACE_RES);
-            const aheadSurfR = grid.surfaceRadius(af, au, av);
-
-            if (
-                newSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP ||
-                aheadSurfR > this.groundRadius - EYE_HEIGHT + MAX_STEP
-            ) {
+            if (grid.surfaceRadius(nf, nu, nv) > this.groundRadius - EYE_HEIGHT + MAX_STEP) {
                 this.dir.copy(_oldDir);
                 this.speed = 0;
             } else {
@@ -126,6 +127,71 @@ export class SphereController {
         } else {
             this.speed = Math.max(0, this.speed - dt * 4);
         }
+        // Then keep the eye CLEARANCE away from every wall face around it (any angle, any rate).
+        this.keepClear(grid);
+    }
+
+    /**
+     * Clamp the eye's position inside its column so it stays CLEARANCE from the faces of
+     * neighbouring wall columns (ground higher than feet + MAX_STEP) — the 4 sides, then the
+     * 4 corners. Works in the face's continuous column coordinates (fu, fv), so it is exact on
+     * the gnomonic grid, and looks neighbours up across cube seams with crossFaceUV.
+     */
+    private keepClear(grid: SphereVoxelGrid) {
+        const { face } = dirToFaceUV(this.dir, FACE_RES);
+        basisFromCode(face, _cn, _ctu, _ctv);
+        const dn = this.dir.dot(_cn);
+        let fu = ((this.dir.dot(_ctu) / dn + 1) * FACE_RES) / 2,
+            fv = ((this.dir.dot(_ctv) / dn + 1) * FACE_RES) / 2;
+        const cu = Math.min(FACE_RES - 1, Math.max(0, Math.floor(fu))),
+            cv = Math.min(FACE_RES - 1, Math.max(0, Math.floor(fv)));
+        // Column width here, in world units (columns shrink toward a face's corners).
+        const at = (a: number, b: number, out: THREE.Vector3) =>
+            out
+                .copy(_cn)
+                .addScaledVector(_ctu, (2 * a) / FACE_RES - 1)
+                .addScaledVector(_ctv, (2 * b) / FACE_RES - 1)
+                .normalize();
+        const colW = at(cu + 1, cv + 0.5, _cA).distanceTo(at(cu, cv + 0.5, _cB)) * this.groundRadius;
+        const c = Math.min(0.45, CLEARANCE / colW); // as a fraction of the column
+        const feetLimit = this.groundRadius - EYE_HEIGHT + MAX_STEP;
+        const wall = (du: number, dv: number) => {
+            let f = face,
+                u = cu + du,
+                v = cv + dv;
+            if (u < 0 || v < 0 || u >= FACE_RES || v >= FACE_RES) [f, u, v] = crossFaceUV(face, u, v);
+            return grid.surfaceRadius(f, u, v) > feetLimit;
+        };
+        let x = fu - cu,
+            y = fv - cv;
+        const ox = x,
+            oy = y;
+        const wE = wall(1, 0),
+            wW = wall(-1, 0),
+            wN = wall(0, 1),
+            wS = wall(0, -1);
+        if (wE && x > 1 - c) x = 1 - c;
+        if (wW && x < c) x = c;
+        if (wN && y > 1 - c) y = 1 - c;
+        if (wS && y < c) y = c;
+        // Corners: a wall only diagonally — push out along the shallower axis.
+        for (const [du, dv] of [
+            [1, 1],
+            [1, -1],
+            [-1, 1],
+            [-1, -1],
+        ]) {
+            const px = du > 0 ? x - (1 - c) : c - x; // > 0 = inside the corner's clearance on x
+            const py = dv > 0 ? y - (1 - c) : c - y;
+            if (px > 0 && py > 0 && wall(du, dv)) {
+                if (px < py) x = du > 0 ? 1 - c : c;
+                else y = dv > 0 ? 1 - c : c;
+            }
+        }
+        if (x === ox && y === oy) return;
+        fu = cu + x;
+        fv = cv + y;
+        at(fu, fv, this.dir);
     }
 
     /** Teleport to a new direction, snapping groundRadius to the terrain surface. */
@@ -134,6 +200,7 @@ export class SphereController {
         const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
         this.groundRadius = grid.surfaceRadius(face, u, v) + EYE_HEIGHT;
         this.verticalVelocity = 0;
+        this.keepClear(grid);
     }
 
     /** Forward direction in tangent plane at dir (for camera reference). */
