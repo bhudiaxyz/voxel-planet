@@ -103,8 +103,8 @@ const isSmallPlant = (u: number, v: number) => {
     return id !== 0 && !(BLOCK_BY_ID[id] as any).obstacleH && !isBush(u, v) && grid.columnTop(0, u, v) === grid.groundColumnTop(0, u, v);
 };
 const counts = { bush: 0, trunk: 0, small: 0 };
-for (let v = 20; v < 380; v += 3)
-    for (let u = 20; u < 376; u += 3) {
+for (let v = 20; v < 380; v += 1)
+    for (let u = 20; u < 376; u += 1) {
         const kind = isBush(u + 2, v) ? 'bush' : isTrunk(u + 2, v) ? 'trunk' : isSmallPlant(u + 2, v) ? 'small' : null;
         if (!kind || counts[kind] >= 15) continue;
         const g0 = grid.groundColumnTop(0, u, v);
