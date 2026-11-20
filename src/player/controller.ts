@@ -87,6 +87,11 @@ export class SphereController {
      * ground at a column, 0 if clear. main.ts wires world.veg.obstacleAt here.
      */
     obstacleAt: ObstacleMap | null = null;
+    /**
+     * Standing on vegetation — a tree crown or a bush top (a sway block under the feet). Up
+     * there you can walk across onto neighbouring crowns and bushes (blocked() and standR()).
+     */
+    onCanopy = false;
     private _pos = new THREE.Vector3();
 
     constructor(spawnDir: THREE.Vector3, grid: SphereVoxelGrid) {
@@ -161,7 +166,16 @@ export class SphereController {
      */
     private standR(grid: SphereVoxelGrid, f: number, u: number, v: number): number {
         const feet = this.groundRadius - EYE_HEIGHT;
-        const top = grid.standTop(f, u, v, Math.floor(feet - PLANET_RADIUS + MAX_STEP));
+        // Leaves hold you only from above: those below the feet are ground, those at body
+        // height stay walk-through. On a canopy, a crown one layer up is a normal step.
+        const feetLayer = Math.floor(feet - PLANET_RADIUS + 0.01);
+        const top = grid.standTop(
+            f,
+            u,
+            v,
+            Math.floor(feet - PLANET_RADIUS + MAX_STEP),
+            feetLayer + (this.onCanopy ? 1 : 0),
+        );
         return PLANET_RADIUS + (top < 0 ? 0 : top + 1);
     }
 
@@ -192,7 +206,8 @@ export class SphereController {
         // ground): stepping out onto it — level with the feet or a terrace down — is walking
         // through it. Only clear when well above it (dropping from a ledge, mid-jump).
         const top = BLOCK_BY_ID[grid.get(f, u, v, Math.round(ground - PLANET_RADIUS) - 1)];
-        if (isBodyObstacle(top) && feet - ground < STAND_CLEAR) return true;
+        // On a canopy already, the next bush top is just more canopy: walk on across it.
+        if (isBodyObstacle(top) && !(this.onCanopy && top?.sway) && feet - ground < STAND_CLEAR) return true;
         // Sprite plants and rocks stand on this column's ground: blocking unless cleared.
         const clutter = clutterHeight(grid, f, u, v, this.obstacleAt);
         return clutter > 0 && feet - ground < clutter;

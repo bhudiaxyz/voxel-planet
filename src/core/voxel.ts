@@ -229,11 +229,12 @@ export class SphereVoxelGrid {
     /**
      * Highest layer at or below `maxLayer` that a walker can stand on — the first block found
      * going down that isn't air, leaves (sway, not solid), a trunk or water (waded to the
-     * bed). -1 if none. Unlike groundColumnTop this can return a floating island's top:
+     * bed). -1 if none. Leaves count too when below `leavesBelow` (the walker passes its feet
+     * layer), so a crown you are on top of holds you while a canopy at body height doesn't. Unlike groundColumnTop this can return a floating island's top:
      * the caller decides from which height to look (the walker uses its own feet), so
      * standing under an island still finds the terrain, and landing on one finds the island.
      */
-    standTop(face: number, u: number, v: number, maxLayer: number): number {
+    standTop(face: number, u: number, v: number, maxLayer: number, leavesBelow = -1): number {
         if (u < 0 || u >= FACE_RES || v < 0 || v >= FACE_RES) return -1;
         const surf = this.surfaceLayer[this.colIdx(face, u, v)];
         const base = this.idx(face, u, v, 0);
@@ -242,6 +243,9 @@ export class SphereVoxelGrid {
             if (id === 0) continue;
             const b = BLOCK_BY_ID[id] as any;
             if (b?.solid || (!b?.sway && !b?.isTrunk && !b?.isWater)) return l;
+            // Leaves are ground only from above (layer below `leavesBelow`, e.g. the feet):
+            // you can stand and walk on a tree's crown, but never step UP into one.
+            if (b?.sway && l < leavesBelow) return l;
         }
         return -1;
     }
