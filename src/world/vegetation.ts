@@ -70,6 +70,9 @@ const VINE_MAX_LEN = 5;
 const MEADOW_FREQ = 0.026;
 const FLOWER_FREQ = 0.055;
 export const VEG_PATCH = 32;
+/** Walker obstacle map resolution (world units per step) and the smallest rock/log that blocks. */
+const OBSTACLE_STEP = 0.05;
+const OBSTACLE_MIN_H = 0.2;
 const PATCHES_PER_EDGE = Math.ceil(FACE_RES / VEG_PATCH);
 
 type Rng = ReturnType<typeof makeRng>;
@@ -405,9 +408,10 @@ function scatterGroundDetail(
     cols: DetailColours,
     /** Layers above sea. */
     rise: number,
-) {
-    if (detail <= 0) return;
-    scatterBoulder(buf, centre, rng, detail, onStone, rise, cols.pebbles, cols.moss);
+): { h: number; r: number } | null {
+    if (detail <= 0) return null;
+    // Obstacles drawn here (rock group, fallen log) are returned for the walker's map.
+    let ob = scatterBoulder(buf, centre, rng, detail, onStone, rise, cols.pebbles, cols.moss);
     if (nearTrunk) {
         // Fallen log: a long bark box with a moss strip along its top.
         if (rng() < LOG_P * detail) {
@@ -418,6 +422,8 @@ function scatterGroundDetail(
             boxYawed(buf, r, _up, th, th, len, cols.bark[(rng() * cols.bark.length) | 0], yaw);
             const top = _base2.copy(r).addScaledVector(_up, th);
             boxYawed(buf, top, _up, th * 0.7, 0.05, len * 0.8, cols.moss, yaw);
+            // A log blocks the walker like a low rock (it reaches half its length out).
+            if (!ob || ob.h < th) ob = { h: th - 0.06, r: len * 0.5 };
         }
     }
     // Mushrooms: damp ground at a tree's foot, occasionally out in lush meadow.
@@ -432,6 +438,7 @@ function scatterGroundDetail(
             box(buf, _base2.copy(r).addScaledVector(_up, h - 0.03), _up, w, w * 0.32, cap, 0.25, rng() * 6.28);
         }
     }
+    return ob;
 }
 
 /**
@@ -710,10 +717,34 @@ export function createSphereVegetation(
     const buf = new QuadBuffer();
     /** Built patches by key; null = built and empty (no grass there). */
     const patches = new Map<number, THREE.Mesh | null>();
+    /**
+     * Walker obstacles drawn into the patches (rocks, logs): height above the ground per
+     * column, in OBSTACLE_STEP units (0 = clear). Filled as patches build, which is always
+     * the case around the player (LISTEN_RADIUS). Never cleared: placement is deterministic,
+     * so a patch rebuilt later writes the same values. 960 KB.
+     */
+    const obstacleH = new Uint8Array(6 * FACE_RES * FACE_RES);
     /** How many loaded terrain chunks sit under each patch — built at >0, freed at 0. */
     const refs = new Map<number, number>();
 
     const keyOf = (face: number, pu: number, pv: number) => (face * PATCHES_PER_EDGE + pv) * PATCHES_PER_EDGE + pu;
+
+    /**
+     * Record an obstacle for the walker: its own column, plus neighbours it reaches into
+     * (a big erratic, tor or log spills past its column; columns are ~1.8 units wide here).
+     */
+    function markObstacle(face: number, u: number, v: number, ob: { h: number; r: number }) {
+        const q = Math.min(255, Math.ceil(ob.h / OBSTACLE_STEP));
+        const spill = ob.r > 1.2 ? 1 : 0;
+        for (let dv = -spill; dv <= spill; dv++)
+            for (let du = -spill; du <= spill; du++) {
+                const uu = u + du,
+                    vv = v + dv;
+                if (uu < 0 || vv < 0 || uu >= FACE_RES || vv >= FACE_RES) continue;
+                const i = (face * FACE_RES + vv) * FACE_RES + uu;
+                if (obstacleH[i] < q) obstacleH[i] = q;
+            }
+    }
 
     function build(face: number, pu: number, pv: number): THREE.Mesh | null {
         buf.reset();
@@ -815,8 +846,8 @@ export function createSphereVegetation(
                     continue;
                 }
                 const rise = layer - SEA_LAYER;
-                if (groundDetail > 0)
-                    scatterGroundDetail(
+                if (groundDetail > 0) {
+                    const ob = scatterGroundDetail(
                         buf,
                         centre,
                         drng,
@@ -827,6 +858,8 @@ export function createSphereVegetation(
                         cols,
                         rise,
                     );
+                    if (ob && ob.h >= OBSTACLE_MIN_H) markObstacle(face, u, v, ob);
+                }
                 if (onStone) continue; // bare rock: boulders only, no grass
                 const bloom = field(flowerNoise, centre, FLOWER_FREQ);
                 scatterColumn(buf, centre, rng, block, density, lush, bloom, cols, rise);
@@ -895,6 +928,14 @@ export function createSphereVegetation(
         /** Meadow lushness 0..1 at a unit direction. */
         lushAt(dir: THREE.Vector3): number {
             return field(meadowNoise, _fp.copy(dir).multiplyScalar(PLANET_RADIUS + 20), MEADOW_FREQ);
+        },
+        /**
+         * Height (world units above the ground) of a rock or log the walker can't pass at
+         * this column, or 0. Only rocks/logs of OBSTACLE_MIN_H or more are recorded; small
+         * plants, flowers, grass and pebbles are always walk-through.
+         */
+        obstacleAt(face: number, u: number, v: number): number {
+            return obstacleH[(face * FACE_RES + v) * FACE_RES + u] * OBSTACLE_STEP;
         },
         get patchCount() {
             return group.children.length;

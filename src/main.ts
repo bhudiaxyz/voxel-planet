@@ -323,6 +323,8 @@ async function start(): Promise<void> {
     const dog = createSphereDog(world.grid, scene, world.spawnDir);
 
     const controller = new SphereController(world.spawnDir, world.grid);
+    // Rocks and logs live in the vegetation meshes, not the voxel grid: let the walker see them.
+    controller.obstacleAt = (f, u, v) => world.veg.obstacleAt(f, u, v);
 
     const canAct = () => fpCam.isLocked || fpCam.touchActive;
 

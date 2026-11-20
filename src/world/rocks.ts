@@ -99,7 +99,12 @@ export const STONE_IDS = new Set([BLOCKS.STONE.id, BLOCKS.STONE_PALE.id, BLOCKS.
 const _stone = new THREE.Color();
 const WHITE = new THREE.Color(1, 1, 1);
 
-/** One roll per column on the ground-detail stream; draws a rock group on a hit. */
+/**
+ * One roll per column on the ground-detail stream; draws a rock group on a hit.
+ * Returns what it drew as an obstacle — `h` the top above the ground, `r` how far it
+ * reaches from the column centre (world units) — or null if nothing was drawn. The
+ * vegetation layer records it so the walker can't pass through boulders (controller.ts).
+ */
 export function scatterBoulder(
     buf: QuadBuffer,
     centre: THREE.Vector3,
@@ -110,8 +115,8 @@ export function scatterBoulder(
     rise: number,
     stones: THREE.Color[],
     moss: THREE.Color,
-) {
-    if (rng() >= BOULDER_P * detail * rockAt(rise) * (onStone ? 3 : 1)) return;
+): { h: number; r: number } | null {
+    if (rng() >= BOULDER_P * detail * rockAt(rise) * (onStone ? 3 : 1)) return null;
     const zone = zoneOf(rise);
     const w = WEATHER[zone];
     // Stone colour per block: one of the theme's three stones, lightened or
@@ -126,9 +131,15 @@ export function scatterBoulder(
     // Per-group size: the zone's scale times a wide spread, with the odd giant.
     const S = w.size * rng.range(0.6, 1.3) * (rng() < 0.08 ? 1.6 : 1);
     const yaw = () => rng() * 6.28;
+    // Extent of the group, for the obstacle record: highest top, furthest reach.
+    let top = 0,
+        reach = 0;
     /** A yawed block whose base sits `sink` below the ground at tangent offset (a, b). */
-    const block = (a: number, b: number, sink: number, bw: number, bh: number, bl: number) =>
+    const block = (a: number, b: number, sink: number, bw: number, bh: number, bl: number) => {
+        top = Math.max(top, bh - sink);
+        reach = Math.max(reach, Math.hypot(a, b) + Math.max(bw, bl) * 0.5);
         boxYawed(buf, root(centre, a, b).addScaledVector(_up, -sink), _up, bw, bh, bl, col(), yaw());
+    };
 
     switch (weightedPick(SHAPES[zone], rng)) {
         case 'cobbles': {
@@ -261,6 +272,7 @@ export function scatterBoulder(
             break;
         }
     }
+    return { h: top, r: reach };
 }
 
 /** A single pebble, on the grass stream (so the grass layout is unchanged). */

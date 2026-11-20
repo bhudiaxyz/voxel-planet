@@ -94,6 +94,13 @@ export interface BlockDef {
     stoneSubstrate?: boolean;
     /** Outline this block's top edges in the light ink. */
     lightEdge?: boolean;
+    /**
+     * Ground-cover sprite plants (grid.plants) that the walker can't pass: their height in
+     * world units (jump higher to clear them). Voxel obstacles (trunks, bushes, cacti) need no
+     * field — the controller reads isTrunk / sway+solid / PATTERN.CACTUS. Unset = walk-through
+     * (grass, flowers, ferns, moss).
+     */
+    obstacleH?: number;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     [extra: string]: any;
 }
@@ -122,7 +129,7 @@ export const GROUND_MAT = { GRASS: 0, SOIL: 1, SAND: 2, STONE: 3, STONE_PALE: 4,
 /* ------------------------------------------------------------------ *
  * Block library
  * ------------------------------------------------------------------ */
-const B = (id: number, def: any) => ({ id, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, sway: false, ...def });
+const B = (id: number, def: any): BlockDef => ({ id, pattern: PATTERN.NONE, fringe: 0, rough: 0.35, sway: false, ...def });
 
 export const BLOCKS = {
     AIR: { id: 0 },

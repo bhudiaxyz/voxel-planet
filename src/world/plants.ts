@@ -122,6 +122,7 @@ export const SHRUB_TALL = registerBlock('SHRUB_TALL', {
     topTint: c(0x8a966c),
     pattern: PATTERN.GRASS,
     rough: 0.5,
+    obstacleH: 1.0, // walker can't pass through (dense clump ~0.6-1.05 tall); see controller.ts
 });
 export const GRASS_TALL = registerBlock('GRASS_TALL', {
     top: c(0x5a7245),
@@ -204,6 +205,7 @@ export const SCRUB_DRY = registerBlock('SCRUB_DRY', {
     topTint: c(0xc8b484),
     pattern: PATTERN.GRASS,
     rough: 0.6,
+    obstacleH: 0.45, // walker can't pass through (low wiry desert scrub ~0.3-0.6); see controller.ts
 });
 
 /** Desert yucca / agave rosette: stiff blue-green blades, drawn by the vegetation layer. */
@@ -215,6 +217,7 @@ export const YUCCA = registerBlock('YUCCA', {
     topTint: c(0xa4bc8c),
     pattern: PATTERN.GRASS,
     rough: 0.5,
+    obstacleH: 1.1, // walker can't pass through (stiff rosette, often with a flower spike); see controller.ts
 });
 
 /*

@@ -13,9 +13,12 @@
  *     is clamped to surface + EYE_HEIGHT.
  *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
  *     speed*dt/groundRadius (WALK_SPEED, or SPRINT_SPEED when sprinting).
- *   - Collision: the destination column must not be higher than the feet + MAX_STEP, otherwise
- *     the move is reverted (`dir` restored, speed 0); higher terrain is only climbed in
- *     MAX_STEP-sized terraces. Then keepClear() holds the eye CLEARANCE (0.3) from every
+ *   - Collision: blocked() decides whether a column can be entered — terrain more than MAX_STEP
+ *     above the feet, trunks / bushes / cacti at body height, ground-cover sprites with an
+ *     obstacleH (tall shrub, yucca, scrub) and rocks/logs from the vegetation layer
+ *     (obstacleAt hook, wired by main.ts). Only small plants and flowers are walk-through.
+ *     A blocked destination reverts the move (`dir` restored, speed 0); higher terrain is only
+ *     climbed in MAX_STEP-sized terraces, and a jump clears low obstacles. Then keepClear() holds the eye CLEARANCE (0.3) from every
  *     neighbouring wall face (sides and corners, across cube seams), whatever the approach angle
  *     or frame rate, so the camera's near plane never clips a cliff or a river bank and you can't
  *     see through it. snapToDir() applies it too (teleports, landing from drone/fly).
@@ -33,6 +36,7 @@
  */
 import * as THREE from 'three';
 import { SphereVoxelGrid, PLANET_RADIUS, FACE_RES, crossFaceUV } from '../core/voxel';
+import { BLOCK_BY_ID, PATTERN } from '../core/blocks';
 import { basisFromCode, dirToFaceUV } from '../core/geoutil';
 
 const GRAVITY = 28;
@@ -65,6 +69,11 @@ export class SphereController {
     verticalVelocity = 0;
     isGrounded = false;
     speed = 0; // 0..1 horizontal speed fraction for camera bob
+    /**
+     * Rocks and logs drawn by the vegetation layer (not in the voxel grid): height above the
+     * ground at a column, 0 if clear. main.ts wires world.veg.obstacleAt here.
+     */
+    obstacleAt: ((face: number, u: number, v: number) => number) | null = null;
     private _pos = new THREE.Vector3();
 
     constructor(spawnDir: THREE.Vector3, grid: SphereVoxelGrid) {
@@ -116,9 +125,9 @@ export class SphereController {
             _scratchStep.multiplyScalar((speed * dt) / this.groundRadius);
             this.dir.add(_scratchStep).normalize();
 
-            // Destination column check: never enter a column the feet can't step onto.
+            // Destination column check: never enter a column the walker can't stand in.
             const { face: nf, u: nu, v: nv } = dirToFaceUV(this.dir, FACE_RES);
-            if (grid.surfaceRadius(nf, nu, nv) > this.groundRadius - EYE_HEIGHT + MAX_STEP) {
+            if (this.blocked(grid, nf, nu, nv)) {
                 this.dir.copy(_oldDir);
                 this.speed = 0;
             } else {
@@ -129,6 +138,35 @@ export class SphereController {
         }
         // Then keep the eye CLEARANCE away from every wall face around it (any angle, any rate).
         this.keepClear(grid);
+    }
+
+    /**
+     * Can't the walker stand in this column at its current height? One rule for moving
+     * (the destination column) and for the camera clearance (keepClear):
+     *   - terrain: the ground is more than MAX_STEP above the feet (a cliff, a terrace wall);
+     *   - voxel obstacles at body height (the feet layer and the one above): tree and dead
+     *     trunks, bushes and shrubs (solid sway blocks), cacti;
+     *   - ground-cover sprites that declare obstacleH (tall shrub, yucca, dry scrub) and
+     *     rocks/logs from the vegetation layer (obstacleAt), unless the feet are above them
+     *     (jumping over a low rock or scrub works).
+     * Grass, flowers, ferns, moss, tall grass, reeds and pebbles are always walk-through.
+     */
+    private blocked(grid: SphereVoxelGrid, f: number, u: number, v: number): boolean {
+        const feet = this.groundRadius - EYE_HEIGHT;
+        const ground = grid.surfaceRadius(f, u, v);
+        if (ground > feet + MAX_STEP) return true;
+        // Voxel obstacles at body height.
+        const fl = Math.floor(feet - PLANET_RADIUS + 0.01);
+        for (let l = fl; l <= fl + 1; l++) {
+            const b = BLOCK_BY_ID[grid.get(f, u, v, l)];
+            if (b && (b.isTrunk || (b.sway && b.solid) || b.pattern === PATTERN.CACTUS)) return true;
+        }
+        // Sprite plants and rocks stand on this column's ground: blocking unless cleared.
+        const above = feet - ground;
+        const plant = BLOCK_BY_ID[grid.plantAt(f, u, v)];
+        if (plant?.obstacleH && above < plant.obstacleH) return true;
+        const rock = this.obstacleAt ? this.obstacleAt(f, u, v) : 0;
+        return rock > 0 && above < rock;
     }
 
     /**
@@ -154,13 +192,12 @@ export class SphereController {
                 .normalize();
         const colW = at(cu + 1, cv + 0.5, _cA).distanceTo(at(cu, cv + 0.5, _cB)) * this.groundRadius;
         const c = Math.min(0.45, CLEARANCE / colW); // as a fraction of the column
-        const feetLimit = this.groundRadius - EYE_HEIGHT + MAX_STEP;
         const wall = (du: number, dv: number) => {
             let f = face,
                 u = cu + du,
                 v = cv + dv;
             if (u < 0 || v < 0 || u >= FACE_RES || v >= FACE_RES) [f, u, v] = crossFaceUV(face, u, v);
-            return grid.surfaceRadius(f, u, v) > feetLimit;
+            return this.blocked(grid, f, u, v);
         };
         let x = fu - cu,
             y = fv - cv;
