@@ -136,4 +136,38 @@ for (const r of sky) {
     t.snapToDir(r.dir.clone(), grid);
     assert.ok(t.groundRadius - 1.75 - PLANET_RADIUS <= ground + 1.5, `teleport under island ${face},${u},${v} snapped onto it`);
 }
-console.log({ cliffs, obstacles: counts, skyIslands: sky.length });
+// 4. Canopy: land on a tree crown and walk across it; from a bush top, walk onto the next bush.
+const leafTop = (u: number, v: number) => {
+    const t = grid.columnTop(0, u, v);
+    const b: any = BLOCK_BY_ID[grid.get(0, u, v, t)];
+    return b?.sway && !b?.solid && t - grid.groundColumnTop(0, u, v) >= 3 ? t : -1;
+};
+let crowns = 0,
+    bushHops = 0;
+for (let v = 20; v < 380 && (crowns < 8 || bushHops < 8); v++)
+    for (let u = 20; u < 376 && (crowns < 8 || bushHops < 8); u++) {
+        // Crown: three columns in +u with leaf tops at the same layer.
+        const t = leafTop(u, v);
+        if (crowns < 8 && t > 0 && leafTop(u + 1, v) === t && leafTop(u + 2, v) === t) {
+            crowns++;
+            const c = new SphereController(colDir(u + 0.5, v + 0.5), grid);
+            c.snapToDir(colDir(u + 0.5, v + 0.5), grid, PLANET_RADIUS + t + 10);
+            const onTop = () => c.groundRadius - 1.75 - PLANET_RADIUS;
+            assert.equal(Math.round(onTop()), t + 1, `landing over a tree should stop on its crown (${u}, ${v})`);
+            walk(c, 0.3, 60);
+            assert.ok(onTop() > grid.groundColumnTop(0, u, v) + 2, `walking on a crown dropped through it (${u}, ${v})`);
+            assert.ok(dirToFaceUV(c.dir, FACE_RES).u > u, `couldn't walk across the crown (${u}, ${v})`);
+        }
+        // Bush tops: two adjacent bush columns with the same top, open air above both.
+        const g = grid.groundColumnTop(0, u, v);
+        if (bushHops < 8 && isBush(u, v) && isBush(u + 1, v) && grid.groundColumnTop(0, u + 1, v) === g && isBush(u + 2, v) && grid.groundColumnTop(0, u + 2, v) === g) {
+            if (grid.columnTop(0, u, v) !== g || grid.columnTop(0, u + 1, v) !== g || grid.columnTop(0, u + 2, v) !== g) continue;
+            bushHops++;
+            const c = new SphereController(colDir(u + 0.5, v + 0.5), grid);
+            c.snapToDir(colDir(u + 0.5, v + 0.5), grid, PLANET_RADIUS + g + 5);
+            walk(c, 0.3, 60);
+            assert.ok(dirToFaceUV(c.dir, FACE_RES).u > u, `stuck on a bush top, couldn't step to the next bush (${u}, ${v})`);
+        }
+    }
+assert.ok(crowns >= 3 && bushHops >= 3, `too few canopy cases (crowns ${crowns}, bush tops ${bushHops})`);
+console.log({ cliffs, obstacles: counts, skyIslands: sky.length, crowns, bushHops });

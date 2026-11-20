@@ -9,7 +9,9 @@
  *   - State: `dir` (unit vector from centre), `groundRadius` (eye distance from centre),
  *     `verticalVelocity`, `isGrounded`, `speed` (0..1 fraction of sprint speed, for camera bob).
  *   - update(): looks up the surface under `dir` (standR: grid.standTop from the feet down, so
- *     floating islands are walkable and you fall off their edges), grounded when
+ *     floating islands are walkable and you fall off their edges; leaves below the feet count as
+ *     ground, so you can stand and walk on tree crowns and bush tops — `onCanopy` — while a
+ *     canopy at body height stays walk-through), grounded when
  *     the feet are within 0.05 of it; jump sets JUMP_VEL, otherwise GRAVITY pulls down. The eye
  *     is clamped to surface + EYE_HEIGHT.
  *   - Horizontal motion projects wishDir into the tangent plane and arcs `dir` by
@@ -113,6 +115,12 @@ export class SphereController {
         sprint = false,
     ) {
         const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
+        {
+            // On vegetation? The block right under the feet is a leaf or bush (sway).
+            const feetLayer = Math.floor(this.groundRadius - EYE_HEIGHT - PLANET_RADIUS + 0.01);
+            const under = grid.get(face, u, v, feetLayer - 1);
+            this.onCanopy = under !== 0 && !!BLOCK_BY_ID[under]?.sway;
+        }
         const surfaceR = this.standR(grid, face, u, v);
         const altitudeAboveSurface = this.groundRadius - EYE_HEIGHT - surfaceR;
 
@@ -284,7 +292,9 @@ export class SphereController {
     snapToDir(newDir: THREE.Vector3, grid: SphereVoxelGrid, fromRadius?: number): void {
         this.dir.copy(newDir).normalize();
         const { face, u, v } = dirToFaceUV(this.dir, FACE_RES);
-        const top = fromRadius === undefined ? -2 : grid.standTop(face, u, v, Math.floor(fromRadius - PLANET_RADIUS));
+        // From above, leaves are ground too: landing over a tree stops on its crown.
+        const from = fromRadius === undefined ? 0 : Math.floor(fromRadius - PLANET_RADIUS);
+        const top = fromRadius === undefined ? -2 : grid.standTop(face, u, v, from, from + 1);
         this.groundRadius =
             (top >= 0 ? PLANET_RADIUS + top + 1 : grid.surfaceRadius(face, u, v)) + EYE_HEIGHT;
         this.verticalVelocity = 0;
