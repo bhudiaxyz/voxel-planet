@@ -9,6 +9,8 @@
  *     2. Bushes and tree trunks block the walker; small ground plants and flowers don't.
  *     3. Landing from above (drone/fly exit) stands you ON a floating island; teleporting under one
  *        (no fromRadius) still finds the terrain.
+ *     4. Canopies: landing over a tree stops on its crown and you can walk across it; standing on
+ *        a bush top you can step onto the next bush (but not onto one from the ground — case 2).
  *
  * Usage
  *   npm run check, or: node --import ./scripts/ts-resolve.mjs scripts/check-walker.ts
